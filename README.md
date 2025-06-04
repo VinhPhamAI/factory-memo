@@ -38,3 +38,11 @@ git push origin <branch-name>
 https://voiceaiandvoiceagents.com/
 
 https://arxiv.org/pdf/2501.06282
+
+https://github.com/resemble-ai/chatterbox
+
+https://theneuralmaze.substack.com/p/a-hands-on-project-to-master-multimodal
+
+https://www.youtube.com/watch?v=c19PrP3bd6Y
+
+https://github.com/patchy631/ai-engineering-hub/tree/main/mcp-voice-agent
