@@ -2,6 +2,10 @@
 
 # Project Structure
 
+# Architectures
+
+
+
 # Installation & Usage
 Start backend
 ```
@@ -46,3 +50,5 @@ https://theneuralmaze.substack.com/p/a-hands-on-project-to-master-multimodal
 https://www.youtube.com/watch?v=c19PrP3bd6Y
 
 https://github.com/patchy631/ai-engineering-hub/tree/main/mcp-voice-agent
+
+https://www.deeplearning.ai/short-courses/building-ai-voice-agents-for-production/
