@@ -3,9 +3,12 @@
 ### Turn Detection
 
 - [x] Write main class.
+- [ ] Implement Voice Activity Detection
+- [ ] Implement Semantic turn detection
+- [ ] Integrate the full pipeline of Semantic Turn Detection and Voice Activity Detection into the main class.
 - [ ] Set up logging.
 - [ ] Log latency.
-- [ ] Run test for this feature.
+- [ ] Run test for this pipeline.
 
 ### Voice Activity Detection 
 - [ ] Write main class
