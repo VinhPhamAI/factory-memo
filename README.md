@@ -1,9 +1,37 @@
-# Overview
+# Tasks
+
+### Turn Detection
+
+- [x] Write main class.
+- [ ] Set up logging.
+- [ ] Log latency.
+- [ ] Run test for this feature.
+
+### Voice Activity Detection 
+- [ ] Write main class
+- [ ] Set up logging.
+- [ ] Log latency.
+- [ ] Run test for this feature.
+
+### Text to speech
+- [ ] Write main class
+- [ ] Set up logging.
+- [ ] Log latency.
+- [ ] Run test for this feature.
+
+### Speech to text
+- [ ] Write main class
+- [ ] Set up logging.
+- [ ] Log latency.
+- [ ] Run test for this feature.
 
 # Project Structure
 
-# Architectures
-
+backend/app.py: Run backend api (not done yet)
+backend/src/*: Contain main logic of seperate voice and llm service.
+backend/utils/*: Contain some helper function, schema, and other thing stuff.
+backend/router/*: Router for api
+backend/api/*: API
 
 
 # Installation & Usage
