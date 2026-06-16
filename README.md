@@ -41,7 +41,7 @@ backend/api/*: API
 Start backend
 ```
 cd backend
-python3 -m venv venv
+uv venv --python 3.12
 source venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -54,7 +54,6 @@ npm run dev
 ```
 
 ### Git Command
-Commit Convention: https://www.conventionalcommits.org/en/v1.0.0/?fbclid=IwY2xjawJVBFVleHRuA2FlbQIxMAABHVQQJaQ9FxqBj1krDH_GGIBrb1FFmivfoCZOmnTwyDGhTbuU7ePhUkBjXg_aem_BovCkvsOv1Rhn6rh61aB_g
 
 Create a new branch
 ```
@@ -74,12 +73,8 @@ https://voiceaiandvoiceagents.com/
 
 https://arxiv.org/pdf/2501.06282
 
-https://github.com/resemble-ai/chatterbox
-
 https://theneuralmaze.substack.com/p/a-hands-on-project-to-master-multimodal
 
 https://www.youtube.com/watch?v=c19PrP3bd6Y
-
-https://github.com/patchy631/ai-engineering-hub/tree/main/mcp-voice-agent
 
 https://www.deeplearning.ai/short-courses/building-ai-voice-agents-for-production/
