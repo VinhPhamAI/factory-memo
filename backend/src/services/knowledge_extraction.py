@@ -120,7 +120,6 @@ class KnowledgeExtractionService:
             payload = json.loads(self._strip_json_fence(content))
             return KnowledgeExtractionResult.model_validate(payload)
         except (json.JSONDecodeError, ValidationError, TypeError) as exc:
-            print(content)
             raise KnowledgeExtractionError(
                 "The LLM returned invalid knowledge extraction JSON"
             ) from exc

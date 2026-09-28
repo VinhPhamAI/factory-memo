@@ -26,7 +26,12 @@ from backend.src.agents.agent.service import (
 )
 from backend.src.agents.agent.state import merge_evidence
 from backend.src.services.knowledge_extraction import KnowledgeType
-from backend.src.storage import KnowledgeRecord, RawConversation, StorageError
+from backend.src.storage import (
+    KnowledgeRecord,
+    KnowledgeSearchHit,
+    RawConversation,
+    StorageError,
+)
 
 
 EVIDENCE_ID = uuid4()
@@ -73,7 +78,16 @@ class FakeStore:
         if self.fail:
             raise StorageError("connection refused")
         self.searches.append((query, filters, k))
-        return [(RECORD, 0.12)]
+        return [
+            KnowledgeSearchHit(
+                record=RECORD,
+                hybrid_score=0.0325,
+                vector_rank=1,
+                lexical_rank=2,
+                vector_distance=0.12,
+                lexical_score=0.4,
+            )
+        ]
 
     async def get_knowledge(self, ids):
         return [RECORD] if RECORD.id in ids else []
@@ -157,7 +171,10 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
             AIMessage(content=f"Clean the lens before replacing it [K:{RECORD.id}]."),
         )
 
-        answer = await service.ask("The rear sensor on M01 is unstable, what should I do?")
+        with self.assertLogs("backend.src.agents.agent.tools", level="INFO") as logs:
+            answer = await service.ask(
+                "The rear sensor on M01 is unstable, what should I do?"
+            )
 
         self.assertEqual(answer.answer, f"Clean the lens before replacing it [K:{RECORD.id}].")
         (citation,) = answer.citations
@@ -172,8 +189,12 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
         tool_message = model.calls[1][-1]
         self.assertIsInstance(tool_message, ToolMessage)
         self.assertIn('"validity": "current"', tool_message.content)
+        self.assertIn('"hybrid_score": 0.0325', tool_message.content)
+        self.assertIn('"vector_rank": 1', tool_message.content)
+        self.assertIn('"lexical_rank": 2', tool_message.content)
         self.assertNotIn("embedding", tool_message.content)
         self.assertIn("[Turn context: current UTC time is", model.calls[0][-1].content)
+        self.assertTrue(any("hybrid_score" in line for line in logs.output))
 
     async def test_stream_emits_status_and_citations(self) -> None:
         service, _ = _service(

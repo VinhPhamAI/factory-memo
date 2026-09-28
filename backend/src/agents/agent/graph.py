@@ -21,7 +21,8 @@ conditions such as temperature or pressure, ...), type, validity dates,
 evidence_id (source conversation), stated_by, and conflict_with.
 
 Retrieval rules:
-- Always call search_knowledge before answering a technical question. Pass
+- Always call search_knowledge before answering a technical question. It combines
+  semantic similarity with exact-term matching. Pass
   machine_id or machine_model when the user names one. Search again with
   different wording if the first results are weak.
 - A claim applies only within its context. If a record's context (machine,

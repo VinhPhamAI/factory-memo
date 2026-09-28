@@ -22,6 +22,7 @@ from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage.models import (
     ConversationStatus,
     KnowledgeRecord,
+    KnowledgeSearchHit,
     RawConversation,
 )
 
@@ -35,6 +36,7 @@ METADATA_COLUMNS = [
     "subject",
     "type",
     "context",
+    "search_text",
     "evidence_id",
     "stated_by",
     "created_at",
@@ -46,6 +48,10 @@ METADATA_COLUMNS = [
 HNSW_MAX_DIM = 2000
 DEFAULT_SEARCH_K = 5
 MAX_SEARCH_K = 20
+MIN_SEARCH_CANDIDATES = 20
+MAX_SEARCH_CANDIDATES = 100
+SEARCH_CANDIDATE_MULTIPLIER = 4
+RRF_RANK_CONSTANT = 60
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 _KNOWLEDGE_TYPES_SQL = ", ".join(f"'{kind.value}'" for kind in KnowledgeType)
@@ -98,6 +104,67 @@ def build_knowledge_filter(
     if len(conditions) == 1:
         return conditions[0]
     return {"$and": conditions}
+
+
+_FILTER_FIELDS = {
+    "subject": "k.subject",
+    "type": "k.type",
+    "context.machine_id": "k.context ->> 'machine_id'",
+    "context.machine_model": "k.context ->> 'machine_model'",
+    "valid_from": "k.valid_from",
+    "valid_to": "k.valid_to",
+}
+_FILTER_OPERATORS = {"$eq", "$ilike", "$exists", "$lte", "$gte"}
+
+
+def _compile_knowledge_filter(
+    filters: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    """Compile the filter grammar emitted by build_knowledge_filter to safe SQL."""
+
+    if filters is None:
+        return "TRUE", {}
+
+    parameters: dict[str, Any] = {}
+
+    def bind(value: Any) -> str:
+        name = f"filter_{len(parameters)}"
+        parameters[name] = value
+        return f":{name}"
+
+    def compile_node(node: Any) -> str:
+        if not isinstance(node, dict) or len(node) != 1:
+            raise ValueError("Knowledge filter nodes must contain exactly one key")
+        key, value = next(iter(node.items()))
+        if key in {"$and", "$or"}:
+            if not isinstance(value, list) or not value:
+                raise ValueError(f"{key} requires a non-empty list")
+            joiner = " AND " if key == "$and" else " OR "
+            return "(" + joiner.join(compile_node(item) for item in value) + ")"
+
+        column = _FILTER_FIELDS.get(key)
+        if column is None:
+            raise ValueError(f"Unsupported knowledge filter field: {key}")
+        if not isinstance(value, dict) or len(value) != 1:
+            raise ValueError(f"Filter for {key} must contain exactly one operator")
+        operator, operand = next(iter(value.items()))
+        if operator not in _FILTER_OPERATORS:
+            raise ValueError(f"Unsupported knowledge filter operator: {operator}")
+        if operator == "$exists":
+            if not isinstance(operand, bool):
+                raise ValueError("$exists requires a boolean")
+            return f"{column} IS {'NOT ' if operand else ''}NULL"
+
+        placeholder = bind(operand)
+        if operator == "$eq":
+            return f"{column} = {placeholder}"
+        if operator == "$ilike":
+            return f"{column} ILIKE {placeholder} ESCAPE '\\'"
+        if operator == "$lte":
+            return f"{column} <= {placeholder}"
+        return f"{column} >= {placeholder}"
+
+    return compile_node(filters), parameters
 
 
 class KnowledgeStore:
@@ -207,6 +274,9 @@ class KnowledgeStore:
                 subject TEXT NOT NULL,
                 type TEXT NOT NULL CHECK (type IN ({_KNOWLEDGE_TYPES_SQL})),
                 context JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                search_text TEXT NOT NULL,
+                search_vector TSVECTOR GENERATED ALWAYS AS
+                    (to_tsvector('simple'::regconfig, search_text)) STORED,
                 evidence_id UUID REFERENCES {raw_table}(id),
                 stated_by TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -216,12 +286,27 @@ class KnowledgeStore:
                 CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to)
             )
             """,
+            f"ALTER TABLE {knowledge_table} ADD COLUMN IF NOT EXISTS search_text TEXT",
+            f"""
+            UPDATE {knowledge_table}
+            SET search_text = subject || ': ' || claim ||
+                CASE WHEN context = '{{}}'::jsonb THEN ''
+                     ELSE E'\nContext: ' || context::text END
+            WHERE search_text IS NULL
+            """,
+            f"ALTER TABLE {knowledge_table} ALTER COLUMN search_text SET NOT NULL",
+            f"""
+            ALTER TABLE {knowledge_table} ADD COLUMN IF NOT EXISTS search_vector TSVECTOR
+            GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, search_text)) STORED
+            """,
             f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_evidence_id_idx "
             f"ON {knowledge_table} (evidence_id)",
             f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_machine_id_idx "
             f"ON {knowledge_table} ((context->>'machine_id'))",
             f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_machine_model_idx "
             f"ON {knowledge_table} ((context->>'machine_model'))",
+            f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_search_vector_gin_idx "
+            f"ON {knowledge_table} USING gin (search_vector)",
         ]
         if dim <= HNSW_MAX_DIM:
             statements.append(
@@ -361,15 +446,142 @@ class KnowledgeStore:
         *,
         filters: dict[str, Any] | None = None,
         k: int = DEFAULT_SEARCH_K,
-    ) -> list[tuple[KnowledgeRecord, float]]:
-        """Semantic search; returns records with cosine distance (lower is closer)."""
+    ) -> list[KnowledgeSearchHit]:
+        """Fuse vector and PostgreSQL full-text ranks with reciprocal rank fusion."""
 
-        store = await self._vector()
-        async with self._errors("search knowledge"):
-            hits = await store.asimilarity_search_with_score(
-                query, k=max(1, min(k, MAX_SEARCH_K)), filter=filters
+        result_k = max(1, min(k, MAX_SEARCH_K))
+        candidate_k = min(
+            MAX_SEARCH_CANDIDATES,
+            max(MIN_SEARCH_CANDIDATES, result_k * SEARCH_CANDIDATE_MULTIPLIER),
+        )
+        where_sql, filter_parameters = _compile_knowledge_filter(filters)
+        query_embedding = list(await self._embeddings.aembed_query(query))
+        if len(query_embedding) != self._vector_size:
+            raise StorageError(
+                f"Query embedding has {len(query_embedding)} dimensions, "
+                f"expected {self._vector_size}"
             )
-        return [(KnowledgeRecord.from_document(doc), float(score)) for doc, score in hits]
+
+        knowledge_table = self._table(KNOWLEDGE_TABLE)
+        statement = text(
+            f"""
+            WITH query_values AS (
+                SELECT CAST(:query_embedding AS vector) AS embedding,
+                       websearch_to_tsquery('simple'::regconfig, :query) AS lexical_query
+            ),
+            vector_candidates AS (
+                SELECT k.id,
+                       k.{EMBEDDING_COLUMN} <=> q.embedding AS vector_distance
+                FROM {knowledge_table} AS k
+                CROSS JOIN query_values AS q
+                WHERE {where_sql}
+                ORDER BY vector_distance ASC, k.id ASC
+                LIMIT :candidate_k
+            ),
+            vector_ranked AS (
+                SELECT id, vector_distance,
+                       row_number() OVER (
+                           ORDER BY vector_distance ASC, id ASC
+                       )::integer AS vector_rank
+                FROM vector_candidates
+            ),
+            lexical_candidates AS (
+                SELECT k.id,
+                       ts_rank_cd(k.search_vector, q.lexical_query) AS lexical_score
+                FROM {knowledge_table} AS k
+                CROSS JOIN query_values AS q
+                WHERE {where_sql}
+                  AND k.search_vector @@ q.lexical_query
+                ORDER BY lexical_score DESC, k.id ASC
+                LIMIT :candidate_k
+            ),
+            lexical_ranked AS (
+                SELECT id, lexical_score,
+                       row_number() OVER (
+                           ORDER BY lexical_score DESC, id ASC
+                       )::integer AS lexical_rank
+                FROM lexical_candidates
+            ),
+            combined AS (
+                SELECT COALESCE(v.id, l.id) AS id,
+                       v.vector_rank,
+                       v.vector_distance,
+                       l.lexical_rank,
+                       l.lexical_score
+                FROM vector_ranked AS v
+                FULL OUTER JOIN lexical_ranked AS l USING (id)
+            ),
+            scored AS (
+                SELECT combined.*,
+                       COALESCE(1.0 / (:rrf_k + vector_rank), 0.0) +
+                       COALESCE(1.0 / (:rrf_k + lexical_rank), 0.0) AS hybrid_score
+                FROM combined
+            )
+            SELECT k.id, k.subject, k.claim, k.context, k.type, k.evidence_id,
+                   k.stated_by, k.created_at, k.valid_from, k.valid_to,
+                   k.conflict_with, scored.hybrid_score, scored.vector_rank,
+                   scored.lexical_rank, scored.vector_distance, scored.lexical_score
+            FROM scored
+            JOIN {knowledge_table} AS k ON k.id = scored.id
+            ORDER BY scored.hybrid_score DESC,
+                     ((scored.vector_rank IS NOT NULL)::integer +
+                      (scored.lexical_rank IS NOT NULL)::integer) DESC,
+                     LEAST(COALESCE(scored.vector_rank, 2147483647),
+                           COALESCE(scored.lexical_rank, 2147483647)) ASC,
+                     scored.lexical_rank ASC NULLS LAST,
+                     scored.vector_distance ASC NULLS LAST,
+                     k.id ASC
+            LIMIT :result_k
+            """
+        )
+        parameters = {
+            **filter_parameters,
+            "query": query,
+            "query_embedding": json.dumps(query_embedding, separators=(",", ":")),
+            "candidate_k": candidate_k,
+            "result_k": result_k,
+            "rrf_k": RRF_RANK_CONSTANT,
+        }
+        async with self._errors("search knowledge"):
+            async with self._engine.connect() as conn:
+                rows = (await conn.execute(statement, parameters)).mappings().all()
+
+        return [
+            KnowledgeSearchHit(
+                record=KnowledgeRecord.model_validate(
+                    {
+                        key: row[key]
+                        for key in (
+                            "id",
+                            "subject",
+                            "claim",
+                            "context",
+                            "type",
+                            "evidence_id",
+                            "stated_by",
+                            "created_at",
+                            "valid_from",
+                            "valid_to",
+                            "conflict_with",
+                        )
+                    }
+                ),
+                hybrid_score=float(row["hybrid_score"]),
+                vector_rank=row["vector_rank"],
+                lexical_rank=row["lexical_rank"],
+                vector_distance=(
+                    float(row["vector_distance"])
+                    if row["vector_distance"] is not None
+                    else None
+                ),
+                lexical_score=(
+                    float(row["lexical_score"])
+                    if row["lexical_score"] is not None
+                    else None
+                ),
+            )
+            for row in rows
+        ]
 
     async def get_knowledge(self, ids: Sequence[UUID]) -> list[KnowledgeRecord]:
         """Fetch records by id, in the requested order, skipping unknown ids."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from dataclasses import FrozenInstanceError
 from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -15,7 +16,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from langchain_core.documents import Document
 
 from backend.src.services.knowledge_extraction import KnowledgeItem, KnowledgeType
-from backend.src.storage import KnowledgeRecord, build_knowledge_filter
+from backend.src.storage import KnowledgeRecord, KnowledgeSearchHit, build_knowledge_filter
+from backend.src.storage.knowledge_store import _compile_knowledge_filter
 
 
 def _record(**overrides) -> KnowledgeRecord:
@@ -88,6 +90,26 @@ class BuildKnowledgeFilterTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_knowledge_filter(knowledge_type="opinion")
 
+    def test_compiles_filter_values_as_parameters(self) -> None:
+        filters = build_knowledge_filter(
+            subject="sensor%' OR TRUE --",
+            machine_id="M01",
+            valid_on=date(2026, 9, 25),
+        )
+        sql, parameters = _compile_knowledge_filter(filters)
+
+        self.assertNotIn("OR TRUE", sql)
+        self.assertIn("k.subject ILIKE :filter_0", sql)
+        self.assertIn("k.context ->> 'machine_id'", sql)
+        self.assertIn("k.valid_from <=", sql)
+        self.assertEqual(parameters["filter_0"], "%sensor\\%' OR TRUE --%")
+
+    def test_filter_compiler_rejects_unknown_fields_and_operators(self) -> None:
+        with self.assertRaisesRegex(ValueError, "field"):
+            _compile_knowledge_filter({"embedding": {"$eq": "secret"}})
+        with self.assertRaisesRegex(ValueError, "operator"):
+            _compile_knowledge_filter({"subject": {"$regex": ".*"}})
+
 
 class KnowledgeRecordTest(unittest.TestCase):
     def test_from_extracted_attaches_ingestion_metadata(self) -> None:
@@ -127,6 +149,19 @@ class KnowledgeRecordTest(unittest.TestCase):
     def test_embedding_text_without_context(self) -> None:
         record = _record(context={})
         self.assertNotIn("Context:", record.embedding_text())
+
+    def test_lexical_text_contains_subject_claim_and_stable_context(self) -> None:
+        record = _record(
+            subject="valve AX-220",
+            claim="Keep 80 mm of service clearance.",
+            context={"machine_id": "M01", "component_model": "S14"},
+        )
+        self.assertEqual(record.lexical_text(), record.embedding_text())
+        self.assertIn("valve AX-220", record.lexical_text())
+        self.assertIn("Keep 80 mm", record.lexical_text())
+        self.assertIn("machine_id=M01", record.lexical_text())
+        self.assertIn("component_model=S14", record.lexical_text())
+        self.assertEqual(record.to_metadata()["search_text"], record.lexical_text())
 
     def test_embedding_is_excluded_from_dumps_and_repr(self) -> None:
         record = _record(embedding=[0.1, 0.2, 0.3])
@@ -175,6 +210,21 @@ class KnowledgeRecordTest(unittest.TestCase):
             Document(id=str(record.id), page_content=record.claim, metadata=metadata)
         )
         self.assertEqual(restored.context, {"machine_id": "M01"})
+
+
+class KnowledgeSearchHitTest(unittest.TestCase):
+    def test_structured_hit_allows_one_retriever_to_be_absent(self) -> None:
+        hit = KnowledgeSearchHit(
+            record=_record(),
+            hybrid_score=1 / 61,
+            vector_rank=1,
+            vector_distance=0.12,
+        )
+        self.assertEqual(hit.vector_rank, 1)
+        self.assertIsNone(hit.lexical_rank)
+        self.assertIsNone(hit.lexical_score)
+        with self.assertRaises(FrozenInstanceError):
+            hit.hybrid_score = 0.5
 
 
 if __name__ == "__main__":

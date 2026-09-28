@@ -102,6 +102,57 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
         await self.store.init_schema()
         await self.store.init_schema()
 
+    async def test_init_schema_backfills_legacy_rows_and_creates_gin_index(self) -> None:
+        await self.store.init_schema()
+        table = f'"{self.schema}"."knowledge_items"'
+        async with self.store.engine.begin() as conn:
+            await conn.execute(text(f"ALTER TABLE {table} DROP COLUMN search_vector"))
+            await conn.execute(text(f"ALTER TABLE {table} DROP COLUMN search_text"))
+            record_id = uuid4()
+            await conn.execute(
+                text(
+                    f"INSERT INTO {table} "
+                    "(id, claim, embedding, subject, type, context, conflict_with) "
+                    "VALUES (:id, :claim, CAST(:embedding AS vector), :subject, "
+                    ":type, CAST(:context AS jsonb), CAST(:conflicts AS uuid[]))"
+                ),
+                {
+                    "id": record_id,
+                    "claim": "Clean connector S14 before replacement.",
+                    "embedding": "[" + ",".join("0" for _ in range(DIM)) + "]",
+                    "subject": "connector",
+                    "type": "procedure",
+                    "context": '{"machine_id": "M01"}',
+                    "conflicts": "{}",
+                },
+            )
+
+        await self.store.init_schema()
+
+        async with self.store.engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        f"SELECT search_text, search_vector::text AS search_vector "
+                        f"FROM {table} WHERE id = :id"
+                    ),
+                    {"id": record_id},
+                )
+            ).mappings().one()
+            index_exists = await conn.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_indexes "
+                    "WHERE schemaname = :schema AND indexname = :index_name)"
+                ),
+                {
+                    "schema": self.schema,
+                    "index_name": "knowledge_items_search_vector_gin_idx",
+                },
+            )
+        self.assertIn("M01", row["search_text"])
+        self.assertIn("'s14'", row["search_vector"])
+        self.assertTrue(index_exists)
+
     async def test_dimension_mismatch_is_detected(self) -> None:
         await self.store.init_schema()
         other = KnowledgeStore(
@@ -147,9 +198,10 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
             hits = await self.store.search_knowledge(
                 "sensor", filters=build_knowledge_filter(**filters), k=10
             )
-            for _, distance in hits:
-                self.assertIsInstance(distance, float)
-            return {record.id for record, _ in hits}
+            for hit in hits:
+                self.assertIsInstance(hit.hybrid_score, float)
+                self.assertIsInstance(hit.vector_distance, float)
+            return {hit.record.id for hit in hits}
 
         everything = {record.id for record in records.values()}
         self.assertEqual(await ids(), everything)
@@ -165,6 +217,57 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
             await ids(machine_id="M01", subject="rear", valid_on=date(2026, 9, 25)),
             {records["m01"].id},
         )
+
+    async def test_hybrid_search_promotes_exact_identifiers_and_is_stable(self) -> None:
+        evidence_id, records = await self._seed()
+        exact_records = {
+            "AX-220": KnowledgeRecord(
+                subject="pneumatic valve",
+                claim="Leave 80 millimeters of service clearance.",
+                context={"machine_model": "AX-220"},
+                type=KnowledgeType.RULE,
+                evidence_id=evidence_id,
+            ),
+            "S14": KnowledgeRecord(
+                subject="connector S14",
+                claim="Keep the connector facing downward during washdown.",
+                context={"component_model": "S14"},
+                type=KnowledgeType.PROCEDURE,
+                evidence_id=evidence_id,
+            ),
+        }
+        await self.store.add_knowledge(list(exact_records.values()))
+
+        expected = {
+            "M01": records["m01"].id,
+            "AX-220": exact_records["AX-220"].id,
+            "S14": exact_records["S14"].id,
+        }
+        for query, expected_id in expected.items():
+            with self.subTest(query=query):
+                first = await self.store.search_knowledge(query, k=3)
+                second = await self.store.search_knowledge(query, k=3)
+                self.assertEqual(first[0].record.id, expected_id)
+                self.assertIsNotNone(first[0].vector_rank)
+                self.assertIsNotNone(first[0].lexical_rank)
+                self.assertGreater(first[0].hybrid_score, 0)
+                self.assertEqual(
+                    [hit.record.id for hit in first],
+                    [hit.record.id for hit in second],
+                )
+                self.assertEqual(
+                    [hit.hybrid_score for hit in first],
+                    [hit.hybrid_score for hit in second],
+                )
+
+    async def test_hybrid_search_falls_back_to_vector_results(self) -> None:
+        await self._seed()
+        hits = await self.store.search_knowledge("zzzznosuchtoken", k=3)
+
+        self.assertEqual(len(hits), 3)
+        self.assertTrue(all(hit.vector_rank is not None for hit in hits))
+        self.assertTrue(all(hit.lexical_rank is None for hit in hits))
+        self.assertTrue(all(hit.lexical_score is None for hit in hits))
 
     async def test_unknown_evidence_is_rejected(self) -> None:
         await self.store.init_schema()

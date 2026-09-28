@@ -73,7 +73,6 @@ class KnowledgeIngestionService:
         try:
             # The extractor uses a blocking LLM client.
             extracted = await asyncio.to_thread(self._extractor.extract, transcript)
-            print(extracted)
             records = [
                 KnowledgeRecord.from_extracted(
                     item,
@@ -82,7 +81,6 @@ class KnowledgeIngestionService:
                 )
                 for item in extracted.knowledge_items
             ]
-            print(records)
             await self._store.add_knowledge(records)
         except Exception as exc:
             await self._store.mark_conversation(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
@@ -95,6 +96,11 @@ class KnowledgeRecord(BaseModel):
             parts.append(f"Context: {scope}")
         return "\n".join(parts)
 
+    def lexical_text(self) -> str:
+        """Stable text indexed by PostgreSQL full-text search."""
+
+        return self.embedding_text()
+
     def to_metadata(self) -> dict[str, Any]:
         """Values for the vector store's metadata columns."""
 
@@ -102,6 +108,7 @@ class KnowledgeRecord(BaseModel):
             "subject": self.subject,
             "type": self.type.value,
             "context": self.context,
+            "search_text": self.lexical_text(),
             "evidence_id": str(self.evidence_id) if self.evidence_id else None,
             "stated_by": self.stated_by,
             "created_at": self.created_at,
@@ -136,6 +143,18 @@ class KnowledgeRecord(BaseModel):
             valid_to=metadata.get("valid_to"),
             conflict_with=conflict_with,
         )
+
+
+@dataclass(frozen=True)
+class KnowledgeSearchHit:
+    """One hybrid-search result with per-retriever diagnostics."""
+
+    record: KnowledgeRecord
+    hybrid_score: float
+    vector_rank: int | None = None
+    lexical_rank: int | None = None
+    vector_distance: float | None = None
+    lexical_score: float | None = None
 
 
 def _compact(value: Any) -> str:

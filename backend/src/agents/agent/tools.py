@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.src.agents.agent.state import Evidence, KnowledgeAgentContext
 from backend.src.services.knowledge_extraction import KnowledgeType
-from backend.src.storage import KnowledgeRecord, build_knowledge_filter
+from backend.src.storage import KnowledgeRecord, KnowledgeSearchHit, build_knowledge_filter
 
 
 logger = logging.getLogger(__name__)
@@ -61,12 +61,29 @@ def _validity(record: KnowledgeRecord, today: date) -> str:
 
 
 def _record_payload(
-    record: KnowledgeRecord, today: date, *, distance: float | None = None
+    record: KnowledgeRecord,
+    today: date,
+    *,
+    search_hit: KnowledgeSearchHit | None = None,
 ) -> dict[str, Any]:
     payload = record.model_dump(mode="json")
     payload["validity"] = _validity(record, today)
-    if distance is not None:
-        payload["distance"] = round(distance, 4)
+    if search_hit is not None:
+        payload["retrieval"] = {
+            "hybrid_score": round(search_hit.hybrid_score, 6),
+            "vector_rank": search_hit.vector_rank,
+            "lexical_rank": search_hit.lexical_rank,
+            "vector_distance": (
+                round(search_hit.vector_distance, 6)
+                if search_hit.vector_distance is not None
+                else None
+            ),
+            "lexical_score": (
+                round(search_hit.lexical_score, 6)
+                if search_hit.lexical_score is not None
+                else None
+            ),
+        }
     return payload
 
 
@@ -137,11 +154,12 @@ async def search_knowledge(
     valid_on: date | None = None,
     k: int = 5,
 ) -> Command:
-    """Semantic-search expert knowledge records (facts, rules, cases, procedures, heuristics).
+    """Hybrid-search expert knowledge records (facts, rules, cases, procedures, heuristics).
 
     Filter by machine_id or machine_model when the user names a machine; records
     that name no machine are still returned because they apply generally. Use
-    valid_on for questions about a specific date. Lower distance means closer.
+    valid_on for questions about a specific date. Higher hybrid_score means a
+    better combined semantic and exact-term match.
     """
     context: KnowledgeAgentContext = runtime.context
     _log_call(
@@ -164,17 +182,30 @@ async def search_knowledge(
     )
     hits = await context.store.search_knowledge(query, filters=filters, k=k)
     today = context.now.date()
-    items = [_record_payload(record, today, distance=distance) for record, distance in hits]
+    items = [
+        _record_payload(hit.record, today, search_hit=hit)
+        for hit in hits
+    ]
     _log_result(
         context,
         "search_knowledge",
         count=len(hits),
-        knowledge_ids=[str(record.id) for record, _ in hits],
+        hits=[
+            {
+                "knowledge_id": str(hit.record.id),
+                "hybrid_score": round(hit.hybrid_score, 6),
+                "vector_rank": hit.vector_rank,
+                "lexical_rank": hit.lexical_rank,
+                "vector_distance": hit.vector_distance,
+                "lexical_score": hit.lexical_score,
+            }
+            for hit in hits
+        ],
     )
     return _command(
         runtime,
         {"ok": True, "knowledge": items},
-        [_knowledge_evidence(record) for record, _ in hits],
+        [_knowledge_evidence(hit.record) for hit in hits],
     )
 
 
