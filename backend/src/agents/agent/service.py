@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from time import monotonic
 from typing import Any
@@ -34,6 +34,27 @@ CITATION_RE = re.compile(
     r"\[K:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\]"
 )
 LOG_CONTENT_LIMIT = 2_000
+STREAM_EVENT_VERSION = 1
+PUBLIC_TRACE_STRING_LIMIT = 2_000
+PUBLIC_CONTEXT_FIELDS = {
+    "machine_id",
+    "machine_model",
+    "component_model",
+    "condition",
+}
+PUBLIC_TOOL_INPUT_FIELDS = {
+    "search_knowledge": {
+        "query",
+        "subject",
+        "knowledge_type",
+        "machine_id",
+        "machine_model",
+        "valid_on",
+        "k",
+    },
+    "get_knowledge": {"knowledge_id"},
+    "get_evidence": {"evidence_id"},
+}
 SECRET_VALUE_RE = re.compile(
     r"(?i)(api[_-]?key|authorization)(\s*[:=]\s*)([^\s,;]+)"
 )
@@ -110,8 +131,26 @@ class KnowledgeAnswer:
 
 @dataclass(frozen=True)
 class AgentStreamEvent:
+    version: int
+    sequence: int
     event: str
+    request_id: str
+    thread_id: str
+    timestamp: str
     data: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the versioned public event envelope."""
+
+        return {
+            "version": self.version,
+            "sequence": self.sequence,
+            "type": self.event,
+            "request_id": self.request_id,
+            "thread_id": self.thread_id,
+            "timestamp": self.timestamp,
+            "data": self.data,
+        }
 
 
 @dataclass(frozen=True)
@@ -119,6 +158,27 @@ class AgentStreamSession:
     request_id: str
     thread_id: str
     events: AsyncIterator[AgentStreamEvent]
+
+
+class _StreamEventFactory:
+    """Create monotonically sequenced trace events for one agent run."""
+
+    def __init__(self, *, request_id: str, thread_id: str) -> None:
+        self.request_id = request_id
+        self.thread_id = thread_id
+        self.sequence = 0
+
+    def create(self, event: str, data: dict[str, Any] | None = None) -> AgentStreamEvent:
+        self.sequence += 1
+        return AgentStreamEvent(
+            version=STREAM_EVENT_VERSION,
+            sequence=self.sequence,
+            event=event,
+            request_id=self.request_id,
+            thread_id=self.thread_id,
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            data=data or {},
+        )
 
 
 def _content_text(message: Any) -> str:
@@ -133,6 +193,140 @@ def _content_text(message: Any) -> str:
             or (isinstance(block, dict) and isinstance(block.get("text"), str))
         )
     return str(content)
+
+
+def _public_value(value: Any) -> Any:
+    """Convert trace values to bounded JSON-safe values."""
+
+    if isinstance(value, str):
+        return value[:PUBLIC_TRACE_STRING_LIMIT]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _public_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_public_value(item) for item in value]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    enum_value = getattr(value, "value", None)
+    return _public_value(enum_value if enum_value is not None else str(value))
+
+
+def public_tool_input(tool_name: str, arguments: Any) -> dict[str, Any]:
+    """Allowlist the tool arguments that may be exposed to a trace consumer."""
+
+    if not isinstance(arguments, dict):
+        return {}
+    allowed = PUBLIC_TOOL_INPUT_FIELDS.get(tool_name)
+    if allowed is None:
+        return {}
+    return {
+        key: _public_value(value)
+        for key, value in arguments.items()
+        if key in allowed and value is not None
+    }
+
+
+def _public_knowledge_summary(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    context = item.get("context")
+    public_context = (
+        {
+            key: _public_value(value)
+            for key, value in context.items()
+            if key in PUBLIC_CONTEXT_FIELDS
+        }
+        if isinstance(context, dict)
+        else {}
+    )
+    summary = {
+        "knowledge_id": item.get("id") or item.get("knowledge_id"),
+        "subject": item.get("subject"),
+        "type": item.get("type"),
+        "validity": item.get("validity"),
+    }
+    if public_context:
+        summary["context"] = public_context
+    retrieval = item.get("retrieval")
+    if isinstance(retrieval, dict):
+        summary["retrieval"] = {
+            key: _public_value(retrieval.get(key))
+            for key in (
+                "hybrid_score",
+                "vector_rank",
+                "lexical_rank",
+                "vector_similarity",
+                "lexical_score",
+            )
+            if retrieval.get(key) is not None
+        }
+    return {
+        key: _public_value(value)
+        for key, value in summary.items()
+        if value is not None
+    }
+
+
+def public_tool_output(tool_name: str, payload: Any) -> dict[str, Any]:
+    """Return a useful trace summary without exposing claims or raw transcripts."""
+
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "invalid_tool_output"}
+    ok = payload.get("ok") is True
+    result: dict[str, Any] = {"ok": ok}
+    if not ok:
+        if payload.get("error"):
+            result["error"] = _public_value(payload["error"])
+        return result
+
+    if tool_name == "search_knowledge":
+        knowledge = payload.get("knowledge")
+        items = knowledge if isinstance(knowledge, list) else []
+        result.update(
+            {
+                "count": len(items),
+                "items": [_public_knowledge_summary(item) for item in items],
+            }
+        )
+    elif tool_name == "get_knowledge":
+        knowledge = _public_knowledge_summary(payload.get("knowledge"))
+        conflicts = payload.get("conflicting_knowledge")
+        conflict_items = conflicts if isinstance(conflicts, list) else []
+        result.update(
+            {
+                "knowledge": knowledge,
+                "conflicts": [
+                    _public_knowledge_summary(item) for item in conflict_items
+                ],
+            }
+        )
+    elif tool_name == "get_evidence":
+        evidence = payload.get("evidence")
+        evidence = evidence if isinstance(evidence, dict) else {}
+        transcript = evidence.get("transcript")
+        result["evidence"] = {
+            key: _public_value(value)
+            for key, value in {
+                "evidence_id": evidence.get("id"),
+                "stated_by": evidence.get("stated_by"),
+                "created_at": evidence.get("created_at"),
+                "returned_transcript_chars": (
+                    len(transcript) if isinstance(transcript, str) else 0
+                ),
+                "truncated": evidence.get("truncated"),
+            }.items()
+            if value is not None
+        }
+    return result
+
+
+def _tool_message_payload(message: ToolMessage) -> dict[str, Any]:
+    try:
+        payload = json.loads(_content_text(message))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid_tool_output"}
+    return payload if isinstance(payload, dict) else {"ok": False, "error": "invalid_tool_output"}
 
 
 def _root_exception(exc: BaseException) -> BaseException:
@@ -300,10 +494,14 @@ class KnowledgeAgentService:
         logged_messages = baseline_messages
         observed_messages = baseline_messages
         emitted_tool_calls: set[str] = set()
+        emitted_tool_results: set[str] = set()
+        tool_names: dict[str, str] = {}
+        tool_started_at: dict[str, float] = {}
         current_generation: str | None = None
         current_generation_uses_tools = False
         visible_answer = ""
         result: dict[str, Any] | None = None
+        events = _StreamEventFactory(request_id=request_id, thread_id=thread_id)
 
         logger.info(
             "Knowledge agent started request_id=%s thread_id=%s query_chars=%d "
@@ -313,7 +511,7 @@ class KnowledgeAgentService:
             len(query),
             baseline_messages,
         )
-        yield AgentStreamEvent("start", {"request_id": request_id, "thread_id": thread_id})
+        yield events.create("run.started", {"query_chars": len(query)})
 
         turn_message = f"[Turn context: current UTC time is {now.isoformat()}]\n\n{query}"
         try:
@@ -345,24 +543,15 @@ class KnowledgeAgentService:
                             # Text streamed before a tool call was not the answer.
                             if not current_generation_uses_tools and visible_answer:
                                 visible_answer = ""
-                                yield AgentStreamEvent("reset", {})
+                                yield events.create("answer.reset")
                             current_generation_uses_tools = True
-                            for call in calls:
-                                tool_name = str(call.get("name") or "")
-                                call_id = str(call.get("id") or f"{generation}:{tool_name}")
-                                if tool_name and call_id not in emitted_tool_calls:
-                                    emitted_tool_calls.add(call_id)
-                                    yield AgentStreamEvent(
-                                        "status",
-                                        {"phase": _tool_status(tool_name), "tool": tool_name},
-                                    )
                             continue
                         if current_generation_uses_tools:
                             continue
                         delta = _content_text(message)
                         if delta:
                             visible_answer += delta
-                            yield AgentStreamEvent("delta", {"text": delta})
+                            yield events.create("answer.delta", {"text": delta})
                         continue
 
                     if part_type != "values":
@@ -370,11 +559,58 @@ class KnowledgeAgentService:
                     result = part["data"]
                     messages = list(result.get("messages") or [])
                     logged_messages = _log_new_messages(request_id, messages, logged_messages)
-                    if any(
-                        isinstance(message, ToolMessage)
-                        for message in messages[observed_messages:]
-                    ):
-                        yield AgentStreamEvent("status", {"phase": "synthesizing"})
+                    for observed in messages[observed_messages:]:
+                        if isinstance(observed, AIMessage):
+                            for index, call in enumerate(observed.tool_calls or []):
+                                tool_name = str(call.get("name") or "")
+                                call_id = str(
+                                    call.get("id")
+                                    or f"{getattr(observed, 'id', 'model')}:{index}:{tool_name}"
+                                )
+                                if not tool_name or call_id in emitted_tool_calls:
+                                    continue
+                                emitted_tool_calls.add(call_id)
+                                tool_names[call_id] = tool_name
+                                tool_started_at[call_id] = monotonic()
+                                yield events.create(
+                                    "tool.started",
+                                    {
+                                        "tool_call_id": call_id,
+                                        "tool": tool_name,
+                                        "phase": _tool_status(tool_name),
+                                        "input": public_tool_input(
+                                            tool_name, call.get("args") or {}
+                                        ),
+                                    },
+                                )
+                        elif isinstance(observed, ToolMessage):
+                            call_id = str(observed.tool_call_id or "")
+                            if not call_id or call_id in emitted_tool_results:
+                                continue
+                            emitted_tool_results.add(call_id)
+                            tool_name = str(
+                                getattr(observed, "name", None)
+                                or tool_names.get(call_id)
+                                or "unknown_tool"
+                            )
+                            payload = _tool_message_payload(observed)
+                            started_at = tool_started_at.get(call_id)
+                            duration_ms = (
+                                int((monotonic() - started_at) * 1000)
+                                if started_at is not None
+                                else None
+                            )
+                            trace_data: dict[str, Any] = {
+                                "tool_call_id": call_id,
+                                "tool": tool_name,
+                                "status": (
+                                    "success" if payload.get("ok") is True else "error"
+                                ),
+                                "output": public_tool_output(tool_name, payload),
+                            }
+                            if duration_ms is not None:
+                                trace_data["duration_ms"] = duration_ms
+                            yield events.create("tool.completed", trace_data)
                     observed_messages = len(messages)
         except TimeoutError as exc:
             reason = f"Agent exceeded the {self._timeout_seconds:g}s run timeout"
@@ -462,10 +698,19 @@ class KnowledgeAgentService:
 
         if visible_answer != answer:
             if visible_answer:
-                yield AgentStreamEvent("reset", {})
-            yield AgentStreamEvent("delta", {"text": answer})
-        yield AgentStreamEvent("citations", {"citations": citations})
-        yield AgentStreamEvent("done", {"request_id": request_id, "thread_id": thread_id})
+                yield events.create("answer.reset")
+            yield events.create("answer.delta", {"text": answer})
+        yield events.create(
+            "answer.citations",
+            {"citations": [asdict(citation) for citation in citations]},
+        )
+        yield events.create(
+            "run.completed",
+            {
+                "duration_ms": int((monotonic() - started) * 1000),
+                "citation_count": len(citations),
+            },
+        )
 
         current_messages = messages[baseline_messages:]
         logger.info(
@@ -493,13 +738,16 @@ class KnowledgeAgentService:
         completed = False
         try:
             async for event in session.events:
-                if event.event == "delta":
+                if event.event == "answer.delta":
                     answer += str(event.data.get("text") or "")
-                elif event.event == "reset":
+                elif event.event == "answer.reset":
                     answer = ""
-                elif event.event == "citations":
-                    citations = tuple(event.data.get("citations") or ())
-                elif event.event == "done":
+                elif event.event == "answer.citations":
+                    citations = tuple(
+                        KnowledgeCitation(**item)
+                        for item in event.data.get("citations") or ()
+                    )
+                elif event.event == "run.completed":
                     completed = True
         finally:
             await self.delete_thread(thread_id)

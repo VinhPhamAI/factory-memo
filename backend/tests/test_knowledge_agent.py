@@ -23,6 +23,8 @@ from backend.src.agents.agent.service import (
     KnowledgeAgentService,
     KnowledgeAgentUnavailable,
     citations_from_evidence,
+    public_tool_input,
+    public_tool_output,
 )
 from backend.src.agents.agent.state import merge_evidence
 from backend.src.services.knowledge_extraction import KnowledgeType
@@ -162,6 +164,39 @@ class MergeEvidenceTest(unittest.TestCase):
         )
 
 
+class PublicTraceTest(unittest.TestCase):
+    def test_tool_input_is_allowlisted(self) -> None:
+        self.assertEqual(
+            public_tool_input(
+                "search_knowledge",
+                {
+                    "query": "sensor",
+                    "machine_id": "M01",
+                    "api_key": "must-not-leak",
+                },
+            ),
+            {"query": "sensor", "machine_id": "M01"},
+        )
+
+    def test_evidence_trace_omits_transcript_and_metadata(self) -> None:
+        output = public_tool_output(
+            "get_evidence",
+            {
+                "ok": True,
+                "evidence": {
+                    "id": str(EVIDENCE_ID),
+                    "stated_by": "Maintenance Expert",
+                    "metadata": {"secret": "hidden"},
+                    "transcript": "private transcript",
+                    "truncated": False,
+                },
+            },
+        )
+        self.assertNotIn("private transcript", str(output))
+        self.assertNotIn("metadata", str(output))
+        self.assertEqual(output["evidence"]["returned_transcript_chars"], 18)
+
+
 class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_answers_with_validated_citation(self) -> None:
         store = FakeStore()
@@ -192,11 +227,12 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"hybrid_score": 0.0325', tool_message.content)
         self.assertIn('"vector_rank": 1', tool_message.content)
         self.assertIn('"lexical_rank": 2', tool_message.content)
+        self.assertIn('"vector_similarity": 0.88', tool_message.content)
         self.assertNotIn("embedding", tool_message.content)
         self.assertIn("[Turn context: current UTC time is", model.calls[0][-1].content)
         self.assertTrue(any("hybrid_score" in line for line in logs.output))
 
-    async def test_stream_emits_status_and_citations(self) -> None:
+    async def test_stream_emits_normalized_trace_and_citations(self) -> None:
         service, _ = _service(
             FakeStore(),
             _search_call(query="sensor"),
@@ -205,10 +241,23 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
         session = service.start_stream("sensor?", thread_id="t1")
         events = [event async for event in session.events]
         names = [event.event for event in events]
-        self.assertEqual(names[0], "start")
-        self.assertIn({"phase": "searching", "tool": "search_knowledge"}, [e.data for e in events])
-        self.assertEqual(names[-2:], ["citations", "done"])
-        text = "".join(e.data["text"] for e in events if e.event == "delta")
+        self.assertEqual(names[0], "run.started")
+        self.assertIn("tool.started", names)
+        self.assertIn("tool.completed", names)
+        self.assertEqual(names[-2:], ["answer.citations", "run.completed"])
+        self.assertEqual(
+            [event.sequence for event in events], list(range(1, len(events) + 1))
+        )
+        self.assertTrue(all(event.request_id == session.request_id for event in events))
+        started = next(event for event in events if event.event == "tool.started")
+        self.assertEqual(started.data["tool"], "search_knowledge")
+        self.assertEqual(started.data["input"], {"query": "sensor"})
+        completed = next(event for event in events if event.event == "tool.completed")
+        self.assertEqual(completed.data["output"]["count"], 1)
+        self.assertNotIn("claim", str(completed.data))
+        text = "".join(
+            event.data["text"] for event in events if event.event == "answer.delta"
+        )
         self.assertEqual(text, f"Clean it [K:{RECORD.id}].")
 
     async def test_invented_citation_is_rejected(self) -> None:
@@ -239,7 +288,7 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
             AIMessage(content=f"As I said [K:{RECORD.id}]."),
         )
         first = [e async for e in service.start_stream("sensor?", thread_id="t").events]
-        self.assertEqual(first[-1].event, "done")
+        self.assertEqual(first[-1].event, "run.completed")
         with self.assertRaises(InvalidKnowledgeCitation):
             [e async for e in service.start_stream("again?", thread_id="t").events]
 

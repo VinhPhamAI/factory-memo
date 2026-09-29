@@ -200,7 +200,17 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
             )
             for hit in hits:
                 self.assertIsInstance(hit.hybrid_score, float)
-                self.assertIsInstance(hit.vector_distance, float)
+                self.assertTrue(
+                    hit.vector_rank is not None or hit.lexical_rank is not None
+                )
+                if hit.vector_rank is not None:
+                    self.assertIsInstance(hit.vector_distance, float)
+                    self.assertGreaterEqual(
+                        hit.vector_similarity,
+                        self.store.min_vector_similarity,
+                    )
+                if hit.lexical_rank is not None:
+                    self.assertIsInstance(hit.lexical_score, float)
             return {hit.record.id for hit in hits}
 
         everything = {record.id for record in records.values()}
@@ -248,9 +258,13 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 first = await self.store.search_knowledge(query, k=3)
                 second = await self.store.search_knowledge(query, k=3)
                 self.assertEqual(first[0].record.id, expected_id)
-                self.assertIsNotNone(first[0].vector_rank)
                 self.assertIsNotNone(first[0].lexical_rank)
                 self.assertGreater(first[0].hybrid_score, 0)
+                if first[0].vector_rank is not None:
+                    self.assertGreaterEqual(
+                        first[0].vector_similarity,
+                        self.store.min_vector_similarity,
+                    )
                 self.assertEqual(
                     [hit.record.id for hit in first],
                     [hit.record.id for hit in second],
@@ -260,14 +274,32 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
                     [hit.hybrid_score for hit in second],
                 )
 
-    async def test_hybrid_search_falls_back_to_vector_results(self) -> None:
+    async def test_similarity_threshold_drops_weak_vector_only_results(self) -> None:
         await self._seed()
-        hits = await self.store.search_knowledge("zzzznosuchtoken", k=3)
+        strict_store = KnowledgeStore(
+            self.store.engine,
+            DeterministicFakeEmbedding(size=DIM),
+            DIM,
+            schema=self.schema,
+            min_vector_similarity=1.0,
+        )
+        hits = await strict_store.search_knowledge("zzzznosuchtoken", k=3)
 
-        self.assertEqual(len(hits), 3)
-        self.assertTrue(all(hit.vector_rank is not None for hit in hits))
-        self.assertTrue(all(hit.lexical_rank is None for hit in hits))
-        self.assertTrue(all(hit.lexical_score is None for hit in hits))
+        self.assertEqual(hits, [])
+
+    async def test_similarity_threshold_preserves_lexical_matches(self) -> None:
+        _, records = await self._seed()
+        strict_store = KnowledgeStore(
+            self.store.engine,
+            DeterministicFakeEmbedding(size=DIM),
+            DIM,
+            schema=self.schema,
+            min_vector_similarity=1.0,
+        )
+        hits = await strict_store.search_knowledge("M01", k=3)
+
+        self.assertIn(records["m01"].id, {hit.record.id for hit in hits})
+        self.assertTrue(all(hit.lexical_rank is not None for hit in hits))
 
     async def test_unknown_evidence_is_rejected(self) -> None:
         await self.store.init_schema()

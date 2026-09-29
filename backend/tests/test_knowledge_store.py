@@ -8,6 +8,7 @@ from dataclasses import FrozenInstanceError
 from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -17,7 +18,11 @@ from langchain_core.documents import Document
 
 from backend.src.services.knowledge_extraction import KnowledgeItem, KnowledgeType
 from backend.src.storage import KnowledgeRecord, KnowledgeSearchHit, build_knowledge_filter
-from backend.src.storage.knowledge_store import _compile_knowledge_filter
+from backend.src.storage.knowledge_store import (
+    DEFAULT_MIN_VECTOR_SIMILARITY,
+    _compile_knowledge_filter,
+    min_vector_similarity_from_env,
+)
 
 
 def _record(**overrides) -> KnowledgeRecord:
@@ -223,8 +228,46 @@ class KnowledgeSearchHitTest(unittest.TestCase):
         self.assertEqual(hit.vector_rank, 1)
         self.assertIsNone(hit.lexical_rank)
         self.assertIsNone(hit.lexical_score)
+        self.assertAlmostEqual(hit.vector_similarity, 0.88)
         with self.assertRaises(FrozenInstanceError):
             hit.hybrid_score = 0.5
+
+    def test_lexical_only_hit_has_no_vector_similarity(self) -> None:
+        hit = KnowledgeSearchHit(
+            record=_record(),
+            hybrid_score=1 / 61,
+            lexical_rank=1,
+            lexical_score=0.8,
+        )
+        self.assertIsNone(hit.vector_similarity)
+
+
+class MinVectorSimilarityConfigTest(unittest.TestCase):
+    def test_uses_default_when_environment_is_missing_or_blank(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(
+                min_vector_similarity_from_env(), DEFAULT_MIN_VECTOR_SIMILARITY
+            )
+        with patch.dict(
+            "os.environ", {"KNOWLEDGE_MIN_VECTOR_SIMILARITY": "  "}, clear=True
+        ):
+            self.assertEqual(
+                min_vector_similarity_from_env(), DEFAULT_MIN_VECTOR_SIMILARITY
+            )
+
+    def test_reads_threshold_from_environment(self) -> None:
+        with patch.dict(
+            "os.environ", {"KNOWLEDGE_MIN_VECTOR_SIMILARITY": "0.72"}, clear=True
+        ):
+            self.assertEqual(min_vector_similarity_from_env(), 0.72)
+
+    def test_rejects_invalid_threshold(self) -> None:
+        for value in ("not-a-number", "-0.1", "1.1", "nan", "inf"):
+            with self.subTest(value=value), patch.dict(
+                "os.environ", {"KNOWLEDGE_MIN_VECTOR_SIMILARITY": value}, clear=True
+            ):
+                with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+                    min_vector_similarity_from_env()
 
 
 if __name__ == "__main__":

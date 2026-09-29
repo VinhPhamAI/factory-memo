@@ -1,4 +1,3 @@
-from backend.core.src.turn_detection import EndOfTurnPredictor
 import time
 
 chat_example1 = [
@@ -25,6 +24,9 @@ chat_example3 = [
 UNLIKELY_THRESHOLD = 0.15
 
 def main():
+    # Keep optional ONNX/Transformers dependencies out of unittest discovery.
+    from backend.src.turn_detection.td import EndOfTurnPredictor
+
     predictor = EndOfTurnPredictor()
 
     examples = [chat_example1, chat_example2, chat_example3]

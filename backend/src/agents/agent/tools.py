@@ -78,6 +78,11 @@ def _record_payload(
                 if search_hit.vector_distance is not None
                 else None
             ),
+            "vector_similarity": (
+                round(search_hit.vector_similarity, 6)
+                if search_hit.vector_similarity is not None
+                else None
+            ),
             "lexical_score": (
                 round(search_hit.lexical_score, 6)
                 if search_hit.lexical_score is not None
@@ -197,6 +202,7 @@ async def search_knowledge(
                 "vector_rank": hit.vector_rank,
                 "lexical_rank": hit.lexical_rank,
                 "vector_distance": hit.vector_distance,
+                "vector_similarity": hit.vector_similarity,
                 "lexical_score": hit.lexical_score,
             }
             for hit in hits

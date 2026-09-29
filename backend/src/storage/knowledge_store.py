@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 from collections.abc import AsyncIterator, Sequence
@@ -52,6 +53,8 @@ MIN_SEARCH_CANDIDATES = 20
 MAX_SEARCH_CANDIDATES = 100
 SEARCH_CANDIDATE_MULTIPLIER = 4
 RRF_RANK_CONSTANT = 60
+DEFAULT_MIN_VECTOR_SIMILARITY = 0.65
+MIN_VECTOR_SIMILARITY_ENV = "KNOWLEDGE_MIN_VECTOR_SIMILARITY"
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 _KNOWLEDGE_TYPES_SQL = ", ".join(f"'{kind.value}'" for kind in KnowledgeType)
@@ -60,6 +63,29 @@ _STATUSES_SQL = ", ".join(f"'{status.value}'" for status in ConversationStatus)
 
 class StorageError(RuntimeError):
     """Raised when the knowledge base cannot complete a database operation."""
+
+
+def _validate_min_vector_similarity(value: float) -> float:
+    """Validate a cosine-similarity threshold used by vector retrieval."""
+
+    threshold = float(value)
+    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError("min_vector_similarity must be between 0 and 1")
+    return threshold
+
+
+def min_vector_similarity_from_env() -> float:
+    """Read the retrieval threshold, falling back to the production default."""
+
+    raw = os.getenv(MIN_VECTOR_SIMILARITY_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_MIN_VECTOR_SIMILARITY
+    try:
+        return _validate_min_vector_similarity(float(raw))
+    except ValueError as exc:
+        raise ValueError(
+            f"{MIN_VECTOR_SIMILARITY_ENV} must be a number between 0 and 1"
+        ) from exc
 
 
 def _escape_like(value: str) -> str:
@@ -177,6 +203,7 @@ class KnowledgeStore:
         vector_size: int,
         *,
         schema: str = "public",
+        min_vector_similarity: float = DEFAULT_MIN_VECTOR_SIMILARITY,
     ) -> None:
         if not _IDENTIFIER_RE.match(schema):
             raise ValueError(f"Invalid schema name: {schema!r}")
@@ -185,6 +212,9 @@ class KnowledgeStore:
         self._pg_engine = PGEngine.from_engine(engine)
         self._embeddings = embeddings
         self._vector_size = vector_size
+        self._min_vector_similarity = _validate_min_vector_similarity(
+            min_vector_similarity
+        )
         self._vector_store: PGVectorStore | None = None
         self._vector_store_lock = asyncio.Lock()
 
@@ -196,6 +226,7 @@ class KnowledgeStore:
         vector_size: int,
         *,
         schema: str = "public",
+        min_vector_similarity: float = DEFAULT_MIN_VECTOR_SIMILARITY,
         **engine_kwargs: Any,
     ) -> "KnowledgeStore":
         """Create a store over a `postgresql+psycopg://` connection URL."""
@@ -206,6 +237,7 @@ class KnowledgeStore:
             embeddings,
             vector_size,
             schema=schema,
+            min_vector_similarity=min_vector_similarity,
         )
 
     @classmethod
@@ -224,11 +256,16 @@ class KnowledgeStore:
             database_url,
             embeddings or build_embeddings_from_env(),
             embedding_dim_from_env(),
+            min_vector_similarity=min_vector_similarity_from_env(),
         )
 
     @property
     def engine(self) -> AsyncEngine:
         return self._engine
+
+    @property
+    def min_vector_similarity(self) -> float:
+        return self._min_vector_similarity
 
     def _table(self, name: str) -> str:
         return f'"{self._schema}"."{name}"'
@@ -447,7 +484,7 @@ class KnowledgeStore:
         filters: dict[str, Any] | None = None,
         k: int = DEFAULT_SEARCH_K,
     ) -> list[KnowledgeSearchHit]:
-        """Fuse vector and PostgreSQL full-text ranks with reciprocal rank fusion."""
+        """Fuse thresholded vector and PostgreSQL full-text ranks with RRF."""
 
         result_k = max(1, min(k, MAX_SEARCH_K))
         candidate_k = min(
@@ -469,13 +506,18 @@ class KnowledgeStore:
                 SELECT CAST(:query_embedding AS vector) AS embedding,
                        websearch_to_tsquery('simple'::regconfig, :query) AS lexical_query
             ),
-            vector_candidates AS (
+            vector_scored AS (
                 SELECT k.id,
                        k.{EMBEDDING_COLUMN} <=> q.embedding AS vector_distance
                 FROM {knowledge_table} AS k
                 CROSS JOIN query_values AS q
                 WHERE {where_sql}
-                ORDER BY vector_distance ASC, k.id ASC
+            ),
+            vector_candidates AS (
+                SELECT id, vector_distance
+                FROM vector_scored
+                WHERE vector_distance <= :max_vector_distance
+                ORDER BY vector_distance ASC, id ASC
                 LIMIT :candidate_k
             ),
             vector_ranked AS (
@@ -541,6 +583,7 @@ class KnowledgeStore:
             "candidate_k": candidate_k,
             "result_k": result_k,
             "rrf_k": RRF_RANK_CONSTANT,
+            "max_vector_distance": 1.0 - self._min_vector_similarity,
         }
         async with self._errors("search knowledge"):
             async with self._engine.connect() as conn:

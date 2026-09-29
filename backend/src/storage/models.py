@@ -156,6 +156,14 @@ class KnowledgeSearchHit:
     vector_distance: float | None = None
     lexical_score: float | None = None
 
+    @property
+    def vector_similarity(self) -> float | None:
+        """Cosine similarity corresponding to pgvector's cosine distance."""
+
+        if self.vector_distance is None:
+            return None
+        return 1.0 - self.vector_distance
+
 
 def _compact(value: Any) -> str:
     if isinstance(value, (dict, list)):

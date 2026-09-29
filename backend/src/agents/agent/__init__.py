@@ -2,6 +2,8 @@
 
 from backend.src.agents.agent.graph import build_graph
 from backend.src.agents.agent.service import (
+    AgentStreamEvent,
+    AgentStreamSession,
     KnowledgeAgentError,
     KnowledgeAgentService,
     KnowledgeAnswer,
@@ -9,6 +11,8 @@ from backend.src.agents.agent.service import (
 )
 
 __all__ = [
+    "AgentStreamEvent",
+    "AgentStreamSession",
     "KnowledgeAgentError",
     "KnowledgeAgentService",
     "KnowledgeAnswer",
