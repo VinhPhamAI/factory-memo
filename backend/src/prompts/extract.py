@@ -4,7 +4,7 @@ The conversation may contain one or more independent knowledge items. Extract ea
 
 For each knowledge item, extract only the following fields:
 
-* `subject`: What the knowledge is mainly about, such as a sensor, machine component, process, failure mode, maintenance task, machine configuration, or operating behavior.
+* `subject`: The shortest noun or noun phrase that identifies only the physical component or part discussed. Prefer its explicit ID, tag, part number, or model when available (for example, `CAM-8`). Do not include symptoms, failure modes, causes, effects, actions, operating behavior, or any description of the claim in `subject`; put those details in `claim` or `context` instead. For example, use `CAM-8`, not `CAM-8 false rejects due to external light glare`.
 
 * `claim`: The reusable knowledge expressed by the expert. Write it as a clear, self-contained statement while preserving the original meaning.
 
@@ -43,7 +43,14 @@ For each knowledge item, extract only the following fields:
 
 2. Do not invent missing metadata. If the conversation does not identify a machine, model, component, condition, date, or other context, omit that field from `context`.
 
-3. Preserve important applicability conditions. For example:
+3. Keep `subject` strictly limited to the component or part identifier:
+
+   * Prefer an explicit identifier alone when it unambiguously names the component, such as `CAM-8`, `S14`, or `AX-220`.
+   * Otherwise use the shortest concrete component noun phrase stated in the conversation, such as `rear photoelectric sensor`.
+   * Do not turn `subject` into a summary. Exclude faults, symptoms, causes, conditions, measurements, recommendations, and actions.
+   * Put information such as `false rejects`, `external light glare`, `when pressure is low`, or `replace after 500 hours` in `claim` or `context`, never in `subject`.
+
+4. Preserve important applicability conditions. For example:
 
    * "for product B17"
    * "when pressure is below 0.45 MPa"
@@ -51,18 +58,18 @@ For each knowledge item, extract only the following fields:
    * "for serial numbers 500 and above"
    * "during the morning shift"
 
-4. Preserve quantitative values and units exactly when they are important to the knowledge.
+5. Preserve quantitative values and units exactly when they are important to the knowledge.
 
-5. If the expert corrects the junior engineer's assumption, extract the expert's corrected knowledge rather than the incorrect assumption.
+6. If the expert corrects the junior engineer's assumption, extract the expert's corrected knowledge rather than the incorrect assumption.
 
-6. Distinguish between:
+7. Distinguish between:
 
    * a universal/general rule,
    * a rule that applies only in a specific configuration,
    * a historical case,
    * and a heuristic that expresses uncertainty or experience rather than certainty.
 
-7. A single conversation may contain multiple independent knowledge items. Split them when they have meaningfully different:
+8. A single conversation may contain multiple independent knowledge items. Split them when they have meaningfully different:
 
    * subjects,
    * claims,
@@ -70,24 +77,24 @@ For each knowledge item, extract only the following fields:
    * knowledge types,
    * or validity periods.
 
-8. Do not split a single causal explanation into many trivial facts if they are only useful together. Prefer one self-contained claim that preserves the causal relationship.
+9. Do not split a single causal explanation into many trivial facts if they are only useful together. Prefer one self-contained claim that preserves the causal relationship.
 
-9. If a general rule has an explicit exception, normally extract them as separate knowledge items when the exception has a different applicable context.
+10. If a general rule has an explicit exception, normally extract them as separate knowledge items when the exception has a different applicable context.
 
-10. Do not create `valid_from` or `valid_to` from:
+11. Do not create `valid_from` or `valid_to` from:
 
     * the conversation timestamp,
     * dates of historical incidents,
     * approximate phrases such as "a few years ago",
       unless the speaker explicitly says that the knowledge became valid or stopped being valid at that time.
 
-11. Serial-number ranges, machine versions, product models, firmware versions, and configurations belong in `context` unless they explicitly correspond to a time-based validity interval.
+12. Serial-number ranges, machine versions, product models, firmware versions, and configurations belong in `context` unless they explicitly correspond to a time-based validity interval.
 
-12. Do not evaluate whether the expert is factually correct. Extract what the expert states.
+13. Do not evaluate whether the expert is factually correct. Extract what the expert states.
 
-13. Do not infer conflict with other knowledge records. Conflict detection is handled by a separate system.
+14. Do not infer conflict with other knowledge records. Conflict detection is handled by a separate system.
 
-14. Do not extract ingestion metadata such as evidence ID, speaker ID, or record creation timestamp.
+15. Do not extract ingestion metadata such as evidence ID, speaker ID, or record creation timestamp.
 
 ## Output format
 

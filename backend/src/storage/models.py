@@ -155,6 +155,9 @@ class KnowledgeSearchHit:
     lexical_rank: int | None = None
     vector_distance: float | None = None
     lexical_score: float | None = None
+    lexical_matched_terms: int | None = None
+    # True when the hit clears the similarity threshold or shares enough terms.
+    confident: bool = False
 
     @property
     def vector_similarity(self) -> float | None:

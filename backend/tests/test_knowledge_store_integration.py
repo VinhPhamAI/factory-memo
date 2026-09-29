@@ -205,12 +205,10 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 )
                 if hit.vector_rank is not None:
                     self.assertIsInstance(hit.vector_distance, float)
-                    self.assertGreaterEqual(
-                        hit.vector_similarity,
-                        self.store.min_vector_similarity,
-                    )
                 if hit.lexical_rank is not None:
                     self.assertIsInstance(hit.lexical_score, float)
+                    self.assertGreaterEqual(hit.lexical_matched_terms, 1)
+                self.assertIsInstance(hit.confident, bool)
             return {hit.record.id for hit in hits}
 
         everything = {record.id for record in records.values()}
@@ -260,11 +258,7 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(first[0].record.id, expected_id)
                 self.assertIsNotNone(first[0].lexical_rank)
                 self.assertGreater(first[0].hybrid_score, 0)
-                if first[0].vector_rank is not None:
-                    self.assertGreaterEqual(
-                        first[0].vector_similarity,
-                        self.store.min_vector_similarity,
-                    )
+                self.assertTrue(first[0].confident)
                 self.assertEqual(
                     [hit.record.id for hit in first],
                     [hit.record.id for hit in second],
@@ -274,7 +268,66 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
                     [hit.hybrid_score for hit in second],
                 )
 
-    async def test_similarity_threshold_drops_weak_vector_only_results(self) -> None:
+    async def test_sentence_query_matches_any_stemmed_term(self) -> None:
+        _, records = await self._seed()
+        hits = await self.store.search_knowledge(
+            "How should I be cleaning the lens of the rear sensors?", k=4
+        )
+        by_id = {hit.record.id: hit for hit in hits}
+
+        # Stemmed query terms: clean, len, rear, sensor.
+        m01 = by_id[records["m01"].id]
+        self.assertEqual(m01.lexical_rank, 1)
+        self.assertEqual(m01.lexical_matched_terms, 4)
+        self.assertTrue(m01.confident)
+        # One shared term out of four is not enough on the lexical side alone.
+        general = by_id[records["general"].id]
+        self.assertEqual(general.lexical_matched_terms, 1)
+        self.assertEqual(
+            [hit.confident for hit in hits],
+            sorted((hit.confident for hit in hits), reverse=True),
+        )
+
+    async def test_init_schema_migrates_simple_search_vector_to_english(self) -> None:
+        _, records = await self._seed()
+        table = f'"{self.schema}"."knowledge_items"'
+        async with self.store.engine.begin() as conn:
+            await conn.execute(text(f"ALTER TABLE {table} DROP COLUMN search_vector"))
+            await conn.execute(
+                text(
+                    f"ALTER TABLE {table} ADD COLUMN search_vector TSVECTOR "
+                    "GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, search_text)) STORED"
+                )
+            )
+
+        await self.store.init_schema()
+        await self.store.init_schema()
+
+        async with self.store.engine.connect() as conn:
+            expression = await conn.scalar(
+                text(
+                    "SELECT pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef AS d "
+                    "JOIN pg_attribute AS a ON a.attrelid = d.adrelid AND a.attnum = d.adnum "
+                    "WHERE d.adrelid = CAST(:table AS regclass) AND a.attname = 'search_vector'"
+                ),
+                {"table": table},
+            )
+            index_exists = await conn.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_indexes "
+                    "WHERE schemaname = :schema AND indexname = :index_name)"
+                ),
+                {
+                    "schema": self.schema,
+                    "index_name": "knowledge_items_search_vector_gin_idx",
+                },
+            )
+        self.assertIn("'english'::regconfig", expression)
+        self.assertTrue(index_exists)
+        hits = await self.store.search_knowledge("cleaning lenses", k=1)
+        self.assertEqual(hits[0].record.id, records["m01"].id)
+
+    async def test_weak_vector_only_results_are_kept_but_not_confident(self) -> None:
         await self._seed()
         strict_store = KnowledgeStore(
             self.store.engine,
@@ -285,9 +338,11 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
         )
         hits = await strict_store.search_knowledge("zzzznosuchtoken", k=3)
 
-        self.assertEqual(hits, [])
+        self.assertEqual(len(hits), 3)
+        self.assertTrue(all(hit.lexical_rank is None for hit in hits))
+        self.assertFalse(any(hit.confident for hit in hits))
 
-    async def test_similarity_threshold_preserves_lexical_matches(self) -> None:
+    async def test_lexical_matches_are_confident_below_similarity_threshold(self) -> None:
         _, records = await self._seed()
         strict_store = KnowledgeStore(
             self.store.engine,
@@ -298,8 +353,65 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
         )
         hits = await strict_store.search_knowledge("M01", k=3)
 
+        self.assertEqual(hits[0].record.id, records["m01"].id)
+        self.assertTrue(hits[0].confident)
+        self.assertEqual(hits[0].lexical_matched_terms, 1)
+        self.assertFalse(any(hit.confident for hit in hits[1:]))
+
+    async def test_reembed_resizes_column_and_keeps_records(self) -> None:
+        _, records = await self._seed()
+        resized = KnowledgeStore(
+            self.store.engine, DeterministicFakeEmbedding(size=8), 8, schema=self.schema
+        )
+
+        self.assertEqual(await resized.reembed_knowledge(), len(records))
+        await resized.init_schema()
+
+        table = f'"{self.schema}"."knowledge_items"'
+        async with self.store.engine.connect() as conn:
+            dims = set(
+                (
+                    await conn.execute(
+                        text(f"SELECT vector_dims(embedding) FROM {table}")
+                    )
+                ).scalars()
+            )
+            hnsw_exists = await conn.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_indexes "
+                    "WHERE schemaname = :schema AND indexname = :index_name)"
+                ),
+                {"schema": self.schema, "index_name": "knowledge_items_embedding_hnsw_idx"},
+            )
+        self.assertEqual(dims, {8})
+        self.assertTrue(hnsw_exists)
+        (m01,) = await resized.get_knowledge([records["m01"].id])
+        self.assertEqual(m01.claim, records["m01"].claim)
+        hits = await resized.search_knowledge("rear sensor lens", k=4)
         self.assertIn(records["m01"].id, {hit.record.id for hit in hits})
-        self.assertTrue(all(hit.lexical_rank is not None for hit in hits))
+        # New records use the new dimension too.
+        await resized.add_knowledge(
+            [
+                KnowledgeRecord(
+                    subject="s",
+                    claim="c",
+                    type=KnowledgeType.FACT,
+                    evidence_id=records["m01"].evidence_id,
+                )
+            ]
+        )
+
+    async def test_reembed_failure_keeps_old_embeddings(self) -> None:
+        await self._seed()
+        wrong_size = KnowledgeStore(
+            self.store.engine,
+            DeterministicFakeEmbedding(size=4),
+            8,
+            schema=self.schema,
+        )
+        with self.assertRaises(StorageError):
+            await wrong_size.reembed_knowledge()
+        await self.store.init_schema()  # still vector(16)
 
     async def test_unknown_evidence_is_rejected(self) -> None:
         await self.store.init_schema()

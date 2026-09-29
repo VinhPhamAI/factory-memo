@@ -20,6 +20,20 @@ from backend.src.storage import KnowledgeRecord, KnowledgeSearchHit, build_knowl
 
 logger = logging.getLogger(__name__)
 TRANSCRIPT_CHAR_LIMIT = 6_000
+# search_knowledge calls allowed per user question before the tool refuses.
+SEARCH_BUDGET = 3
+# Nearest hits returned when nothing clears the relevance threshold.
+LOW_CONFIDENCE_LIMIT = 3
+LOW_CONFIDENCE_NOTE = (
+    "No record cleared the relevance threshold. These are the nearest records; "
+    "use one only if it clearly answers the question, otherwise say the "
+    "knowledge base has no answer."
+)
+NO_MATCH_NOTE = "No knowledge record matches these filters."
+BUDGET_EXHAUSTED_NOTE = (
+    "Search budget for this question is used up. Answer from the knowledge "
+    "already retrieved, or say the knowledge base has no answer."
+)
 
 
 class SearchKnowledgeInput(BaseModel):
@@ -88,6 +102,8 @@ def _record_payload(
                 if search_hit.lexical_score is not None
                 else None
             ),
+            "lexical_matched_terms": search_hit.lexical_matched_terms,
+            "confident": search_hit.confident,
         }
     return payload
 
@@ -130,6 +146,21 @@ def _command(runtime: ToolRuntime, payload: dict[str, Any], evidence: list[Evide
     )
 
 
+def _searches_this_turn(runtime: ToolRuntime) -> int:
+    """Count search_knowledge calls since the latest user message, this one included."""
+
+    count = 0
+    for message in reversed((runtime.state or {}).get("messages", [])):
+        if getattr(message, "type", None) == "human":
+            break
+        count += sum(
+            1
+            for call in getattr(message, "tool_calls", None) or []
+            if call.get("name") == "search_knowledge"
+        )
+    return count
+
+
 def _log_call(context: KnowledgeAgentContext, tool_name: str, **fields: Any) -> None:
     logger.info(
         "Knowledge tool call request_id=%s tool=%s input=%s",
@@ -161,10 +192,16 @@ async def search_knowledge(
 ) -> Command:
     """Hybrid-search expert knowledge records (facts, rules, cases, procedures, heuristics).
 
-    Filter by machine_id or machine_model when the user names a machine; records
-    that name no machine are still returned because they apply generally. Use
-    valid_on for questions about a specific date. Higher hybrid_score means a
-    better combined semantic and exact-term match.
+    Write query as one full natural-language English sentence describing the
+    problem, keeping exact identifiers (machine IDs, models, station numbers,
+    part or error codes) verbatim. Filter by machine_id or machine_model when
+    the user names a machine; records that name no machine are still returned
+    because they apply generally. Use valid_on for questions about a specific
+    date.
+
+    match is "confident" when records cleared the relevance threshold,
+    "low_confidence" when only the nearest records are shown, and "none" when
+    the filters exclude everything. At most 3 searches are allowed per question.
     """
     context: KnowledgeAgentContext = runtime.context
     _log_call(
@@ -178,6 +215,18 @@ async def search_knowledge(
         valid_on=valid_on,
         k=k,
     )
+    searches = _searches_this_turn(runtime)
+    if searches > SEARCH_BUDGET:
+        _log_result(context, "search_knowledge", error="search_budget_exhausted")
+        return _command(
+            runtime,
+            {
+                "ok": False,
+                "error": "search_budget_exhausted",
+                "note": BUDGET_EXHAUSTED_NOTE,
+            },
+            [],
+        )
     filters = build_knowledge_filter(
         subject=subject,
         knowledge_type=knowledge_type,
@@ -186,6 +235,13 @@ async def search_knowledge(
         valid_on=valid_on,
     )
     hits = await context.store.search_knowledge(query, filters=filters, k=k)
+    confident = [hit for hit in hits if hit.confident]
+    if confident:
+        match, hits = "confident", confident
+    elif hits:
+        match, hits = "low_confidence", hits[:LOW_CONFIDENCE_LIMIT]
+    else:
+        match = "none"
     today = context.now.date()
     items = [
         _record_payload(hit.record, today, search_hit=hit)
@@ -194,6 +250,7 @@ async def search_knowledge(
     _log_result(
         context,
         "search_knowledge",
+        match=match,
         count=len(hits),
         hits=[
             {
@@ -204,13 +261,22 @@ async def search_knowledge(
                 "vector_distance": hit.vector_distance,
                 "vector_similarity": hit.vector_similarity,
                 "lexical_score": hit.lexical_score,
+                "lexical_matched_terms": hit.lexical_matched_terms,
+                "confident": hit.confident,
             }
             for hit in hits
         ],
     )
+    payload: dict[str, Any] = {"ok": True, "match": match}
+    if match == "low_confidence":
+        payload["note"] = LOW_CONFIDENCE_NOTE
+    elif match == "none":
+        payload["note"] = NO_MATCH_NOTE
+    payload["knowledge"] = items
+    payload["searches_remaining"] = max(0, SEARCH_BUDGET - searches)
     return _command(
         runtime,
-        {"ok": True, "knowledge": items},
+        payload,
         [_knowledge_evidence(hit.record) for hit in hits],
     )
 

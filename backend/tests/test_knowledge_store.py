@@ -20,7 +20,9 @@ from backend.src.services.knowledge_extraction import KnowledgeItem, KnowledgeTy
 from backend.src.storage import KnowledgeRecord, KnowledgeSearchHit, build_knowledge_filter
 from backend.src.storage.knowledge_store import (
     DEFAULT_MIN_VECTOR_SIMILARITY,
+    MAX_LEXICAL_TERMS,
     _compile_knowledge_filter,
+    lexical_or_query,
     min_vector_similarity_from_env,
 )
 
@@ -240,6 +242,25 @@ class KnowledgeSearchHitTest(unittest.TestCase):
             lexical_score=0.8,
         )
         self.assertIsNone(hit.vector_similarity)
+
+
+class LexicalOrQueryTest(unittest.TestCase):
+    def test_joins_terms_with_or_and_keeps_identifiers(self) -> None:
+        self.assertEqual(
+            lexical_or_query("Jig alignment on AX-220, station 12 (S14.b)?"),
+            "Jig or alignment or on or AX-220 or station or 12 or S14.b",
+        )
+
+    def test_drops_operators_duplicates_and_negation(self) -> None:
+        self.assertEqual(
+            lexical_or_query('"sensor" OR -sensor or Sensor lens'),
+            "sensor or lens",
+        )
+
+    def test_caps_terms_and_handles_empty_input(self) -> None:
+        query = " ".join(f"t{i}" for i in range(MAX_LEXICAL_TERMS + 5))
+        self.assertEqual(len(lexical_or_query(query).split(" or ")), MAX_LEXICAL_TERMS)
+        self.assertEqual(lexical_or_query("?!"), "")
 
 
 class MinVectorSimilarityConfigTest(unittest.TestCase):

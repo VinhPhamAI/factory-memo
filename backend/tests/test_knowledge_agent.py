@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from datetime import date, datetime, timezone
@@ -71,25 +72,30 @@ class ScriptedChatModel(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=message)])
 
 
+def _hit(record: KnowledgeRecord = RECORD, *, confident: bool = True) -> KnowledgeSearchHit:
+    return KnowledgeSearchHit(
+        record=record,
+        hybrid_score=0.0325,
+        vector_rank=1,
+        lexical_rank=2,
+        vector_distance=0.12,
+        lexical_score=0.4,
+        lexical_matched_terms=2,
+        confident=confident,
+    )
+
+
 class FakeStore:
-    def __init__(self, *, fail: bool = False):
+    def __init__(self, *, fail: bool = False, hits: list[KnowledgeSearchHit] | None = None):
         self.fail = fail
+        self.hits = [_hit()] if hits is None else hits
         self.searches: list[tuple[str, Any, int]] = []
 
     async def search_knowledge(self, query, *, filters=None, k=5):
         if self.fail:
             raise StorageError("connection refused")
         self.searches.append((query, filters, k))
-        return [
-            KnowledgeSearchHit(
-                record=RECORD,
-                hybrid_score=0.0325,
-                vector_rank=1,
-                lexical_rank=2,
-                vector_distance=0.12,
-                lexical_score=0.4,
-            )
-        ]
+        return list(self.hits)
 
     async def get_knowledge(self, ids):
         return [RECORD] if RECORD.id in ids else []
@@ -105,11 +111,16 @@ class FakeStore:
         )
 
 
-def _search_call(**args: Any) -> AIMessage:
+def _search_call(call_id: str = "call_1", **args: Any) -> AIMessage:
     return AIMessage(
         content="",
-        tool_calls=[{"name": "search_knowledge", "args": args, "id": "call_1"}],
+        tool_calls=[{"name": "search_knowledge", "args": args, "id": call_id}],
     )
+
+
+def _tool_payload(message: BaseMessage) -> dict[str, Any]:
+    assert isinstance(message, ToolMessage)
+    return json.loads(message.content)
 
 
 def _service(store: FakeStore, *responses: AIMessage) -> tuple[KnowledgeAgentService, ScriptedChatModel]:
@@ -228,6 +239,10 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"vector_rank": 1', tool_message.content)
         self.assertIn('"lexical_rank": 2', tool_message.content)
         self.assertIn('"vector_similarity": 0.88', tool_message.content)
+        payload = _tool_payload(tool_message)
+        self.assertEqual(payload["match"], "confident")
+        self.assertEqual(payload["searches_remaining"], 2)
+        self.assertNotIn("note", payload)
         self.assertNotIn("embedding", tool_message.content)
         self.assertIn("[Turn context: current UTC time is", model.calls[0][-1].content)
         self.assertTrue(any("hybrid_score" in line for line in logs.output))
@@ -254,11 +269,96 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(started.data["input"], {"query": "sensor"})
         completed = next(event for event in events if event.event == "tool.completed")
         self.assertEqual(completed.data["output"]["count"], 1)
+        self.assertEqual(completed.data["output"]["match"], "confident")
+        self.assertIs(
+            completed.data["output"]["items"][0]["retrieval"]["confident"], True
+        )
         self.assertNotIn("claim", str(completed.data))
         text = "".join(
             event.data["text"] for event in events if event.event == "answer.delta"
         )
         self.assertEqual(text, f"Clean it [K:{RECORD.id}].")
+
+    async def test_only_confident_hits_are_returned(self) -> None:
+        weak = KnowledgeRecord(
+            subject="conveyor belt",
+            claim="Check belt tension weekly.",
+            type=KnowledgeType.RULE,
+            evidence_id=EVIDENCE_ID,
+        )
+        store = FakeStore(hits=[_hit(), _hit(weak, confident=False)])
+        service, model = _service(
+            store,
+            _search_call(query="unstable rear sensor"),
+            AIMessage(content="Nothing."),
+        )
+        await service.ask("sensor?")
+        payload = _tool_payload(model.calls[1][-1])
+        self.assertEqual(payload["match"], "confident")
+        self.assertEqual([item["id"] for item in payload["knowledge"]], [str(RECORD.id)])
+
+    async def test_weak_results_are_returned_as_low_confidence(self) -> None:
+        records = [
+            KnowledgeRecord(
+                subject=f"component {i}",
+                claim=f"Claim {i}.",
+                type=KnowledgeType.FACT,
+                evidence_id=EVIDENCE_ID,
+            )
+            for i in range(5)
+        ]
+        store = FakeStore(hits=[_hit(record, confident=False) for record in records])
+        service, model = _service(
+            store,
+            _search_call(query="unstable rear sensor"),
+            AIMessage(content=f"Partial match: claim 0 [K:{records[0].id}]."),
+        )
+        answer = await service.ask("sensor?")
+        payload = _tool_payload(model.calls[1][-1])
+        self.assertEqual(payload["match"], "low_confidence")
+        self.assertIn("nearest records", payload["note"])
+        self.assertEqual(
+            [item["id"] for item in payload["knowledge"]],
+            [str(record.id) for record in records[:3]],
+        )
+        self.assertTrue(
+            all(item["retrieval"]["confident"] is False for item in payload["knowledge"])
+        )
+        # Low-confidence records are still citable when the model uses them.
+        self.assertEqual(answer.citations[0].knowledge_id, str(records[0].id))
+
+    async def test_empty_result_is_labelled_none(self) -> None:
+        service, model = _service(
+            FakeStore(hits=[]),
+            _search_call(query="unstable rear sensor"),
+            AIMessage(content="The knowledge base has no answer."),
+        )
+        await service.ask("sensor?")
+        payload = _tool_payload(model.calls[1][-1])
+        self.assertEqual(payload["match"], "none")
+        self.assertEqual(payload["knowledge"], [])
+
+    async def test_search_budget_is_enforced_per_question(self) -> None:
+        store = FakeStore(hits=[])
+        service, model = _service(
+            store,
+            *(_search_call(f"call_{i}", query=f"attempt {i}") for i in range(4)),
+            AIMessage(content="The knowledge base has no answer."),
+            # Next question gets a fresh budget.
+            _search_call("call_next", query="new question"),
+            AIMessage(content="Still nothing."),
+        )
+        [e async for e in service.start_stream("sensor?", thread_id="budget").events]
+        self.assertEqual(
+            [query for query, _, _ in store.searches],
+            [f"attempt {i}" for i in range(3)],
+        )
+        self.assertEqual(_tool_payload(model.calls[3][-1])["searches_remaining"], 0)
+        refused = _tool_payload(model.calls[4][-1])
+        self.assertEqual(refused["error"], "search_budget_exhausted")
+
+        [e async for e in service.start_stream("another?", thread_id="budget").events]
+        self.assertEqual(store.searches[-1][0], "new question")
 
     async def test_invented_citation_is_rejected(self) -> None:
         service, _ = _service(

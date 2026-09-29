@@ -258,6 +258,8 @@ def _public_knowledge_summary(item: Any) -> dict[str, Any]:
                 "lexical_rank",
                 "vector_similarity",
                 "lexical_score",
+                "lexical_matched_terms",
+                "confident",
             )
             if retrieval.get(key) is not None
         }
@@ -285,6 +287,7 @@ def public_tool_output(tool_name: str, payload: Any) -> dict[str, Any]:
         items = knowledge if isinstance(knowledge, list) else []
         result.update(
             {
+                "match": _public_value(payload.get("match")),
                 "count": len(items),
                 "items": [_public_knowledge_summary(item) for item in items],
             }

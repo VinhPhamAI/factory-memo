@@ -53,9 +53,21 @@ MIN_SEARCH_CANDIDATES = 20
 MAX_SEARCH_CANDIDATES = 100
 SEARCH_CANDIDATE_MULTIPLIER = 4
 RRF_RANK_CONSTANT = 60
-DEFAULT_MIN_VECTOR_SIMILARITY = 0.65
+# Cosine similarity at or above which a vector hit counts as confident. The
+# threshold only labels hits; it never removes the nearest candidates.
+DEFAULT_MIN_VECTOR_SIMILARITY = 0.3
+# A lexical hit is confident when it shares at least
+# max(min(LEXICAL_CONFIDENT_MIN_TERMS, n), ceil(LEXICAL_CONFIDENT_TERM_FRACTION * n))
+# of the n distinct query lexemes.
+LEXICAL_CONFIDENT_MIN_TERMS = 2
+LEXICAL_CONFIDENT_TERM_FRACTION = 0.3
+MAX_LEXICAL_TERMS = 32
+# Stemming and stop words for full-text search; changing it rebuilds search_vector.
+TEXT_SEARCH_CONFIG = "english"
 MIN_VECTOR_SIMILARITY_ENV = "KNOWLEDGE_MIN_VECTOR_SIMILARITY"
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+# Keeps identifiers such as AX-220, S14.b, or v1.2 in one token.
+_LEXICAL_TOKEN_RE = re.compile(r"\w+(?:[-./]\w+)*")
 
 _KNOWLEDGE_TYPES_SQL = ", ".join(f"'{kind.value}'" for kind in KnowledgeType)
 _STATUSES_SQL = ", ".join(f"'{status.value}'" for status in ConversationStatus)
@@ -86,6 +98,23 @@ def min_vector_similarity_from_env() -> float:
         raise ValueError(
             f"{MIN_VECTOR_SIMILARITY_ENV} must be a number between 0 and 1"
         ) from exc
+
+
+def lexical_or_query(query: str) -> str:
+    """Rewrite free text as a websearch OR query so any shared term can match."""
+
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for token in _LEXICAL_TOKEN_RE.findall(query):
+        folded = token.casefold()
+        # A bare "or" would be read as an operator; it is a stop word anyway.
+        if folded == "or" or folded in seen:
+            continue
+        seen.add(folded)
+        tokens.append(token)
+        if len(tokens) == MAX_LEXICAL_TERMS:
+            break
+    return " or ".join(tokens)
 
 
 def _escape_like(value: str) -> str:
@@ -313,7 +342,7 @@ class KnowledgeStore:
                 context JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                 search_text TEXT NOT NULL,
                 search_vector TSVECTOR GENERATED ALWAYS AS
-                    (to_tsvector('simple'::regconfig, search_text)) STORED,
+                    (to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, search_text)) STORED,
                 evidence_id UUID REFERENCES {raw_table}(id),
                 stated_by TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -332,9 +361,31 @@ class KnowledgeStore:
             WHERE search_text IS NULL
             """,
             f"ALTER TABLE {knowledge_table} ALTER COLUMN search_text SET NOT NULL",
+            # A search_vector built with another text search config is dropped
+            # (with its GIN index) so it is regenerated below.
+            f"""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM pg_attribute AS a
+                    JOIN pg_attrdef AS d
+                      ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                    WHERE a.attrelid = '{knowledge_table}'::regclass
+                      AND a.attname = 'search_vector'
+                      AND NOT a.attisdropped
+                      AND pg_get_expr(d.adbin, d.adrelid)
+                          NOT LIKE '%''{TEXT_SEARCH_CONFIG}''::regconfig%'
+                ) THEN
+                    ALTER TABLE {knowledge_table} DROP COLUMN search_vector;
+                END IF;
+            END
+            $$
+            """,
             f"""
             ALTER TABLE {knowledge_table} ADD COLUMN IF NOT EXISTS search_vector TSVECTOR
-            GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, search_text)) STORED
+            GENERATED ALWAYS AS
+                (to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, search_text)) STORED
             """,
             f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_evidence_id_idx "
             f"ON {knowledge_table} (evidence_id)",
@@ -477,6 +528,102 @@ class KnowledgeStore:
             )
         return [record.id for record in records]
 
+    async def reembed_knowledge(self) -> int:
+        """Recompute every stored embedding with the current model, in place.
+
+        Resizes the embedding column when the model's dimension differs. All
+        vectors are computed before the table is touched, and the swap runs in
+        one transaction, so a failure leaves the old embeddings intact.
+        """
+
+        knowledge_table = self._table(KNOWLEDGE_TABLE)
+        async with self._errors("read knowledge for re-embedding"):
+            async with self._engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            f"SELECT id, subject, claim, context, type "
+                            f"FROM {knowledge_table} ORDER BY id"
+                        )
+                    )
+                ).mappings().all()
+        records = [KnowledgeRecord.model_validate(dict(row)) for row in rows]
+        vectors = await self._embeddings.aembed_documents(
+            [record.embedding_text() for record in records]
+        )
+        for record, vector in zip(records, vectors, strict=True):
+            if len(vector) != self._vector_size:
+                raise StorageError(
+                    f"Embedding for knowledge {record.id} has {len(vector)} "
+                    f"dimensions, expected {self._vector_size}"
+                )
+
+        dim = self._vector_size
+        async with self._errors("re-embed knowledge"):
+            async with self._engine.begin() as conn:
+                # Block writers so no row is added between the read and the swap.
+                await conn.execute(
+                    text(f"LOCK TABLE {knowledge_table} IN SHARE ROW EXCLUSIVE MODE")
+                )
+                current_ids = set(
+                    (
+                        await conn.execute(text(f"SELECT id FROM {knowledge_table}"))
+                    ).scalars()
+                )
+                if current_ids != {record.id for record in records}:
+                    raise StorageError(
+                        "Knowledge changed while re-embedding; run it again"
+                    )
+                stored_dim = await conn.scalar(
+                    text(
+                        "SELECT atttypmod FROM pg_attribute "
+                        "WHERE attrelid = CAST(:table AS regclass) AND attname = :column"
+                    ),
+                    {"table": knowledge_table, "column": EMBEDDING_COLUMN},
+                )
+                if stored_dim != dim:
+                    # Old vectors cannot be cast to the new size; drop the ANN
+                    # index (init_schema recreates it) and refill the column.
+                    await conn.execute(
+                        text(
+                            f'DROP INDEX IF EXISTS "{self._schema}".'
+                            f"{KNOWLEDGE_TABLE}_embedding_hnsw_idx"
+                        )
+                    )
+                    await conn.execute(
+                        text(
+                            f"ALTER TABLE {knowledge_table} "
+                            f"ALTER COLUMN {EMBEDDING_COLUMN} DROP NOT NULL, "
+                            f"ALTER COLUMN {EMBEDDING_COLUMN} TYPE vector({dim}) USING NULL"
+                        )
+                    )
+                if records:
+                    await conn.execute(
+                        text(
+                            f"UPDATE {knowledge_table} "
+                            f"SET {EMBEDDING_COLUMN} = CAST(:embedding AS vector) "
+                            "WHERE id = :id"
+                        ),
+                        [
+                            {
+                                "id": record.id,
+                                "embedding": json.dumps(
+                                    list(vector), separators=(",", ":")
+                                ),
+                            }
+                            for record, vector in zip(records, vectors, strict=True)
+                        ],
+                    )
+                await conn.execute(
+                    text(
+                        f"ALTER TABLE {knowledge_table} "
+                        f"ALTER COLUMN {EMBEDDING_COLUMN} SET NOT NULL"
+                    )
+                )
+        # PGVectorStore caches column metadata; reopen it on next use.
+        self._vector_store = None
+        return len(records)
+
     async def search_knowledge(
         self,
         query: str,
@@ -484,7 +631,12 @@ class KnowledgeStore:
         filters: dict[str, Any] | None = None,
         k: int = DEFAULT_SEARCH_K,
     ) -> list[KnowledgeSearchHit]:
-        """Fuse thresholded vector and PostgreSQL full-text ranks with RRF."""
+        """Fuse vector and PostgreSQL full-text ranks with RRF.
+
+        The nearest vector candidates are always kept. Each hit is labelled
+        ``confident`` when its cosine similarity reaches the configured
+        threshold or it shares enough query terms; confident hits come first.
+        """
 
         result_k = max(1, min(k, MAX_SEARCH_K))
         candidate_k = min(
@@ -504,7 +656,12 @@ class KnowledgeStore:
             f"""
             WITH query_values AS (
                 SELECT CAST(:query_embedding AS vector) AS embedding,
-                       websearch_to_tsquery('simple'::regconfig, :query) AS lexical_query
+                       websearch_to_tsquery(
+                           '{TEXT_SEARCH_CONFIG}'::regconfig, :lexical_query
+                       ) AS lexical_query,
+                       tsvector_to_array(
+                           to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, :query)
+                       ) AS query_terms
             ),
             vector_scored AS (
                 SELECT k.id,
@@ -516,7 +673,6 @@ class KnowledgeStore:
             vector_candidates AS (
                 SELECT id, vector_distance
                 FROM vector_scored
-                WHERE vector_distance <= :max_vector_distance
                 ORDER BY vector_distance ASC, id ASC
                 LIMIT :candidate_k
             ),
@@ -529,7 +685,13 @@ class KnowledgeStore:
             ),
             lexical_candidates AS (
                 SELECT k.id,
-                       ts_rank_cd(k.search_vector, q.lexical_query) AS lexical_score
+                       ts_rank_cd(k.search_vector, q.lexical_query) AS lexical_score,
+                       cardinality(ARRAY(
+                           SELECT unnest(tsvector_to_array(k.search_vector))
+                           INTERSECT
+                           SELECT unnest(q.query_terms)
+                       ))::integer AS lexical_matched_terms,
+                       cardinality(q.query_terms) AS query_term_count
                 FROM {knowledge_table} AS k
                 CROSS JOIN query_values AS q
                 WHERE {where_sql}
@@ -538,7 +700,7 @@ class KnowledgeStore:
                 LIMIT :candidate_k
             ),
             lexical_ranked AS (
-                SELECT id, lexical_score,
+                SELECT id, lexical_score, lexical_matched_terms, query_term_count,
                        row_number() OVER (
                            ORDER BY lexical_score DESC, id ASC
                        )::integer AS lexical_rank
@@ -549,23 +711,35 @@ class KnowledgeStore:
                        v.vector_rank,
                        v.vector_distance,
                        l.lexical_rank,
-                       l.lexical_score
+                       l.lexical_score,
+                       l.lexical_matched_terms,
+                       l.query_term_count
                 FROM vector_ranked AS v
                 FULL OUTER JOIN lexical_ranked AS l USING (id)
             ),
             scored AS (
                 SELECT combined.*,
                        COALESCE(1.0 / (:rrf_k + vector_rank), 0.0) +
-                       COALESCE(1.0 / (:rrf_k + lexical_rank), 0.0) AS hybrid_score
+                       COALESCE(1.0 / (:rrf_k + lexical_rank), 0.0) AS hybrid_score,
+                       COALESCE(vector_distance <= :max_vector_distance, FALSE)
+                       OR COALESCE(
+                           lexical_matched_terms >= GREATEST(
+                               LEAST(:lexical_min_terms, query_term_count),
+                               ceil(:lexical_term_fraction * query_term_count)
+                           ),
+                           FALSE
+                       ) AS confident
                 FROM combined
             )
             SELECT k.id, k.subject, k.claim, k.context, k.type, k.evidence_id,
                    k.stated_by, k.created_at, k.valid_from, k.valid_to,
                    k.conflict_with, scored.hybrid_score, scored.vector_rank,
-                   scored.lexical_rank, scored.vector_distance, scored.lexical_score
+                   scored.lexical_rank, scored.vector_distance, scored.lexical_score,
+                   scored.lexical_matched_terms, scored.confident
             FROM scored
             JOIN {knowledge_table} AS k ON k.id = scored.id
-            ORDER BY scored.hybrid_score DESC,
+            ORDER BY scored.confident DESC,
+                     scored.hybrid_score DESC,
                      ((scored.vector_rank IS NOT NULL)::integer +
                       (scored.lexical_rank IS NOT NULL)::integer) DESC,
                      LEAST(COALESCE(scored.vector_rank, 2147483647),
@@ -579,11 +753,14 @@ class KnowledgeStore:
         parameters = {
             **filter_parameters,
             "query": query,
+            "lexical_query": lexical_or_query(query),
             "query_embedding": json.dumps(query_embedding, separators=(",", ":")),
             "candidate_k": candidate_k,
             "result_k": result_k,
             "rrf_k": RRF_RANK_CONSTANT,
             "max_vector_distance": 1.0 - self._min_vector_similarity,
+            "lexical_min_terms": LEXICAL_CONFIDENT_MIN_TERMS,
+            "lexical_term_fraction": LEXICAL_CONFIDENT_TERM_FRACTION,
         }
         async with self._errors("search knowledge"):
             async with self._engine.connect() as conn:
@@ -622,6 +799,8 @@ class KnowledgeStore:
                     if row["lexical_score"] is not None
                     else None
                 ),
+                lexical_matched_terms=row["lexical_matched_terms"],
+                confident=bool(row["confident"]),
             )
             for row in rows
         ]
