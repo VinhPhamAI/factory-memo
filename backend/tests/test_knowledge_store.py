@@ -46,7 +46,7 @@ def _record(**overrides) -> KnowledgeRecord:
 class BuildKnowledgeFilterTest(unittest.TestCase):
     def test_no_constraints_returns_none(self) -> None:
         self.assertIsNone(build_knowledge_filter())
-        self.assertIsNone(build_knowledge_filter(subject="  ", machine_id=""))
+        self.assertIsNone(build_knowledge_filter(subject="  ", context={"machine_id": "", "line": None}))
 
     def test_single_constraint_is_not_wrapped(self) -> None:
         self.assertEqual(
@@ -60,9 +60,9 @@ class BuildKnowledgeFilterTest(unittest.TestCase):
             {"subject": {"$ilike": "%50\\%\\_sensor%"}},
         )
 
-    def test_machine_filters_keep_unscoped_knowledge(self) -> None:
+    def test_context_filters_keep_unscoped_knowledge(self) -> None:
         self.assertEqual(
-            build_knowledge_filter(machine_id="M01", machine_model="X200"),
+            build_knowledge_filter(context={"machine_id": " M01 ", "machine_model": "X200"}),
             {
                 "$and": [
                     {
@@ -79,6 +79,14 @@ class BuildKnowledgeFilterTest(unittest.TestCase):
                     },
                 ]
             },
+        )
+
+    def test_exact_context_filter_requires_the_key(self) -> None:
+        self.assertEqual(
+            build_knowledge_filter(
+                context={"source_type": "slack"}, exact_context_keys={"source_type"}
+            ),
+            {"context.source_type": {"$eq": "slack"}},
         )
 
     def test_valid_on_accepts_open_ended_ranges(self) -> None:
@@ -100,7 +108,7 @@ class BuildKnowledgeFilterTest(unittest.TestCase):
     def test_compiles_filter_values_as_parameters(self) -> None:
         filters = build_knowledge_filter(
             subject="sensor%' OR TRUE --",
-            machine_id="M01",
+            context={"machine_id": "M01"},
             valid_on=date(2026, 9, 25),
         )
         sql, parameters = _compile_knowledge_filter(filters)
@@ -116,6 +124,8 @@ class BuildKnowledgeFilterTest(unittest.TestCase):
             _compile_knowledge_filter({"embedding": {"$eq": "secret"}})
         with self.assertRaisesRegex(ValueError, "operator"):
             _compile_knowledge_filter({"subject": {"$regex": ".*"}})
+        with self.assertRaisesRegex(ValueError, "context key"):
+            _compile_knowledge_filter({"context.x') OR TRUE --": {"$eq": "1"}})
 
 
 class KnowledgeRecordTest(unittest.TestCase):
@@ -147,10 +157,16 @@ class KnowledgeRecordTest(unittest.TestCase):
             context={"shift": "night", "condition": {"temperature": "80C"}, "machine_id": "M01"}
         )
         self.assertEqual(
-            record.embedding_text(),
+            record.embedding_text(["machine_id", "machine_model", "condition"]),
             "rear photoelectric sensor: Oil mist on the lens causes an unstable signal; "
             "clean it before replacing.\n"
             'Context: machine_id=M01; condition={"temperature": "80C"}; shift=night',
+        )
+
+    def test_embedding_text_sorts_context_without_leading_keys(self) -> None:
+        record = _record(context={"shift": "night", "machine_id": "M01"})
+        self.assertTrue(
+            record.embedding_text().endswith("Context: machine_id=M01; shift=night")
         )
 
     def test_embedding_text_without_context(self) -> None:

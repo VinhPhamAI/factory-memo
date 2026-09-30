@@ -67,15 +67,28 @@ class KnowledgeAgentPool:
         self._stores.clear()
 
 
-class KnowledgeAgentStreamRequest(BaseModel):
-    kb: str = Field(min_length=1, max_length=64)
+class AgentQueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=20_000)
     thread_id: str = Field(min_length=1, max_length=200)
 
-    @field_validator("kb", "query", "thread_id", mode="before")
+    @field_validator("query", "thread_id", mode="before")
     @classmethod
     def strip_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+
+class KnowledgeAgentStreamRequest(AgentQueryRequest):
+    kb: str = Field(min_length=1, max_length=64)
+
+    @field_validator("kb", mode="before")
+    @classmethod
+    def strip_kb(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class ScopedAgentQueryRequest(AgentQueryRequest):
+    # A KB is selected by the URL; reject a conflicting KB in the body.
+    model_config = {"extra": "forbid"}
 
 
 def encode_sse(event: AgentStreamEvent) -> str:
@@ -148,7 +161,25 @@ async def stream_knowledge_agent(
     request: Request,
     payload: Annotated[KnowledgeAgentStreamRequest, Body(...)],
 ) -> StreamingResponse:
+    """Compatibility endpoint: select a knowledge base in the JSON body."""
     service = await _service(request, payload.kb)
+    return _stream_response(service, payload)
+
+
+@router.post("/{kb}/stream", response_class=StreamingResponse)
+async def stream_scoped_knowledge_agent(
+    kb: str,
+    request: Request,
+    payload: Annotated[ScopedAgentQueryRequest, Body(...)],
+) -> StreamingResponse:
+    """Stream a KB's agent, including /enterprise_rag/stream, with its own history."""
+    service = await _service(request, kb)
+    return _stream_response(service, payload)
+
+
+def _stream_response(
+    service: KnowledgeAgentService, payload: AgentQueryRequest
+) -> StreamingResponse:
     session = service.start_stream(payload.query, thread_id=payload.thread_id)
 
     async def event_source():

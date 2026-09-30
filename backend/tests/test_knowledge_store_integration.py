@@ -213,7 +213,7 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
 
         everything = {record.id for record in records.values()}
         self.assertEqual(await ids(), everything)
-        self.assertEqual(await ids(machine_id="M01"), everything - {records["m02"].id})
+        self.assertEqual(await ids(context={"machine_id": "M01"}), everything - {records["m02"].id})
         self.assertEqual(
             await ids(valid_on=date(2026, 9, 25)), everything - {records["expired"].id}
         )
@@ -222,9 +222,63 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
             await ids(subject="REAR photo"), {records["m01"].id, records["m02"].id}
         )
         self.assertEqual(
-            await ids(machine_id="M01", subject="rear", valid_on=date(2026, 9, 25)),
+            await ids(context={"machine_id": "M01"}, subject="rear", valid_on=date(2026, 9, 25)),
             {records["m01"].id},
         )
+
+    async def test_indexed_context_keys_exact_filter_and_resume_ids(self) -> None:
+        store = KnowledgeStore.from_url(
+            DATABASE_URL,
+            DeterministicFakeEmbedding(size=DIM),
+            DIM,
+            schema=self.schema,
+            embedding_context_keys=["title"],
+            indexed_context_keys=["source_type"],
+        )
+        try:
+            await store.init_schema()
+            done = await store.add_conversation("Slack thread", metadata={"doc_id": "d1"})
+            await store.add_conversation("Pending email", metadata={"doc_id": "d2"})
+            await store.mark_conversation(done.id, ConversationStatus.PROCESSED)
+            self.assertEqual(await store.processed_metadata_values("doc_id"), {"d1"})
+
+            slack, unscoped = (
+                KnowledgeRecord(
+                    subject="eng-security",
+                    claim="Quarantine partner logs before deleting them.",
+                    context=context,
+                    type=KnowledgeType.RULE,
+                    evidence_id=done.id,
+                )
+                for context in ({"source_type": "slack", "title": "eng-security"}, {})
+            )
+            await store.add_knowledge([slack, unscoped])
+            self.assertEqual(
+                slack.to_metadata(["title"])["search_text"].splitlines()[-1],
+                "Context: title=eng-security; source_type=slack",
+            )
+
+            hits = await store.search_knowledge(
+                "quarantine partner logs",
+                filters=build_knowledge_filter(
+                    context={"source_type": "slack"}, exact_context_keys={"source_type"}
+                ),
+            )
+            self.assertEqual([hit.record.id for hit in hits], [slack.id])
+
+            async with store.engine.connect() as conn:
+                indexes = set(
+                    (
+                        await conn.execute(
+                            text("SELECT indexname FROM pg_indexes WHERE schemaname = :s"),
+                            {"s": self.schema},
+                        )
+                    ).scalars()
+                )
+            self.assertIn("knowledge_items_source_type_idx", indexes)
+            self.assertNotIn("knowledge_items_machine_id_idx", indexes)
+        finally:
+            await store.aclose()
 
     async def test_hybrid_search_promotes_exact_identifiers_and_is_stable(self) -> None:
         evidence_id, records = await self._seed()

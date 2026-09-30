@@ -3,6 +3,8 @@
 Examples:
     uv run python -m backend.scripts.kb list
     uv run python -m backend.scripts.kb ingest maintenance --limit 5
+    uv run python -m backend.scripts.kb ingest maintenance --batch-size 8
+    uv run python -m backend.scripts.kb ingest enterprise_rag --limit 20 --batch-size 8
     uv run python -m backend.scripts.kb ingest maintenance --file transcript.txt
     uv run python -m backend.scripts.kb query maintenance "How do I fix the unstable sensor on M01?"
     uv run python -m backend.scripts.kb reembed maintenance
@@ -16,8 +18,8 @@ import asyncio
 import csv
 import logging
 import sys
+import time
 from dataclasses import dataclass
-from itertools import islice
 from pathlib import Path
 from typing import Iterator
 
@@ -27,7 +29,11 @@ from backend.knowledge_bases import KNOWLEDGE_BASES, KnowledgeBaseSpec, get_kb
 from backend.knowledge_bases.base import PROJECT_ROOT
 from backend.src.agents.agent import KnowledgeAgentError, KnowledgeAgentService
 from backend.src.services.knowledge_extraction import KnowledgeExtractionService
-from backend.src.services.knowledge_ingestion import KnowledgeIngestionService
+from backend.src.services.knowledge_ingestion import (
+    IngestionInput,
+    IngestionResult,
+    KnowledgeIngestionService,
+)
 from backend.src.storage import KnowledgeStore, StorageError
 from backend.src.storage.databases import (
     DatabaseAdminError,
@@ -143,9 +149,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument("--limit", type=_positive_int, help="Process at most this many transcripts")
     ingest.add_argument(
+        "--batch-size",
+        type=_positive_int,
+        default=1,
+        help="Transcripts per batch: extracted concurrently, embedded in one call "
+        "(default: 1, one at a time)",
+    )
+    ingest.add_argument(
+        "--concurrency",
+        type=_positive_int,
+        help="Maximum concurrent LLM extraction calls (default: --batch-size)",
+    )
+    ingest.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Ingest rows whose dataset id is already processed again "
+        "(by default they are skipped, so an interrupted run can continue)",
+    )
+    ingest.add_argument(
         "--fail-fast",
         action="store_true",
-        help="Stop after the first failed transcript instead of continuing",
+        help="Stop after the batch with the first failed transcript instead of continuing",
     )
 
     query = commands.add_parser("query", help="Ask the knowledge agent one question")
@@ -193,40 +217,73 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
         stated_by=args.stated_by,
     )
     # Read (and validate) the input before creating the database.
-    items = list(islice(inputs, args.limit) if args.limit else inputs)
+    items = list(inputs)
     if not items:
         raise ValueError(f"Input file contains no transcripts: {path}")
+    id_column = dataset.id_column if dataset else None
+    context_columns = dataset.context_columns if dataset else ()
 
     extractor = KnowledgeExtractionService.from_env(
         spec.extract_prompt, max_tokens=EXTRACTION_MAX_TOKENS
     )
     store = await KnowledgeStore.for_kb(spec)
-    succeeded = 0
-    failed = 0
+    concurrency = args.concurrency or args.batch_size
+    succeeded = failed = knowledge_items = 0
+    started = time.perf_counter()
     try:
+        if id_column and not args.no_resume:
+            done = await store.processed_metadata_values(id_column)
+            remaining = [item for item in items if item.metadata.get(id_column) not in done]
+            if skipped := len(items) - len(remaining):
+                print(f"[{spec.name}] Skipping {skipped} already processed rows ({id_column})")
+            items = remaining
+        if args.limit:
+            items = items[: args.limit]
         ingestion = KnowledgeIngestionService(extractor, store)
-        for item in items:
-            try:
-                result = await ingestion.ingest(
-                    item.transcript,
-                    stated_by=item.stated_by,
-                    metadata={**item.metadata, "kb": spec.name},
-                )
-            except Exception as exc:  # keep going; the row is marked failed in the DB
-                failed += 1
-                print(f"{item.label}: FAILED {type(exc).__name__}: {exc}", file=sys.stderr)
-                if args.fail_fast:
-                    break
-                continue
-            succeeded += 1
-            print(
-                f"{item.label}: {len(result.records)} knowledge items "
-                f"(evidence {result.evidence_id})"
+        for start in range(0, len(items), args.batch_size):
+            batch = items[start : start + args.batch_size]
+            results = await ingestion.ingest_batch(
+                [
+                    IngestionInput(
+                        item.transcript,
+                        stated_by=item.stated_by,
+                        metadata={**item.metadata, "kb": spec.name},
+                        context={
+                            column: item.metadata[column]
+                            for column in context_columns
+                            if column in item.metadata
+                        },
+                    )
+                    for item in batch
+                ],
+                concurrency=concurrency,
             )
+            # Failed transcripts are marked failed in the DB; the rest are kept.
+            for item, result in zip(batch, results, strict=True):
+                if isinstance(result, IngestionResult):
+                    succeeded += 1
+                    knowledge_items += len(result.records)
+                    print(
+                        f"{item.label}: {len(result.records)} knowledge items "
+                        f"(evidence {result.evidence_id})"
+                    )
+                else:
+                    failed += 1
+                    print(
+                        f"{item.label}: FAILED {type(result).__name__}: {result}",
+                        file=sys.stderr,
+                    )
+            if failed and args.fail_fast:
+                break
     finally:
         await store.aclose()
 
-    print(f"[{spec.name}] Ingestion complete: {succeeded} succeeded, {failed} failed")
+    elapsed = time.perf_counter() - started
+    print(
+        f"[{spec.name}] Ingestion complete: {succeeded} succeeded, {failed} failed, "
+        f"{knowledge_items} knowledge items in {elapsed:.1f}s "
+        f"(batch size {args.batch_size}, concurrency {concurrency})"
+    )
     return 1 if failed else 0
 
 

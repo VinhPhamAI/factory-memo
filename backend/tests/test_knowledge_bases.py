@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,7 +21,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from langchain_core.embeddings import DeterministicFakeEmbedding
 from sqlalchemy import text
 
-from backend.knowledge_bases import KNOWLEDGE_BASES, KnowledgeBaseSpec, get_kb
+from backend.knowledge_bases import (
+    KNOWLEDGE_BASES,
+    ContextFilter,
+    DatasetSpec,
+    KnowledgeBaseSpec,
+    get_kb,
+)
+from backend.src.agents.agent.tools import build_search_tool, search_input_model
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import KnowledgeRecord, KnowledgeStore
 from backend.src.storage.databases import (
@@ -45,6 +53,30 @@ def _spec(name: str, **fields) -> KnowledgeBaseSpec:
 
 
 class KnowledgeBaseSpecTest(unittest.TestCase):
+    def test_embedding_query_file_is_optional_and_can_be_overridden(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "extract.md").write_text("Extract {RAW_CONVERSATION}")
+            (path / "agent.md").write_text("Answer from evidence")
+            self.assertEqual(
+                KnowledgeBaseSpec.from_directory(path, name="test").embedding_query_instruction, ""
+            )
+            (path / "embedding_query.md").write_text("  Retrieve company knowledge\n")
+            self.assertEqual(
+                KnowledgeBaseSpec.from_directory(path, name="test").embedding_query_instruction,
+                "Retrieve company knowledge",
+            )
+            for instruction in ("Custom task", ""):
+                with self.subTest(instruction=instruction):
+                    spec = KnowledgeBaseSpec.from_directory(
+                        path, name="test", embedding_query_instruction=instruction
+                    )
+                    self.assertEqual(spec.embedding_query_instruction, instruction)
+            (path / "embedding_query.md").write_text(" \n")
+            self.assertEqual(
+                KnowledgeBaseSpec.from_directory(path, name="test").embedding_query_instruction, ""
+            )
+
     def test_maintenance_is_registered_with_its_prompts(self) -> None:
         spec = get_kb("maintenance")
         self.assertIs(KNOWLEDGE_BASES["maintenance"], spec)
@@ -65,6 +97,58 @@ class KnowledgeBaseSpecTest(unittest.TestCase):
     def test_rejects_extract_prompt_without_placeholder(self) -> None:
         with self.assertRaisesRegex(ValueError, "RAW_CONVERSATION"):
             KnowledgeBaseSpec(name="x", extract_prompt="no slot", agent_prompt="a")
+
+    def test_enterprise_rag_filters_on_source_type(self) -> None:
+        spec = get_kb("enterprise_rag")
+        self.assertEqual(spec.database, "kb_enterprise_rag")
+        self.assertIn("{RAW_CONVERSATION}", spec.extract_prompt)
+        self.assertIn("Redwood Inference", spec.agent_prompt)
+        self.assertEqual(spec.dataset.id_column, "doc_id")
+        self.assertEqual(spec.dataset.context_columns, ("source_type", "title"))
+        (source_filter,) = spec.context_filters
+        self.assertEqual(source_filter.key, "source_type")
+        self.assertFalse(source_filter.include_unscoped)
+        self.assertEqual(spec.trace_context_keys[0], "source_type")
+
+    def test_context_filters_are_validated(self) -> None:
+        with self.assertRaisesRegex(ValueError, "context key"):
+            ContextFilter("machine-id", "Machine")
+        with self.assertRaisesRegex(ValueError, "description"):
+            ContextFilter("machine_id", "  ")
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
+            _spec("x", context_filters=(ContextFilter("a", "A"), ContextFilter("a", "B")))
+        with self.assertRaisesRegex(ValueError, "context key"):
+            _spec("x", embedding_context_keys=("Bad Key",))
+        with self.assertRaisesRegex(ValueError, "context key"):
+            DatasetSpec(Path("x.csv"), context_columns=("source type",))
+
+    def test_trace_context_keys_merge_filters_and_embedding_keys(self) -> None:
+        spec = _spec(
+            "x",
+            context_filters=(ContextFilter("machine_id", "Machine"),),
+            embedding_context_keys=("machine_id", "condition"),
+        )
+        self.assertEqual(spec.trace_context_keys, ("machine_id", "condition"))
+
+    def test_search_tool_exposes_context_filters_as_arguments(self) -> None:
+        base = build_search_tool().tool_call_schema.model_json_schema()["properties"]
+        self.assertNotIn("machine_id", base)
+
+        spec = get_kb("maintenance")
+        properties = build_search_tool(
+            spec.context_filters
+        ).tool_call_schema.model_json_schema()["properties"]
+        self.assertIn("machine_id", properties)
+        self.assertIn("machine_model", properties)
+        self.assertNotIn("runtime", properties)
+
+        parsed = search_input_model(spec.context_filters)(query=" q ", machine_id=" M01 ")
+        self.assertEqual((parsed.query, parsed.machine_id), ("q", "M01"))
+
+    def test_search_tool_rejects_filters_that_shadow_arguments(self) -> None:
+        for key in ("query", "runtime", "k"):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "collides"):
+                search_input_model([ContextFilter(key, "Shadow")])
 
     def test_database_url_keeps_server_and_credentials(self) -> None:
         self.assertEqual(

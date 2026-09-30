@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -18,27 +19,54 @@ from backend.src.services.knowledge_extraction import (
     KnowledgeItem,
     KnowledgeType,
 )
-from backend.src.services.knowledge_ingestion import KnowledgeIngestionService
+from backend.src.services.knowledge_ingestion import (
+    IngestionInput,
+    IngestionResult,
+    KnowledgeIngestionService,
+)
 from backend.src.storage import ConversationStatus, RawConversation
 
 
 class FakeExtractor:
-    def __init__(self, result: KnowledgeExtractionResult | Exception):
-        self.result = result
-        self.transcripts: list[str] = []
+    """Returns `result`, or per-transcript results from a dict keyed by transcript."""
 
-    def extract(self, raw_conversation: str) -> KnowledgeExtractionResult:
+    def __init__(self, result, *, delay: float = 0.0):
+        self.result = result
+        self.delay = delay
+        self.transcripts: list[str] = []
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def aextract(self, raw_conversation: str) -> KnowledgeExtractionResult:
         self.transcripts.append(raw_conversation)
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(self.delay)
+        finally:
+            self.in_flight -= 1
+        result = self.result
+        if isinstance(result, dict):
+            result = result[raw_conversation]
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class FakeStore:
-    def __init__(self, *, fail_on_write: bool = False):
+    def __init__(
+        self,
+        *,
+        fail_on_write: bool = False,
+        fail_on_embed: bool = False,
+        fail_write_for: str | None = None,
+    ):
         self.fail_on_write = fail_on_write
+        self.fail_on_embed = fail_on_embed
+        self.fail_write_for = fail_write_for
         self.conversations: dict = {}
         self.knowledge: list = []
+        self.embed_calls: list[int] = []
 
     async def add_conversation(self, transcript, *, stated_by=None, metadata=None):
         conversation = RawConversation(
@@ -57,9 +85,21 @@ class FakeStore:
             update={"status": status, "error": error}
         )
 
+    async def embed_knowledge(self, records):
+        self.embed_calls.append(len(records))
+        if self.fail_on_embed:
+            raise RuntimeError("embedding server down")
+        for record in records:
+            record.embedding = [0.0]
+
     async def add_knowledge(self, records):
         if self.fail_on_write:
             raise RuntimeError("database down")
+        if self.fail_write_for and any(
+            self.conversations[r.evidence_id].transcript == self.fail_write_for
+            for r in records
+        ):
+            raise RuntimeError("row rejected")
         self.knowledge.extend(records)
         return [record.id for record in records]
 
@@ -83,6 +123,20 @@ EXTRACTED = KnowledgeExtractionResult(
 
 
 class KnowledgeIngestionServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_dataset_context_overrides_extracted_context(self) -> None:
+        store = FakeStore()
+        service = KnowledgeIngestionService(FakeExtractor(EXTRACTED), store)
+
+        result = await service.ingest(
+            "Expert: clean the lens first.",
+            context={"machine_id": "M09", "source_type": "slack"},
+        )
+
+        for record in result.records:
+            self.assertEqual(record.context, {"machine_id": "M09", "source_type": "slack"})
+        # The extracted items themselves are left untouched.
+        self.assertEqual(EXTRACTED.knowledge_items[0].context, {"machine_id": "M01"})
+
     async def test_ingest_links_records_to_evidence(self) -> None:
         store = FakeStore()
         service = KnowledgeIngestionService(FakeExtractor(EXTRACTED), store)
@@ -141,6 +195,86 @@ class KnowledgeIngestionServiceTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await service.ingest("   ")
         self.assertEqual(store.conversations, {})
+
+
+
+class KnowledgeIngestionBatchTest(unittest.IsolatedAsyncioTestCase):
+    async def test_results_align_with_inputs_and_failures_are_isolated(self) -> None:
+        store = FakeStore()
+        extractor = FakeExtractor(
+            {
+                "a": EXTRACTED,
+                "b": KnowledgeExtractionError("bad json"),
+                "c": KnowledgeExtractionResult(),
+            }
+        )
+        service = KnowledgeIngestionService(extractor, store)
+
+        results = await service.ingest_batch(
+            [
+                IngestionInput("a", stated_by="Expert", metadata={"row": "1"}),
+                IngestionInput("b"),
+                IngestionInput("   "),
+                IngestionInput("c"),
+            ],
+            concurrency=4,
+        )
+
+        first, second, third, fourth = results
+        self.assertIsInstance(first, IngestionResult)
+        self.assertEqual(len(first.records), 2)
+        self.assertIsInstance(second, KnowledgeExtractionError)
+        self.assertIsInstance(third, ValueError)
+        self.assertEqual(fourth.records, ())
+        # The empty transcript is never stored.
+        self.assertEqual(len(store.conversations), 3)
+        statuses = {c.transcript: c.status for c in store.conversations.values()}
+        self.assertEqual(
+            statuses,
+            {
+                "a": ConversationStatus.PROCESSED,
+                "b": ConversationStatus.FAILED,
+                "c": ConversationStatus.PROCESSED,
+            },
+        )
+        self.assertEqual(store.conversations[first.evidence_id].metadata, {"row": "1"})
+        self.assertTrue(all(r.stated_by == "Expert" for r in first.records))
+
+    async def test_embeds_the_whole_batch_in_one_call(self) -> None:
+        store = FakeStore()
+        service = KnowledgeIngestionService(FakeExtractor(EXTRACTED), store)
+        await service.ingest_batch([IngestionInput(t) for t in "abc"], concurrency=3)
+        self.assertEqual(store.embed_calls, [6])
+        self.assertEqual(len(store.knowledge), 6)
+
+    async def test_batch_embedding_failure_falls_back_to_per_conversation(self) -> None:
+        store = FakeStore(fail_on_embed=True)
+        service = KnowledgeIngestionService(FakeExtractor(EXTRACTED), store)
+        with self.assertLogs("backend.src.services.knowledge_ingestion", "WARNING"):
+            results = await service.ingest_batch([IngestionInput(t) for t in "ab"])
+        # add_knowledge (here: the fake) is left to embed each group itself.
+        self.assertTrue(all(isinstance(r, IngestionResult) for r in results))
+
+    async def test_write_failure_only_fails_that_conversation(self) -> None:
+        store = FakeStore(fail_write_for="b")
+        service = KnowledgeIngestionService(FakeExtractor(EXTRACTED), store)
+        first, second = await service.ingest_batch([IngestionInput("a"), IngestionInput("b")])
+        self.assertIsInstance(first, IngestionResult)
+        self.assertIsInstance(second, RuntimeError)
+        failed = [c for c in store.conversations.values() if c.transcript == "b"][0]
+        self.assertEqual(failed.status, ConversationStatus.FAILED)
+        self.assertEqual(failed.error, "RuntimeError: row rejected")
+
+    async def test_limits_concurrent_extractions(self) -> None:
+        extractor = FakeExtractor(KnowledgeExtractionResult(), delay=0.01)
+        service = KnowledgeIngestionService(extractor, FakeStore())
+        await service.ingest_batch([IngestionInput(str(i)) for i in range(10)], concurrency=3)
+        self.assertEqual(extractor.max_in_flight, 3)
+
+    async def test_rejects_non_positive_concurrency(self) -> None:
+        service = KnowledgeIngestionService(FakeExtractor(EXTRACTED), FakeStore())
+        with self.assertRaises(ValueError):
+            await service.ingest_batch([IngestionInput("a")], concurrency=0)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import PrivateAttr
 
+from backend.knowledge_bases import maintenance
 from backend.src.agents.agent.service import (
     InvalidKnowledgeCitation,
     KnowledgeAgentService,
@@ -130,6 +131,8 @@ def _service(store: FakeStore, *responses: AIMessage) -> tuple[KnowledgeAgentSer
         model=model,
         system_prompt="Answer from the knowledge base.",
         timeout_seconds=10,
+        context_filters=maintenance.SPEC.context_filters,
+        trace_context_keys=maintenance.SPEC.trace_context_keys,
     )
     return service, model
 
@@ -191,9 +194,29 @@ class PublicTraceTest(unittest.TestCase):
                     "machine_id": "M01",
                     "api_key": "must-not-leak",
                 },
+                context_fields={"machine_id"},
             ),
             {"query": "sensor", "machine_id": "M01"},
         )
+        # Context arguments are only public for the KB that declares them.
+        self.assertEqual(
+            public_tool_input("search_knowledge", {"query": "q", "machine_id": "M01"}),
+            {"query": "q"},
+        )
+
+    def test_knowledge_summary_shows_only_trace_context_keys(self) -> None:
+        output = public_tool_output(
+            "search_knowledge",
+            {
+                "ok": True,
+                "match": "confident",
+                "knowledge": [
+                    {"id": "k1", "context": {"machine_id": "M01", "note": "private"}}
+                ],
+            },
+            context_fields={"machine_id"},
+        )
+        self.assertEqual(output["items"][0]["context"], {"machine_id": "M01"})
 
     def test_evidence_trace_omits_transcript_and_metadata(self) -> None:
         output = public_tool_output(

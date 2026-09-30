@@ -68,8 +68,12 @@ def _positive_int_from_env(name: str) -> int | None:
     return value
 
 
-def build_embeddings_from_env() -> Embeddings:
-    """Build the OpenAI-compatible embedding client configured by environment."""
+def build_embeddings_from_env(*, query_instruction: str = "") -> Embeddings:
+    """Build a client from shared infrastructure settings and a KB instruction.
+
+    The instruction is supplied by the knowledge base, never by a global
+    environment variable. Empty instructions leave queries unchanged.
+    """
 
     model = os.getenv("EMBEDDING_MODEL")
     base_url = os.getenv("EMBEDDING_BASE_URL") or None
@@ -107,7 +111,7 @@ def build_embeddings_from_env() -> Embeddings:
         check_embedding_ctx_length=False,
         **options,
     )
-    instruction = os.getenv("EMBEDDING_QUERY_INSTRUCTION", "").strip()
+    instruction = query_instruction.strip()
     if instruction:
         return QueryInstructionEmbeddings(embeddings, instruction)
     return embeddings

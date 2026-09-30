@@ -7,7 +7,7 @@ import json
 import math
 import os
 import re
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import TYPE_CHECKING, Any
@@ -124,32 +124,34 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _matches_or_unscoped(field: str, value: str) -> dict[str, Any]:
-    # Knowledge that names no machine applies to every machine, so keep it.
-    return {"$or": [{field: {"$eq": value}}, {field: {"$exists": False}}]}
-
-
 def build_knowledge_filter(
     *,
     subject: str | None = None,
     knowledge_type: KnowledgeType | str | None = None,
-    machine_id: str | None = None,
-    machine_model: str | None = None,
+    context: Mapping[str, str | None] | None = None,
+    exact_context_keys: Collection[str] = (),
     valid_on: date | None = None,
 ) -> dict[str, Any] | None:
-    """Translate retrieval constraints into a PGVectorStore metadata filter."""
+    """Translate retrieval constraints into a PGVectorStore metadata filter.
+
+    Each `context` value must equal the record's context value for that key.
+    Records whose context lacks the key still match (knowledge that names no
+    machine applies to every machine) unless the key is in exact_context_keys.
+    """
 
     conditions: list[dict[str, Any]] = []
     if subject and subject.strip():
         conditions.append({"subject": {"$ilike": f"%{_escape_like(subject.strip())}%"}})
     if knowledge_type:
         conditions.append({"type": {"$eq": KnowledgeType(knowledge_type).value}})
-    if machine_id and machine_id.strip():
-        conditions.append(_matches_or_unscoped("context.machine_id", machine_id.strip()))
-    if machine_model and machine_model.strip():
-        conditions.append(
-            _matches_or_unscoped("context.machine_model", machine_model.strip())
-        )
+    for key, value in (context or {}).items():
+        if value is None or not value.strip():
+            continue
+        field = f"context.{key}"
+        condition = {field: {"$eq": value.strip()}}
+        if key not in exact_context_keys:
+            condition = {"$or": [condition, {field: {"$exists": False}}]}
+        conditions.append(condition)
     if valid_on is not None:
         conditions.append(
             {"$or": [{"valid_from": {"$exists": False}}, {"valid_from": {"$lte": valid_on}}]}
@@ -167,12 +169,25 @@ def build_knowledge_filter(
 _FILTER_FIELDS = {
     "subject": "k.subject",
     "type": "k.type",
-    "context.machine_id": "k.context ->> 'machine_id'",
-    "context.machine_model": "k.context ->> 'machine_model'",
     "valid_from": "k.valid_from",
     "valid_to": "k.valid_to",
 }
 _FILTER_OPERATORS = {"$eq", "$ilike", "$exists", "$lte", "$gte"}
+
+
+def _context_key(key: str) -> str:
+    if not _IDENTIFIER_RE.match(key):
+        raise ValueError(f"Invalid context key: {key!r}")
+    return key
+
+
+def _filter_column(field: str) -> str | None:
+    if field in _FILTER_FIELDS:
+        return _FILTER_FIELDS[field]
+    if field.startswith("context."):
+        # Validated as a plain identifier, so it is safe to inline.
+        return f"k.context ->> '{_context_key(field.removeprefix('context.'))}'"
+    return None
 
 
 def _compile_knowledge_filter(
@@ -200,7 +215,7 @@ def _compile_knowledge_filter(
             joiner = " AND " if key == "$and" else " OR "
             return "(" + joiner.join(compile_node(item) for item in value) + ")"
 
-        column = _FILTER_FIELDS.get(key)
+        column = _filter_column(key)
         if column is None:
             raise ValueError(f"Unsupported knowledge filter field: {key}")
         if not isinstance(value, dict) or len(value) != 1:
@@ -237,6 +252,8 @@ class KnowledgeStore:
         schema: str = "public",
         min_vector_similarity: float = DEFAULT_MIN_VECTOR_SIMILARITY,
         text_search_config: str = DEFAULT_TEXT_SEARCH_CONFIG,
+        embedding_context_keys: Sequence[str] = (),
+        indexed_context_keys: Sequence[str] = (),
     ) -> None:
         if not _IDENTIFIER_RE.match(schema):
             raise ValueError(f"Invalid schema name: {schema!r}")
@@ -245,6 +262,11 @@ class KnowledgeStore:
         self._engine = engine
         self._schema = schema
         self._text_search_config = text_search_config
+        self._embedding_context_keys = tuple(embedding_context_keys)
+        # Context keys that search filters on get an expression index.
+        self._indexed_context_keys = tuple(
+            _context_key(key) for key in indexed_context_keys
+        )
         self._pg_engine = PGEngine.from_engine(engine)
         self._embeddings = embeddings
         self._vector_size = vector_size
@@ -264,6 +286,8 @@ class KnowledgeStore:
         schema: str = "public",
         min_vector_similarity: float = DEFAULT_MIN_VECTOR_SIMILARITY,
         text_search_config: str = DEFAULT_TEXT_SEARCH_CONFIG,
+        embedding_context_keys: Sequence[str] = (),
+        indexed_context_keys: Sequence[str] = (),
         **engine_kwargs: Any,
     ) -> "KnowledgeStore":
         """Create a store over a `postgresql+psycopg://` connection URL."""
@@ -276,6 +300,8 @@ class KnowledgeStore:
             schema=schema,
             min_vector_similarity=min_vector_similarity,
             text_search_config=text_search_config,
+            embedding_context_keys=embedding_context_keys,
+            indexed_context_keys=indexed_context_keys,
         )
 
     @classmethod
@@ -289,6 +315,8 @@ class KnowledgeStore:
         """Open a knowledge base's own database, creating it and its schema if missing.
 
         The server comes from DATABASE_URL, the embedding model from EMBEDDING_*.
+        Query instructions come from the KB spec. Explicitly supplied embedding
+        clients are used as-is, including their own query formatting.
         Pass init_schema=False to re-embed after EMBEDDING_DIM changed, which
         init_schema would otherwise reject.
         """
@@ -301,7 +329,9 @@ class KnowledgeStore:
 
         store = cls.from_url(
             await ensure_database(server_url_from_env(), spec.database),
-            embeddings or build_embeddings_from_env(),
+            embeddings if embeddings is not None else build_embeddings_from_env(
+                query_instruction=spec.embedding_query_instruction
+            ),
             embedding_dim_from_env(),
             min_vector_similarity=(
                 min_vector_similarity_from_env()
@@ -309,6 +339,8 @@ class KnowledgeStore:
                 else spec.min_vector_similarity
             ),
             text_search_config=spec.text_search_config,
+            embedding_context_keys=spec.embedding_context_keys,
+            indexed_context_keys=[item.key for item in spec.context_filters],
         )
         try:
             if init_schema:
@@ -420,12 +452,13 @@ class KnowledgeStore:
             """,
             f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_evidence_id_idx "
             f"ON {knowledge_table} (evidence_id)",
-            f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_machine_id_idx "
-            f"ON {knowledge_table} ((context->>'machine_id'))",
-            f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_machine_model_idx "
-            f"ON {knowledge_table} ((context->>'machine_model'))",
             f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_search_vector_gin_idx "
             f"ON {knowledge_table} USING gin (search_vector)",
+            *(
+                f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_{key}_idx "
+                f"ON {knowledge_table} ((context->>'{key}'))"
+                for key in self._indexed_context_keys
+            ),
         ]
         if dim <= HNSW_MAX_DIM:
             statements.append(
@@ -517,6 +550,23 @@ class KnowledgeStore:
                     {"id": conversation_id, "status": status.value, "error": error},
                 )
 
+    async def processed_metadata_values(self, key: str) -> set[str]:
+        """Values of metadata[key] over conversations that were fully ingested."""
+
+        async with self._errors("read ingested conversations"):
+            async with self._engine.connect() as conn:
+                values = (
+                    await conn.execute(
+                        text(
+                            f"SELECT DISTINCT metadata ->> :key "
+                            f"FROM {self._table(RAW_CONVERSATION_TABLE)} "
+                            "WHERE status = :status AND metadata ? :key"
+                        ),
+                        {"key": key, "status": ConversationStatus.PROCESSED.value},
+                    )
+                ).scalars()
+                return {value for value in values if value is not None}
+
     async def get_conversation(self, conversation_id: UUID) -> RawConversation | None:
         async with self._errors("read a conversation"):
             async with self._engine.connect() as conn:
@@ -530,18 +580,24 @@ class KnowledgeStore:
 
     # ------------------------------------------------------------- knowledge
 
+    async def embed_knowledge(self, records: Sequence[KnowledgeRecord]) -> None:
+        """Fill in missing embeddings with one (client-chunked) embedding call."""
+
+        missing = [record for record in records if record.embedding is None]
+        if not missing:
+            return
+        vectors = await self._embeddings.aembed_documents(
+            [record.embedding_text(self._embedding_context_keys) for record in missing]
+        )
+        for record, vector in zip(missing, vectors, strict=True):
+            record.embedding = list(vector)
+
     async def add_knowledge(self, records: Sequence[KnowledgeRecord]) -> list[UUID]:
-        """Embed and store knowledge records; returns their ids."""
+        """Embed (if not done yet) and store knowledge records; returns their ids."""
 
         if not records:
             return []
-        missing = [record for record in records if record.embedding is None]
-        if missing:
-            vectors = await self._embeddings.aembed_documents(
-                [record.embedding_text() for record in missing]
-            )
-            for record, vector in zip(missing, vectors, strict=True):
-                record.embedding = list(vector)
+        await self.embed_knowledge(records)
         for record in records:
             if len(record.embedding or []) != self._vector_size:
                 raise StorageError(
@@ -554,7 +610,9 @@ class KnowledgeStore:
             await store.aadd_embeddings(
                 texts=[record.claim for record in records],
                 embeddings=[record.embedding for record in records],
-                metadatas=[record.to_metadata() for record in records],
+                metadatas=[
+                    record.to_metadata(self._embedding_context_keys) for record in records
+                ],
                 ids=[str(record.id) for record in records],
             )
         return [record.id for record in records]
@@ -580,7 +638,7 @@ class KnowledgeStore:
                 ).mappings().all()
         records = [KnowledgeRecord.model_validate(dict(row)) for row in rows]
         vectors = await self._embeddings.aembed_documents(
-            [record.embedding_text() for record in records]
+            [record.embedding_text(self._embedding_context_keys) for record in records]
         )
         for record, vector in zip(records, vectors, strict=True):
             if len(vector) != self._vector_size:

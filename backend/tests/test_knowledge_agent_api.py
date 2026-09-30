@@ -56,6 +56,52 @@ class FakeAgent:
 
 
 class KnowledgeAgentApiTest(unittest.TestCase):
+    def test_enterprise_endpoint_selects_its_agent_without_body_kb(self) -> None:
+        enterprise, maintenance = FakeAgent(), FakeAgent()
+        with TestClient(create_app(knowledge_agents={
+            "enterprise_rag": enterprise, "maintenance": maintenance,
+        })) as client:
+            response = client.post(
+                "/v1/knowledge-agent/enterprise_rag/stream",
+                json={"query": "  Who owns ENG-4825?  ", "thread_id": "thread-1"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+        self.assertEqual(response.headers["x-accel-buffering"], "no")
+        self.assertEqual(enterprise.calls, [("Who owns ENG-4825?", "thread-1")])
+        self.assertEqual(maintenance.calls, [])
+        self.assertIn("event: answer.citations", response.text)
+        self.assertIn("event: run.completed", response.text)
+
+    def test_scoped_endpoint_validates_body_and_unknown_kb(self) -> None:
+        agent = FakeAgent()
+        with TestClient(create_app(knowledge_agents={"enterprise_rag": agent})) as client:
+            for body in (
+                {"query": " ", "thread_id": "t"},
+                {"query": "hi", "thread_id": " "},
+                {"query": "hi"},
+                {"query": "hi", "thread_id": "t", "kb": "maintenance"},
+            ):
+                with self.subTest(body=body):
+                    response = client.post("/v1/knowledge-agent/enterprise_rag/stream", json=body)
+                    self.assertEqual(response.status_code, 422)
+            response = client.post(
+                "/v1/knowledge-agent/missing/stream",
+                json={"query": "hi", "thread_id": "t"},
+            )
+            self.assertEqual(response.status_code, 404)
+        self.assertEqual(agent.calls, [])
+
+    def test_enterprise_stream_reports_agent_failure(self) -> None:
+        with TestClient(create_app(knowledge_agents={"enterprise_rag": FakeAgent(fail=True)})) as client:
+            response = client.post(
+                "/v1/knowledge-agent/enterprise_rag/stream",
+                json={"query": "question", "thread_id": "t"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: run.failed", response.text)
+        self.assertNotIn("event: run.completed", response.text)
+
     def test_streams_versioned_sse_events(self) -> None:
         agent = FakeAgent()
         with TestClient(create_app(knowledge_agents={"maintenance": agent})) as client:

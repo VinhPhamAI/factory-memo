@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from time import monotonic
@@ -19,7 +19,7 @@ from langgraph.types import Overwrite
 from openai import APIError
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.knowledge_bases.base import KnowledgeBaseSpec
+from backend.knowledge_bases.base import ContextFilter, KnowledgeBaseSpec
 from backend.src.agents.agent.config import (
     RECURSION_LIMIT,
     RUN_TIMEOUT_SECONDS,
@@ -37,19 +37,13 @@ CITATION_RE = re.compile(
 LOG_CONTENT_LIMIT = 2_000
 STREAM_EVENT_VERSION = 1
 PUBLIC_TRACE_STRING_LIMIT = 2_000
-PUBLIC_CONTEXT_FIELDS = {
-    "machine_id",
-    "machine_model",
-    "component_model",
-    "condition",
-}
+# Context keys are knowledge-base specific: callers pass the ones a trace may
+# show (KnowledgeBaseSpec.trace_context_keys) as context_fields.
 PUBLIC_TOOL_INPUT_FIELDS = {
     "search_knowledge": {
         "query",
         "subject",
         "knowledge_type",
-        "machine_id",
-        "machine_model",
         "valid_on",
         "k",
     },
@@ -213,7 +207,9 @@ def _public_value(value: Any) -> Any:
     return _public_value(enum_value if enum_value is not None else str(value))
 
 
-def public_tool_input(tool_name: str, arguments: Any) -> dict[str, Any]:
+def public_tool_input(
+    tool_name: str, arguments: Any, *, context_fields: Collection[str] = ()
+) -> dict[str, Any]:
     """Allowlist the tool arguments that may be exposed to a trace consumer."""
 
     if not isinstance(arguments, dict):
@@ -221,6 +217,8 @@ def public_tool_input(tool_name: str, arguments: Any) -> dict[str, Any]:
     allowed = PUBLIC_TOOL_INPUT_FIELDS.get(tool_name)
     if allowed is None:
         return {}
+    if tool_name == "search_knowledge":
+        allowed = allowed | set(context_fields)
     return {
         key: _public_value(value)
         for key, value in arguments.items()
@@ -228,7 +226,9 @@ def public_tool_input(tool_name: str, arguments: Any) -> dict[str, Any]:
     }
 
 
-def _public_knowledge_summary(item: Any) -> dict[str, Any]:
+def _public_knowledge_summary(
+    item: Any, *, context_fields: Collection[str] = ()
+) -> dict[str, Any]:
     if not isinstance(item, dict):
         return {}
     context = item.get("context")
@@ -236,7 +236,7 @@ def _public_knowledge_summary(item: Any) -> dict[str, Any]:
         {
             key: _public_value(value)
             for key, value in context.items()
-            if key in PUBLIC_CONTEXT_FIELDS
+            if key in context_fields
         }
         if isinstance(context, dict)
         else {}
@@ -271,7 +271,9 @@ def _public_knowledge_summary(item: Any) -> dict[str, Any]:
     }
 
 
-def public_tool_output(tool_name: str, payload: Any) -> dict[str, Any]:
+def public_tool_output(
+    tool_name: str, payload: Any, *, context_fields: Collection[str] = ()
+) -> dict[str, Any]:
     """Return a useful trace summary without exposing claims or raw transcripts."""
 
     if not isinstance(payload, dict):
@@ -290,18 +292,24 @@ def public_tool_output(tool_name: str, payload: Any) -> dict[str, Any]:
             {
                 "match": _public_value(payload.get("match")),
                 "count": len(items),
-                "items": [_public_knowledge_summary(item) for item in items],
+                "items": [
+                    _public_knowledge_summary(item, context_fields=context_fields)
+                    for item in items
+                ],
             }
         )
     elif tool_name == "get_knowledge":
-        knowledge = _public_knowledge_summary(payload.get("knowledge"))
+        knowledge = _public_knowledge_summary(
+            payload.get("knowledge"), context_fields=context_fields
+        )
         conflicts = payload.get("conflicting_knowledge")
         conflict_items = conflicts if isinstance(conflicts, list) else []
         result.update(
             {
                 "knowledge": knowledge,
                 "conflicts": [
-                    _public_knowledge_summary(item) for item in conflict_items
+                    _public_knowledge_summary(item, context_fields=context_fields)
+                    for item in conflict_items
                 ],
             }
         )
@@ -453,13 +461,22 @@ class KnowledgeAgentService:
         system_prompt: str,
         timeout_seconds: float = RUN_TIMEOUT_SECONDS,
         checkpointer: InMemorySaver | None = None,
+        context_filters: Sequence[ContextFilter] = (),
+        trace_context_keys: Collection[str] = (),
     ) -> None:
         self._store = store
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._checkpointer = checkpointer or InMemorySaver()
+        # Filter arguments are always safe to show; add them to the trace keys.
+        self._trace_context_keys = frozenset(
+            [*trace_context_keys, *(item.key for item in context_filters)]
+        )
         self._graph = build_graph(
-            model, system_prompt=system_prompt, checkpointer=self._checkpointer
+            model,
+            system_prompt=system_prompt,
+            context_filters=context_filters,
+            checkpointer=self._checkpointer,
         )
 
     @classmethod
@@ -472,6 +489,8 @@ class KnowledgeAgentService:
             store=store,
             model=build_chat_model_from_env(),
             system_prompt=spec.agent_prompt,
+            context_filters=spec.context_filters,
+            trace_context_keys=spec.trace_context_keys,
         )
 
     def start_stream(self, query: str, *, thread_id: str) -> AgentStreamSession:
@@ -591,7 +610,9 @@ class KnowledgeAgentService:
                                         "tool": tool_name,
                                         "phase": _tool_status(tool_name),
                                         "input": public_tool_input(
-                                            tool_name, call.get("args") or {}
+                                            tool_name,
+                                            call.get("args") or {},
+                                            context_fields=self._trace_context_keys,
                                         ),
                                     },
                                 )
@@ -618,7 +639,11 @@ class KnowledgeAgentService:
                                 "status": (
                                     "success" if payload.get("ok") is True else "error"
                                 ),
-                                "output": public_tool_output(tool_name, payload),
+                                "output": public_tool_output(
+                                    tool_name,
+                                    payload,
+                                    context_fields=self._trace_context_keys,
+                                ),
                             }
                             if duration_ms is not None:
                                 trace_data["duration_ms"] = duration_ms

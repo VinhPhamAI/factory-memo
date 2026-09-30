@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -83,12 +84,24 @@ class KnowledgeExtractionService:
         base_url: str | None = None,
         max_tokens: int = 2048,
     ) -> "KnowledgeExtractionService":
-        """Build the OpenAI-compatible client configured by environment variables."""
+        """Build the OpenAI-compatible client configured by environment variables.
 
-        resolved_api_key = api_key or os.getenv("OPENROUTER_API_KEY")
-        resolved_model = model or os.getenv("OPENROUTER_MODEL")
+        EXTRACTION_* settings override the shared OPENROUTER_* ones, so bulk
+        extraction can use another endpoint than the agent, e.g. a ModelArk
+        batch inference endpoint or EXTRACTION_SERVICE_TIER=flex.
+        """
+
+        resolved_api_key = (
+            api_key or os.getenv("EXTRACTION_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        )
+        resolved_model = (
+            model or os.getenv("EXTRACTION_MODEL") or os.getenv("OPENROUTER_MODEL")
+        )
         resolved_base_url = (
-            base_url or os.getenv("OPENROUTER_BASE_URL") or DEFAULT_LLM_BASE_URL
+            base_url
+            or os.getenv("EXTRACTION_BASE_URL")
+            or os.getenv("OPENROUTER_BASE_URL")
+            or DEFAULT_LLM_BASE_URL
         )
 
         missing = []
@@ -101,6 +114,21 @@ class KnowledgeExtractionService:
                 "Missing required LLM configuration: " + ", ".join(missing)
             )
 
+        options: dict[str, Any] = {}
+        # Provider-specific switch for ModelArk/DeepSeek. Leave it unset for
+        # endpoints that do not accept a `thinking` request field.
+        if thinking := os.getenv("EXTRACTION_THINKING", "").strip():
+            if thinking not in {"enabled", "disabled"}:
+                raise ValueError("EXTRACTION_THINKING must be enabled or disabled")
+            options["extra_body"] = {"thinking": {"type": thinking}}
+        if service_tier := os.getenv("EXTRACTION_SERVICE_TIER"):
+            options["service_tier"] = service_tier
+        if timeout := os.getenv("EXTRACTION_TIMEOUT_SECONDS"):
+            try:
+                options["timeout"] = float(timeout)
+            except ValueError as exc:
+                raise ValueError("EXTRACTION_TIMEOUT_SECONDS must be a number") from exc
+
         client = ChatOpenAI(
             model=resolved_model,
             base_url=resolved_base_url,
@@ -108,28 +136,94 @@ class KnowledgeExtractionService:
             temperature=0,
             streaming=False,
             max_tokens=max_tokens,
+            **options,
         )
         return cls(client, prompt_template)
 
     def extract(self, raw_conversation: str) -> KnowledgeExtractionResult:
         """Extract and validate knowledge items from one raw conversation."""
 
-        if not raw_conversation or not raw_conversation.strip():
-            raise ValueError("raw_conversation must not be empty")
-
-        prompt = self.build_prompt(raw_conversation)
+        prompt = self._checked_prompt(raw_conversation)
         try:
             response = self._client.invoke(prompt)
         except Exception as exc:
             raise KnowledgeExtractionError(f"LLM request failed: {exc}") from exc
+        return self._parse(response)
+
+    async def aextract(self, raw_conversation: str) -> KnowledgeExtractionResult:
+        """Async extract, so many conversations can be in flight at once.
+
+        Clients without `ainvoke` run their blocking `invoke` in a thread.
+        """
+
+        prompt = self._checked_prompt(raw_conversation)
+        ainvoke = getattr(self._client, "ainvoke", None)
+        try:
+            if ainvoke is not None:
+                response = await ainvoke(prompt)
+            else:
+                response = await asyncio.to_thread(self._client.invoke, prompt)
+        except Exception as exc:
+            raise KnowledgeExtractionError(f"LLM request failed: {exc}") from exc
+        return self._parse(response)
+
+    def _checked_prompt(self, raw_conversation: str) -> str:
+        if not raw_conversation or not raw_conversation.strip():
+            raise ValueError("raw_conversation must not be empty")
+        return self.build_prompt(raw_conversation)
+
+    def _parse(self, response: Any) -> KnowledgeExtractionResult:
+        metadata = getattr(response, "response_metadata", None) or {}
+        usage = getattr(response, "usage_metadata", None) or {}
+        token_usage = metadata.get("token_usage") or {}
+        finish_reason = metadata.get("finish_reason")
+        output_tokens = usage.get("output_tokens", token_usage.get("completion_tokens"))
+        reasoning_tokens = (usage.get("output_token_details") or {}).get(
+            "reasoning", (token_usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+        )
+        details = ", ".join(
+            f"{key}={value}"
+            for key, value in (
+                ("finish_reason", finish_reason),
+                ("output_tokens", output_tokens),
+                ("reasoning_tokens", reasoning_tokens),
+            )
+            if value is not None
+        )
+        diagnostic = f" ({details})" if details else ""
+        if finish_reason == "length":
+            raise KnowledgeExtractionError(
+                "The LLM hit its output token limit before completing knowledge extraction"
+                + diagnostic
+                + ". Reasoning tokens also consume the output budget. For supporting "
+                "ModelArk/DeepSeek endpoints, set EXTRACTION_THINKING=disabled; "
+                "otherwise reduce the input size or increase max_tokens."
+            )
         content = self._response_text(response)
+        if not content.strip():
+            raise KnowledgeExtractionError("The LLM returned empty extraction text" + diagnostic)
 
         try:
             payload = json.loads(self._strip_json_fence(content))
-            return KnowledgeExtractionResult.model_validate(payload)
-        except (json.JSONDecodeError, ValidationError, TypeError) as exc:
+        except json.JSONDecodeError as exc:
             raise KnowledgeExtractionError(
                 "The LLM returned invalid knowledge extraction JSON"
+                + diagnostic
+                + f": {exc.msg} at line {exc.lineno}, column {exc.colno}"
+            ) from exc
+        try:
+            return KnowledgeExtractionResult.model_validate(payload)
+        except ValidationError as exc:
+            # Keep diagnostics useful without logging extracted document contents.
+            errors = exc.errors(include_input=False, include_context=False, include_url=False)
+            summary = "; ".join(
+                f"{'.'.join(map(str, error['loc'])) or '<root>'}: {error['type']}"
+                for error in errors[:5]
+            )
+            raise KnowledgeExtractionError(
+                "The LLM extraction JSON failed schema validation"
+                + diagnostic
+                + f": {summary}"
             ) from exc
 
     def build_prompt(self, raw_conversation: str) -> str:

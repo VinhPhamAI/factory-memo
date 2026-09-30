@@ -54,6 +54,16 @@ class IngestEntrypointTest(unittest.TestCase):
         args = build_parser().parse_args(["ingest", "maintenance"])
         self.assertEqual(args.kb, "maintenance")
         self.assertIsNone(args.file)
+        self.assertEqual(args.batch_size, 1)
+        self.assertIsNone(args.concurrency)
+
+    def test_ingest_parser_accepts_batch_options(self) -> None:
+        args = build_parser().parse_args(
+            ["ingest", "maintenance", "--batch-size", "8", "--concurrency", "4"]
+        )
+        self.assertEqual((args.batch_size, args.concurrency), (8, 4))
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["ingest", "maintenance", "--batch-size", "0"])
 
     def test_ingest_parser_accepts_a_file_override(self) -> None:
         args = build_parser().parse_args(

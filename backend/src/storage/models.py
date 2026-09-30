@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from enum import Enum
@@ -13,10 +14,6 @@ from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
 from backend.src.services.knowledge_extraction import KnowledgeItem, KnowledgeType
-
-
-# Context keys that most change what a claim means; they lead the embedded text.
-EMBEDDING_CONTEXT_KEYS = ("machine_id", "machine_model", "component_model", "condition")
 
 
 def _utcnow() -> datetime:
@@ -83,11 +80,15 @@ class KnowledgeRecord(BaseModel):
             valid_to=item.valid_to,
         )
 
-    def embedding_text(self) -> str:
-        """Text whose vector represents this record: subject, claim, and scope."""
+    def embedding_text(self, leading_keys: Sequence[str] = ()) -> str:
+        """Text whose vector represents this record: subject, claim, and scope.
+
+        Context keys in `leading_keys` (the knowledge base's
+        embedding_context_keys) come first; the rest follow alphabetically.
+        """
 
         parts = [f"{self.subject}: {self.claim}"]
-        ordered = [key for key in EMBEDDING_CONTEXT_KEYS if key in self.context]
+        ordered = [key for key in leading_keys if key in self.context]
         ordered += sorted(key for key in self.context if key not in ordered)
         scope = "; ".join(
             f"{key}={_compact(self.context[key])}" for key in ordered
@@ -96,19 +97,19 @@ class KnowledgeRecord(BaseModel):
             parts.append(f"Context: {scope}")
         return "\n".join(parts)
 
-    def lexical_text(self) -> str:
+    def lexical_text(self, leading_keys: Sequence[str] = ()) -> str:
         """Stable text indexed by PostgreSQL full-text search."""
 
-        return self.embedding_text()
+        return self.embedding_text(leading_keys)
 
-    def to_metadata(self) -> dict[str, Any]:
+    def to_metadata(self, leading_keys: Sequence[str] = ()) -> dict[str, Any]:
         """Values for the vector store's metadata columns."""
 
         return {
             "subject": self.subject,
             "type": self.type.value,
             "context": self.context,
-            "search_text": self.lexical_text(),
+            "search_text": self.lexical_text(leading_keys),
             "evidence_id": str(self.evidence_id) if self.evidence_id else None,
             "stated_by": self.stated_by,
             "created_at": self.created_at,
