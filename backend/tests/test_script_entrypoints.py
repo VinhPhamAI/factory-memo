@@ -6,9 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.scripts.ingest_knowledge import build_parser as build_ingest_parser
-from backend.scripts.ingest_knowledge import read_transcripts
-from backend.scripts.query_knowledge import build_parser as build_query_parser
+from backend.scripts.kb import build_parser, read_transcripts
 
 
 class IngestEntrypointTest(unittest.TestCase):
@@ -52,15 +50,32 @@ class IngestEntrypointTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "empty"):
                 list(read_transcripts(path))
 
-    def test_ingest_parser_requires_only_a_file(self) -> None:
-        args = build_ingest_parser().parse_args(["conversation.txt"])
+    def test_ingest_parser_requires_only_a_knowledge_base(self) -> None:
+        args = build_parser().parse_args(["ingest", "maintenance"])
+        self.assertEqual(args.kb, "maintenance")
+        self.assertIsNone(args.file)
+
+    def test_ingest_parser_accepts_a_file_override(self) -> None:
+        args = build_parser().parse_args(
+            ["ingest", "maintenance", "--file", "conversation.txt", "--limit", "3"]
+        )
         self.assertEqual(args.file, Path("conversation.txt"))
+        self.assertEqual(args.limit, 3)
+
+    def test_ingest_parser_rejects_non_positive_limit(self) -> None:
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["ingest", "maintenance", "--limit", "0"])
 
 
 class QueryEntrypointTest(unittest.TestCase):
-    def test_query_parser_requires_only_the_question(self) -> None:
-        args = build_query_parser().parse_args(["How do I clean M01?"])
-        self.assertEqual(args.query, "How do I clean M01?")
+    def test_query_parser_takes_knowledge_base_and_question(self) -> None:
+        args = build_parser().parse_args(["query", "maintenance", "How do I clean M01?"])
+        self.assertEqual(args.kb, "maintenance")
+        self.assertEqual(args.question, "How do I clean M01?")
+
+    def test_reset_requires_explicit_confirmation_flag(self) -> None:
+        args = build_parser().parse_args(["reset", "maintenance"])
+        self.assertFalse(args.yes)
 
 
 if __name__ == "__main__":

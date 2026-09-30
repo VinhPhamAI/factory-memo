@@ -58,10 +58,10 @@ class FakeAgent:
 class KnowledgeAgentApiTest(unittest.TestCase):
     def test_streams_versioned_sse_events(self) -> None:
         agent = FakeAgent()
-        with TestClient(create_app(knowledge_agent=agent)) as client:
+        with TestClient(create_app(knowledge_agents={"maintenance": agent})) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
-                json={"query": "  sensor?  ", "thread_id": "thread-1"},
+                json={"kb": "maintenance", "query": "  sensor?  ", "thread_id": "thread-1"},
                 headers={"Accept": "text/event-stream"},
             )
 
@@ -74,10 +74,10 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertIn("id: request-1:4", response.text)
 
     def test_converts_stream_errors_to_run_failed(self) -> None:
-        with TestClient(create_app(knowledge_agent=FakeAgent(fail=True))) as client:
+        with TestClient(create_app(knowledge_agents={"maintenance": FakeAgent(fail=True)})) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
-                json={"query": "sensor?", "thread_id": "thread-1"},
+                json={"kb": "maintenance", "query": "sensor?", "thread_id": "thread-1"},
             )
 
         self.assertEqual(response.status_code, 200)
@@ -86,13 +86,55 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertIn('"error_type":"FakeFailure"', response.text)
 
     def test_rejects_blank_queries_before_starting_stream(self) -> None:
-        with TestClient(create_app(knowledge_agent=FakeAgent())) as client:
+        with TestClient(create_app(knowledge_agents={"maintenance": FakeAgent()})) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
-                json={"query": "   ", "thread_id": "thread-1"},
+                json={"kb": "maintenance", "query": "   ", "thread_id": "thread-1"},
             )
 
         self.assertEqual(response.status_code, 422)
+
+    def test_routes_to_the_requested_knowledge_base(self) -> None:
+        maintenance, other = FakeAgent(), FakeAgent()
+        agents = {"maintenance": maintenance, "other": other}
+        with TestClient(create_app(knowledge_agents=agents)) as client:
+            response = client.post(
+                "/v1/knowledge-agent/stream",
+                json={"kb": "other", "query": "sensor?", "thread_id": "thread-1"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(maintenance.calls, [])
+        self.assertEqual(other.calls, [("sensor?", "thread-1")])
+
+    def test_rejects_unknown_knowledge_base(self) -> None:
+        with TestClient(create_app(knowledge_agents={"maintenance": FakeAgent()})) as client:
+            response = client.post(
+                "/v1/knowledge-agent/stream",
+                json={"kb": "missing", "query": "sensor?", "thread_id": "thread-1"},
+            )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_requires_a_knowledge_base(self) -> None:
+        with TestClient(create_app(knowledge_agents={"maintenance": FakeAgent()})) as client:
+            response = client.post(
+                "/v1/knowledge-agent/stream",
+                json={"query": "sensor?", "thread_id": "thread-1"},
+            )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_lists_knowledge_bases(self) -> None:
+        agents = {"other": FakeAgent(), "maintenance": FakeAgent()}
+        with TestClient(create_app(knowledge_agents=agents)) as client:
+            response = client.get("/v1/knowledge-agent/knowledge-bases")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["name"] for item in response.json()["knowledge_bases"]],
+            ["maintenance", "other"],
+        )
 
 
 if __name__ == "__main__":

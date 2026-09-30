@@ -12,8 +12,6 @@ from typing import Any, Protocol
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from backend.src.prompts.extract import EXTRACT_KNOWLEDGE_PROMPT
-
 
 DEFAULT_LLM_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
 RAW_CONVERSATION_PLACEHOLDER = "{RAW_CONVERSATION}"
@@ -61,14 +59,24 @@ class KnowledgeExtractionError(RuntimeError):
 
 
 class KnowledgeExtractionService:
-    """LLM-backed service for turning a transcript into knowledge items."""
+    """LLM-backed service for turning a transcript into knowledge items.
 
-    def __init__(self, client: SupportsInvoke):
+    `prompt_template` is the knowledge base's extraction prompt; it must contain
+    {RAW_CONVERSATION}, which is replaced by the transcript.
+    """
+
+    def __init__(self, client: SupportsInvoke, prompt_template: str):
+        if RAW_CONVERSATION_PLACEHOLDER not in prompt_template:
+            raise ValueError(
+                f"Extraction prompt is missing its {RAW_CONVERSATION_PLACEHOLDER} placeholder"
+            )
         self._client = client
+        self._prompt_template = prompt_template
 
     @classmethod
     def from_env(
         cls,
+        prompt_template: str,
         *,
         api_key: str | None = None,
         model: str | None = None,
@@ -101,7 +109,7 @@ class KnowledgeExtractionService:
             streaming=False,
             max_tokens=max_tokens,
         )
-        return cls(client)
+        return cls(client, prompt_template)
 
     def extract(self, raw_conversation: str) -> KnowledgeExtractionResult:
         """Extract and validate knowledge items from one raw conversation."""
@@ -124,13 +132,10 @@ class KnowledgeExtractionService:
                 "The LLM returned invalid knowledge extraction JSON"
             ) from exc
 
-    @staticmethod
-    def build_prompt(raw_conversation: str) -> str:
-        """Insert a transcript into the shared extraction prompt."""
+    def build_prompt(self, raw_conversation: str) -> str:
+        """Insert a transcript into the knowledge base's extraction prompt."""
 
-        if RAW_CONVERSATION_PLACEHOLDER not in EXTRACT_KNOWLEDGE_PROMPT:
-            raise RuntimeError("Extraction prompt is missing its conversation placeholder")
-        return EXTRACT_KNOWLEDGE_PROMPT.replace(
+        return self._prompt_template.replace(
             RAW_CONVERSATION_PLACEHOLDER, raw_conversation.strip(), 1
         )
 

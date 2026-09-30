@@ -10,18 +10,19 @@ from types import SimpleNamespace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-BENCHMARK_CSV = (
-    PROJECT_ROOT
-    / "data"
-    / "expert_knowledge_extraction_benchmark_20_conversations_en.csv"
-)
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.knowledge_bases import get_kb
 from backend.src.services.knowledge_extraction import (
     KnowledgeExtractionError,
     KnowledgeExtractionService,
     KnowledgeType,
 )
+
+
+MAINTENANCE = get_kb("maintenance")
+PROMPT = MAINTENANCE.extract_prompt
+BENCHMARK_CSV = MAINTENANCE.dataset.path
 
 
 class FakeLLM:
@@ -40,6 +41,7 @@ class FailingLLM:
 
 
 class KnowledgeExtractionServiceTests(unittest.TestCase):
+    @unittest.skipUnless(BENCHMARK_CSV.is_file(), "benchmark CSV is not available")
     def test_extracts_validated_items_from_benchmark_conversation(self) -> None:
         with BENCHMARK_CSV.open(newline="", encoding="utf-8-sig") as csv_file:
             conversation = next(csv.DictReader(csv_file))["raw_conversation"]
@@ -59,7 +61,7 @@ class KnowledgeExtractionServiceTests(unittest.TestCase):
             ```"""
         )
 
-        result = KnowledgeExtractionService(client).extract(conversation)
+        result = KnowledgeExtractionService(client, PROMPT).extract(conversation)
 
         self.assertEqual(len(result.knowledge_items), 1)
         self.assertEqual(result.knowledge_items[0].type, KnowledgeType.RULE)
@@ -67,11 +69,24 @@ class KnowledgeExtractionServiceTests(unittest.TestCase):
         self.assertIn(conversation, client.last_prompt or "")
         self.assertNotIn("{RAW_CONVERSATION}", client.last_prompt or "")
 
+    def test_uses_the_given_prompt_template(self) -> None:
+        client = FakeLLM('{"knowledge_items": []}')
+
+        KnowledgeExtractionService(client, "Other KB:\n{RAW_CONVERSATION}").extract(
+            "  Expert: Check it.  "
+        )
+
+        self.assertEqual(client.last_prompt, "Other KB:\nExpert: Check it.")
+
+    def test_rejects_prompt_without_placeholder(self) -> None:
+        with self.assertRaisesRegex(ValueError, "RAW_CONVERSATION"):
+            KnowledgeExtractionService(FakeLLM("{}"), "no placeholder")
+
     def test_rejects_empty_conversation_before_calling_llm(self) -> None:
         client = FakeLLM('{"knowledge_items": []}')
 
         with self.assertRaisesRegex(ValueError, "must not be empty"):
-            KnowledgeExtractionService(client).extract("  ")
+            KnowledgeExtractionService(client, PROMPT).extract("  ")
 
         self.assertIsNone(client.last_prompt)
 
@@ -79,13 +94,13 @@ class KnowledgeExtractionServiceTests(unittest.TestCase):
         client = FakeLLM("not JSON")
 
         with self.assertRaises(KnowledgeExtractionError):
-            KnowledgeExtractionService(client).extract("Expert: Check the sensor.")
+            KnowledgeExtractionService(client, PROMPT).extract("Expert: Check the sensor.")
 
     def test_wraps_llm_client_errors(self) -> None:
         with self.assertRaisesRegex(
             KnowledgeExtractionError, "LLM request failed: endpoint unavailable"
         ):
-            KnowledgeExtractionService(FailingLLM()).extract(
+            KnowledgeExtractionService(FailingLLM(), PROMPT).extract(
                 "Expert: Check the sensor."
             )
 

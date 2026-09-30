@@ -19,6 +19,7 @@ from langgraph.types import Overwrite
 from openai import APIError
 from sqlalchemy.exc import SQLAlchemyError
 
+from backend.knowledge_bases.base import KnowledgeBaseSpec
 from backend.src.agents.agent.config import (
     RECURSION_LIMIT,
     RUN_TIMEOUT_SECONDS,
@@ -449,6 +450,7 @@ class KnowledgeAgentService:
         *,
         store: KnowledgeStore,
         model: Any,
+        system_prompt: str,
         timeout_seconds: float = RUN_TIMEOUT_SECONDS,
         checkpointer: InMemorySaver | None = None,
     ) -> None:
@@ -456,13 +458,20 @@ class KnowledgeAgentService:
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._checkpointer = checkpointer or InMemorySaver()
-        self._graph = build_graph(model, checkpointer=self._checkpointer)
+        self._graph = build_graph(
+            model, system_prompt=system_prompt, checkpointer=self._checkpointer
+        )
 
     @classmethod
-    def from_env(cls, store: KnowledgeStore | None = None) -> "KnowledgeAgentService":
+    def from_kb(
+        cls, spec: KnowledgeBaseSpec, store: KnowledgeStore
+    ) -> "KnowledgeAgentService":
+        """Agent with the knowledge base's prompt over its (already open) store."""
+
         return cls(
-            store=store or KnowledgeStore.from_env(),
+            store=store,
             model=build_chat_model_from_env(),
+            system_prompt=spec.agent_prompt,
         )
 
     def start_stream(self, query: str, *, thread_id: str) -> AgentStreamSession:

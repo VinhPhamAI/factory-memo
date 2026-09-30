@@ -125,7 +125,13 @@ def _tool_payload(message: BaseMessage) -> dict[str, Any]:
 
 def _service(store: FakeStore, *responses: AIMessage) -> tuple[KnowledgeAgentService, ScriptedChatModel]:
     model = ScriptedChatModel(responses=list(responses))
-    return KnowledgeAgentService(store=store, model=model, timeout_seconds=10), model
+    service = KnowledgeAgentService(
+        store=store,
+        model=model,
+        system_prompt="Answer from the knowledge base.",
+        timeout_seconds=10,
+    )
+    return service, model
 
 
 class CitationTest(unittest.TestCase):

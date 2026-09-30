@@ -17,6 +17,15 @@ DEFAULT_API_URL = os.getenv(
 )
 
 
+def fetch_knowledge_bases(stream_url: str) -> list[str]:
+    """Names served by the API, from the endpoint next to the stream URL."""
+
+    list_url = stream_url.rsplit("/", 1)[0] + "/knowledge-bases"
+    response = httpx.get(list_url, timeout=5.0)
+    response.raise_for_status()
+    return [item["name"] for item in response.json()["knowledge_bases"]]
+
+
 def iter_sse(lines: Iterable[str]) -> Iterator[dict]:
     """Parse JSON data fields from an SSE text stream."""
 
@@ -77,6 +86,17 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("Connection")
     api_url = st.text_input("SSE endpoint", value=DEFAULT_API_URL)
+    try:
+        kb_names = fetch_knowledge_bases(api_url)
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        kb_names = []
+        st.error(f"Không lấy được danh sách knowledge base: {exc}")
+    kb = st.selectbox("Knowledge base", kb_names)
+    # Threads live in one knowledge base's agent; switching starts a new one.
+    if st.session_state.get("kb") != kb:
+        st.session_state.kb = kb
+        st.session_state.thread_id = uuid4().hex
+        st.session_state.messages = []
     st.code(st.session_state.thread_id, language=None)
     if st.button("New conversation", use_container_width=True):
         st.session_state.thread_id = uuid4().hex
@@ -86,7 +106,7 @@ with st.sidebar:
 for saved_message in st.session_state.messages:
     render_saved_message(saved_message)
 
-prompt = st.chat_input("Nhập câu hỏi về knowledge base...")
+prompt = st.chat_input("Nhập câu hỏi về knowledge base...", disabled=not kb)
 if prompt:
     user_message = {"role": "user", "content": prompt}
     st.session_state.messages.append(user_message)
@@ -109,7 +129,11 @@ if prompt:
                 with client.stream(
                     "POST",
                     api_url,
-                    json={"query": prompt, "thread_id": st.session_state.thread_id},
+                    json={
+                        "kb": kb,
+                        "query": prompt,
+                        "thread_id": st.session_state.thread_id,
+                    },
                     headers={"Accept": "text/event-stream"},
                 ) as response:
                     response.raise_for_status()

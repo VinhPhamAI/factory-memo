@@ -1,4 +1,4 @@
-EXTRACT_KNOWLEDGE_PROMPT = """Your task is to extract reusable expert knowledge from a raw conversation transcript.
+Your task is to extract reusable expert knowledge from a raw conversation transcript.
 
 The conversation may contain one or more independent knowledge items. Extract each meaningful knowledge item separately.
 
@@ -128,4 +128,3 @@ If no reusable expert knowledge is present, return:
 ## Raw conversation
 
 {RAW_CONVERSATION}
-"""

@@ -2,36 +2,36 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 
+from backend.api.knowledge_agent import KnowledgeAgentPool
 from backend.api.knowledge_agent import router as knowledge_agent_router
-from backend.src.agents.agent import KnowledgeAgentService
-from backend.src.storage import KnowledgeStore
+from backend.knowledge_bases import KNOWLEDGE_BASES
 
 
-def create_app(*, knowledge_agent: Any | None = None) -> FastAPI:
-    """Build the API; an injected agent keeps HTTP tests dependency-free."""
+def create_app(*, knowledge_agents: Mapping[str, Any] | None = None) -> FastAPI:
+    """Build the API; injected agents (by knowledge base) keep HTTP tests dependency-free."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if knowledge_agent is not None:
-            app.state.knowledge_agent = knowledge_agent
+        if knowledge_agents is not None:
+            app.state.knowledge_agents = KnowledgeAgentPool({}, agents=knowledge_agents)
             yield
             return
 
         load_dotenv()
-        store = KnowledgeStore.from_env()
-        await store.init_schema()
-        app.state.knowledge_store = store
-        app.state.knowledge_agent = KnowledgeAgentService.from_env(store)
+        # Each knowledge base's store and agent open on its first request.
+        pool = KnowledgeAgentPool(KNOWLEDGE_BASES)
+        app.state.knowledge_agents = pool
         try:
             yield
         finally:
-            await store.aclose()
+            await pool.aclose()
 
     api = FastAPI(
         title="Knowledge Agent Service",

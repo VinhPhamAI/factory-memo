@@ -19,13 +19,9 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CSV = (
-    PROJECT_ROOT
-    / "data"
-    / "expert_knowledge_extraction_benchmark_20_conversations_en.csv"
-)
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.knowledge_bases import get_kb  # noqa: E402
 from backend.src.services.knowledge_extraction import (  # noqa: E402
     KnowledgeExtractionError,
     KnowledgeExtractionService,
@@ -35,6 +31,11 @@ from backend.src.services.knowledge_extraction import (  # noqa: E402
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Extract structured knowledge from a raw conversation."
+    )
+    parser.add_argument(
+        "--kb",
+        default="maintenance",
+        help="Knowledge base whose extraction prompt and dataset to use.",
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
@@ -49,8 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--csv",
         type=Path,
-        default=DEFAULT_CSV,
-        help=f"Benchmark CSV path (default: {DEFAULT_CSV}).",
+        help="Benchmark CSV path (default: the knowledge base's dataset).",
     )
     return parser
 
@@ -74,10 +74,14 @@ def main() -> int:
     load_dotenv(PROJECT_ROOT / ".env")
 
     try:
+        spec = get_kb(args.kb)
+        csv_path = args.csv or (spec.dataset.path if spec.dataset else None)
+        if not args.conversation and csv_path is None:
+            raise ValueError(f"Knowledge base {spec.name!r} has no dataset; pass --csv")
         conversation = args.conversation or load_benchmark_conversation(
-            args.csv, args.case_id
+            csv_path, args.case_id
         )
-        service = KnowledgeExtractionService.from_env()
+        service = KnowledgeExtractionService.from_env(spec.extract_prompt)
         result = service.extract(conversation)
     except (OSError, ValueError, KnowledgeExtractionError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

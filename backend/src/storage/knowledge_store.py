@@ -10,7 +10,7 @@ import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from langchain_core.embeddings import Embeddings
@@ -26,6 +26,9 @@ from backend.src.storage.models import (
     KnowledgeSearchHit,
     RawConversation,
 )
+
+if TYPE_CHECKING:
+    from backend.knowledge_bases.base import KnowledgeBaseSpec
 
 
 KNOWLEDGE_TABLE = "knowledge_items"
@@ -63,7 +66,7 @@ LEXICAL_CONFIDENT_MIN_TERMS = 2
 LEXICAL_CONFIDENT_TERM_FRACTION = 0.3
 MAX_LEXICAL_TERMS = 32
 # Stemming and stop words for full-text search; changing it rebuilds search_vector.
-TEXT_SEARCH_CONFIG = "english"
+DEFAULT_TEXT_SEARCH_CONFIG = "english"
 MIN_VECTOR_SIMILARITY_ENV = "KNOWLEDGE_MIN_VECTOR_SIMILARITY"
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 # Keeps identifiers such as AX-220, S14.b, or v1.2 in one token.
@@ -233,11 +236,15 @@ class KnowledgeStore:
         *,
         schema: str = "public",
         min_vector_similarity: float = DEFAULT_MIN_VECTOR_SIMILARITY,
+        text_search_config: str = DEFAULT_TEXT_SEARCH_CONFIG,
     ) -> None:
         if not _IDENTIFIER_RE.match(schema):
             raise ValueError(f"Invalid schema name: {schema!r}")
+        if not _IDENTIFIER_RE.match(text_search_config):
+            raise ValueError(f"Invalid text search config: {text_search_config!r}")
         self._engine = engine
         self._schema = schema
+        self._text_search_config = text_search_config
         self._pg_engine = PGEngine.from_engine(engine)
         self._embeddings = embeddings
         self._vector_size = vector_size
@@ -256,6 +263,7 @@ class KnowledgeStore:
         *,
         schema: str = "public",
         min_vector_similarity: float = DEFAULT_MIN_VECTOR_SIMILARITY,
+        text_search_config: str = DEFAULT_TEXT_SEARCH_CONFIG,
         **engine_kwargs: Any,
     ) -> "KnowledgeStore":
         """Create a store over a `postgresql+psycopg://` connection URL."""
@@ -267,26 +275,48 @@ class KnowledgeStore:
             vector_size,
             schema=schema,
             min_vector_similarity=min_vector_similarity,
+            text_search_config=text_search_config,
         )
 
     @classmethod
-    def from_env(cls, embeddings: Embeddings | None = None) -> "KnowledgeStore":
-        """Create a store from DATABASE_URL and the EMBEDDING_* settings."""
+    async def for_kb(
+        cls,
+        spec: KnowledgeBaseSpec,
+        *,
+        embeddings: Embeddings | None = None,
+        init_schema: bool = True,
+    ) -> "KnowledgeStore":
+        """Open a knowledge base's own database, creating it and its schema if missing.
 
+        The server comes from DATABASE_URL, the embedding model from EMBEDDING_*.
+        Pass init_schema=False to re-embed after EMBEDDING_DIM changed, which
+        init_schema would otherwise reject.
+        """
+
+        from backend.src.storage.databases import ensure_database, server_url_from_env
         from backend.src.storage.embeddings import (
             build_embeddings_from_env,
             embedding_dim_from_env,
         )
 
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
-            raise ValueError("Missing required database configuration: DATABASE_URL")
-        return cls.from_url(
-            database_url,
+        store = cls.from_url(
+            await ensure_database(server_url_from_env(), spec.database),
             embeddings or build_embeddings_from_env(),
             embedding_dim_from_env(),
-            min_vector_similarity=min_vector_similarity_from_env(),
+            min_vector_similarity=(
+                min_vector_similarity_from_env()
+                if spec.min_vector_similarity is None
+                else spec.min_vector_similarity
+            ),
+            text_search_config=spec.text_search_config,
         )
+        try:
+            if init_schema:
+                await store.init_schema()
+        except BaseException:
+            await store.aclose()
+            raise
+        return store
 
     @property
     def engine(self) -> AsyncEngine:
@@ -317,6 +347,7 @@ class KnowledgeStore:
         dim = self._vector_size
         raw_table = self._table(RAW_CONVERSATION_TABLE)
         knowledge_table = self._table(KNOWLEDGE_TABLE)
+        text_search_config = self._text_search_config
         statements = [
             "CREATE EXTENSION IF NOT EXISTS vector",
             f"""
@@ -342,7 +373,7 @@ class KnowledgeStore:
                 context JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                 search_text TEXT NOT NULL,
                 search_vector TSVECTOR GENERATED ALWAYS AS
-                    (to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, search_text)) STORED,
+                    (to_tsvector('{text_search_config}'::regconfig, search_text)) STORED,
                 evidence_id UUID REFERENCES {raw_table}(id),
                 stated_by TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -375,7 +406,7 @@ class KnowledgeStore:
                       AND a.attname = 'search_vector'
                       AND NOT a.attisdropped
                       AND pg_get_expr(d.adbin, d.adrelid)
-                          NOT LIKE '%''{TEXT_SEARCH_CONFIG}''::regconfig%'
+                          NOT LIKE '%''{text_search_config}''::regconfig%'
                 ) THEN
                     ALTER TABLE {knowledge_table} DROP COLUMN search_vector;
                 END IF;
@@ -385,7 +416,7 @@ class KnowledgeStore:
             f"""
             ALTER TABLE {knowledge_table} ADD COLUMN IF NOT EXISTS search_vector TSVECTOR
             GENERATED ALWAYS AS
-                (to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, search_text)) STORED
+                (to_tsvector('{text_search_config}'::regconfig, search_text)) STORED
             """,
             f"CREATE INDEX IF NOT EXISTS {KNOWLEDGE_TABLE}_evidence_id_idx "
             f"ON {knowledge_table} (evidence_id)",
@@ -652,15 +683,16 @@ class KnowledgeStore:
             )
 
         knowledge_table = self._table(KNOWLEDGE_TABLE)
+        text_search_config = self._text_search_config
         statement = text(
             f"""
             WITH query_values AS (
                 SELECT CAST(:query_embedding AS vector) AS embedding,
                        websearch_to_tsquery(
-                           '{TEXT_SEARCH_CONFIG}'::regconfig, :lexical_query
+                           '{text_search_config}'::regconfig, :lexical_query
                        ) AS lexical_query,
                        tsvector_to_array(
-                           to_tsvector('{TEXT_SEARCH_CONFIG}'::regconfig, :query)
+                           to_tsvector('{text_search_config}'::regconfig, :query)
                        ) AS query_terms
             ),
             vector_scored AS (
