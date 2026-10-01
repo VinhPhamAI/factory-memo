@@ -48,7 +48,7 @@ PUBLIC_TOOL_INPUT_FIELDS = {
         "k",
     },
     "get_knowledge": {"knowledge_id"},
-    "get_evidence": {"evidence_id"},
+    "get_evidence": {"evidence_id", "offset", "limit"},
 }
 SECRET_VALUE_RE = re.compile(
     r"(?i)(api[_-]?key|authorization)(\s*[:=]\s*)([^\s,;]+)"
@@ -327,6 +327,9 @@ def public_tool_output(
                     len(transcript) if isinstance(transcript, str) else 0
                 ),
                 "truncated": evidence.get("truncated"),
+                "offset": evidence.get("offset"),
+                "total_chars": evidence.get("total_chars"),
+                "next_offset": evidence.get("next_offset"),
             }.items()
             if value is not None
         }

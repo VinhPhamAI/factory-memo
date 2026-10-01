@@ -239,7 +239,10 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
             items = remaining
         if args.limit:
             items = items[: args.limit]
-        ingestion = KnowledgeIngestionService(extractor, store)
+        ingestion = KnowledgeIngestionService(
+            extractor, store,
+            extraction_metadata={"version": spec.extraction_version, **extractor.provenance},
+        )
         for start in range(0, len(items), args.batch_size):
             batch = items[start : start + args.batch_size]
             results = await ingestion.ingest_batch(

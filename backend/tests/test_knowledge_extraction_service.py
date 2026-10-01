@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import os
 import sys
@@ -44,6 +45,19 @@ class FailingLLM:
 
 
 class KnowledgeExtractionServiceTests(unittest.TestCase):
+    def test_provenance_identifies_prompt_and_settings_without_secrets(self) -> None:
+        client = SimpleNamespace(
+            model_name="test-model", max_tokens=8192, api_key="secret",
+            extra_body={"thinking": {"type": "disabled"}, "secret": "hidden"},
+        )
+        service = KnowledgeExtractionService(client, PROMPT)
+        self.assertEqual(service.provenance, {
+            "prompt_sha256": hashlib.sha256(PROMPT.encode("utf-8")).hexdigest(),
+            "model": "test-model", "max_tokens": 8192, "thinking": "disabled",
+        })
+        changed = KnowledgeExtractionService(client, PROMPT + "\nNew rule")
+        self.assertNotEqual(service.provenance["prompt_sha256"], changed.provenance["prompt_sha256"])
+
     @unittest.skipUnless(BENCHMARK_CSV.is_file(), "benchmark CSV is not available")
     def test_extracts_validated_items_from_benchmark_conversation(self) -> None:
         with BENCHMARK_CSV.open(newline="", encoding="utf-8-sig") as csv_file:

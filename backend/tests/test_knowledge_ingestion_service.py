@@ -123,6 +123,35 @@ EXTRACTED = KnowledgeExtractionResult(
 
 
 class KnowledgeIngestionServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_preserves_complete_unit_and_records_extraction_provenance(self) -> None:
+        claim = "Only after approval:\n1. Configure the destination.\n2. Enable export.\nVerify delivery; disable if 403 persists."
+        extracted = KnowledgeExtractionResult(knowledge_items=[KnowledgeItem(
+            subject="Audit export enablement", claim=claim, type=KnowledgeType.PROCEDURE,
+        )])
+        store = FakeStore()
+        provenance = {"version": "complete-units-v2", "prompt_sha256": "abc", "model": "test-model"}
+        metadata = {"doc_id": "doc-1", "extraction": {"version": "untrusted"}}
+        result = await KnowledgeIngestionService(
+            FakeExtractor(extracted), store, extraction_metadata=provenance,
+        ).ingest("source", metadata=metadata)
+        self.assertEqual(len(result.records), 1)
+        self.assertEqual(result.records[0].claim, claim)
+        self.assertEqual(store.conversations[result.evidence_id].metadata["extraction"], provenance)
+        self.assertEqual(store.conversations[result.evidence_id].metadata["doc_id"], "doc-1")
+        self.assertEqual(metadata["extraction"], {"version": "untrusted"})
+
+    async def test_failed_extraction_also_keeps_provenance(self) -> None:
+        store = FakeStore()
+        service = KnowledgeIngestionService(
+            FakeExtractor(KnowledgeExtractionError("bad JSON")), store,
+            extraction_metadata={"version": "v2"},
+        )
+        with self.assertRaises(KnowledgeExtractionError):
+            await service.ingest("source")
+        conversation, = store.conversations.values()
+        self.assertEqual(conversation.metadata["extraction"], {"version": "v2"})
+        self.assertEqual(conversation.status, ConversationStatus.FAILED)
+
     async def test_dataset_context_overrides_extracted_context(self) -> None:
         store = FakeStore()
         service = KnowledgeIngestionService(FakeExtractor(EXTRACTED), store)

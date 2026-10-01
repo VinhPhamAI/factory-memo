@@ -90,6 +90,8 @@ class KnowledgeBaseSpec:
     # Query-side task instruction for instruction-tuned embedding models.
     # Empty means queries are embedded as-is; documents never get this prefix.
     embedding_query_instruction: str = ""
+    # Human-readable extraction contract version; prompt hash tracks exact edits.
+    extraction_version: str = "1"
 
     def __post_init__(self) -> None:
         keys = [item.key for item in self.context_filters]

@@ -6,12 +6,12 @@ new name and register its SPEC below.
 
 from __future__ import annotations
 
-from backend.knowledge_bases import enterprise_rag, maintenance
+from backend.knowledge_bases import assetopsbench, enterprise_rag, maintenance
 from backend.knowledge_bases.base import ContextFilter, DatasetSpec, KnowledgeBaseSpec
 
 
 KNOWLEDGE_BASES: dict[str, KnowledgeBaseSpec] = {
-    spec.name: spec for spec in (maintenance.SPEC, enterprise_rag.SPEC)
+    spec.name: spec for spec in (maintenance.SPEC, enterprise_rag.SPEC, assetopsbench.SPEC)
 }
 
 

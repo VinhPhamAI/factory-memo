@@ -28,6 +28,7 @@ SOURCE_TYPES = (
 SPEC = KnowledgeBaseSpec.from_directory(
     Path(__file__).parent,
     description=__doc__,
+    extraction_version="complete-units-v2",
     dataset=DatasetSpec(
         CORPUS_FILE,
         transcript_column="document",

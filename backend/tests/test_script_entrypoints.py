@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import io
 from pathlib import Path
+from unittest import mock
 
-from backend.scripts.kb import build_parser, read_transcripts
+from backend.knowledge_bases import get_kb
+from backend.scripts.kb import build_parser, ingest, read_transcripts, reset
+from backend.src.services.knowledge_extraction import KnowledgeExtractionService
+from backend.tests.test_knowledge_extraction_service import FakeLLM
+from backend.tests.test_knowledge_ingestion_service import FakeStore
 
 
 class IngestEntrypointTest(unittest.TestCase):
@@ -86,6 +92,42 @@ class QueryEntrypointTest(unittest.TestCase):
     def test_reset_requires_explicit_confirmation_flag(self) -> None:
         args = build_parser().parse_args(["reset", "maintenance"])
         self.assertFalse(args.yes)
+
+
+class IngestionCommandTest(unittest.IsolatedAsyncioTestCase):
+    async def test_command_saves_active_extraction_version_and_prompt(self) -> None:
+        spec = get_kb("enterprise_rag")
+        extractor = KnowledgeExtractionService(FakeLLM('{"knowledge_items":[]}'), spec.extract_prompt)
+        store = FakeStore()
+        store.processed_metadata_values = mock.AsyncMock(return_value=set())
+        store.aclose = mock.AsyncMock()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "source.txt"
+            path.write_text("A document to extract.")
+            args = build_parser().parse_args(["ingest", "enterprise_rag", "--file", str(path)])
+            with (
+                mock.patch("backend.scripts.kb.KnowledgeExtractionService.from_env", return_value=extractor),
+                mock.patch("backend.scripts.kb.KnowledgeStore.for_kb", new_callable=mock.AsyncMock, return_value=store),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                self.assertEqual(await ingest(spec, args), 0)
+        conversation, = store.conversations.values()
+        self.assertEqual(conversation.metadata["extraction"], {
+            "version": "complete-units-v2", **extractor.provenance,
+        })
+        store.aclose.assert_awaited_once()
+
+    async def test_reset_requires_yes_and_targets_only_enterprise_database(self) -> None:
+        with (
+            mock.patch("backend.scripts.kb.drop_database", new_callable=mock.AsyncMock, return_value=True) as drop,
+            mock.patch("backend.scripts.kb.server_url_from_env", return_value="server"),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+            mock.patch("sys.stderr", new_callable=io.StringIO),
+        ):
+            self.assertEqual(await reset(get_kb("enterprise_rag"), confirmed=False), 2)
+            drop.assert_not_awaited()
+            self.assertEqual(await reset(get_kb("enterprise_rag"), confirmed=True), 0)
+            drop.assert_awaited_once_with("server", "kb_enterprise_rag")
 
 
 if __name__ == "__main__":

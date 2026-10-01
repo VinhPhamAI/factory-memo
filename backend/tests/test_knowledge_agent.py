@@ -17,7 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
-from pydantic import PrivateAttr
+from pydantic import PrivateAttr, ValidationError
 
 from backend.knowledge_bases import maintenance
 from backend.src.agents.agent.service import (
@@ -29,6 +29,7 @@ from backend.src.agents.agent.service import (
     public_tool_output,
 )
 from backend.src.agents.agent.state import merge_evidence
+from backend.src.agents.agent.tools import EvidenceIdInput
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import (
     KnowledgeRecord,
@@ -87,8 +88,12 @@ def _hit(record: KnowledgeRecord = RECORD, *, confident: bool = True) -> Knowled
 
 
 class FakeStore:
-    def __init__(self, *, fail: bool = False, hits: list[KnowledgeSearchHit] | None = None):
+    def __init__(
+        self, *, fail: bool = False, hits: list[KnowledgeSearchHit] | None = None,
+        transcript: str = "Expert: clean the lens before replacing the sensor.",
+    ):
         self.fail = fail
+        self.transcript = transcript
         self.hits = [_hit()] if hits is None else hits
         self.searches: list[tuple[str, Any, int]] = []
 
@@ -106,7 +111,7 @@ class FakeStore:
             return None
         return RawConversation(
             id=EVIDENCE_ID,
-            transcript="Expert: clean the lens before replacing the sensor.",
+            transcript=self.transcript,
             stated_by="Maintenance Expert",
             created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
         )
@@ -185,6 +190,18 @@ class MergeEvidenceTest(unittest.TestCase):
 
 
 class PublicTraceTest(unittest.TestCase):
+    def test_evidence_paging_is_validated_and_allowlisted(self) -> None:
+        for invalid in ({"offset": -1}, {"limit": 0}, {"limit": 6001}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
+                EvidenceIdInput(evidence_id=EVIDENCE_ID, **invalid)
+        self.assertEqual(
+            public_tool_input("get_evidence", {
+                "evidence_id": str(EVIDENCE_ID), "offset": 6000, "limit": 2000,
+                "private": "hidden",
+            }),
+            {"evidence_id": str(EVIDENCE_ID), "offset": 6000, "limit": 2000},
+        )
+
     def test_tool_input_is_allowlisted(self) -> None:
         self.assertEqual(
             public_tool_input(
@@ -238,6 +255,40 @@ class PublicTraceTest(unittest.TestCase):
 
 
 class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_reads_long_evidence_in_pages_without_exposing_it_in_trace(self) -> None:
+        source = "Đ" * 6000 + "β" * 1500 + "Final rollback condition."
+        calls = [
+            AIMessage(content="", tool_calls=[{
+                "name": "get_evidence", "id": f"page_{i}",
+                "args": {"evidence_id": str(EVIDENCE_ID), **args},
+            }])
+            for i, args in enumerate(({}, {"offset": 6000, "limit": 1500}, {"offset": 7500}))
+        ]
+        service, model = _service(FakeStore(transcript=source), *calls, AIMessage(content="Read."))
+        events = [e async for e in service.start_stream("Read the source", thread_id="pages").events]
+        pages = [_tool_payload(model.calls[i][-1])["evidence"] for i in (1, 2, 3)]
+        self.assertEqual("".join(p["transcript"] for p in pages), source)
+        self.assertEqual([p["next_offset"] for p in pages], [6000, 7500, None])
+        self.assertTrue(all(p["total_chars"] == len(source) for p in pages))
+        traces = [e.data["output"]["evidence"] for e in events if e.event == "tool.completed"]
+        self.assertEqual([p["offset"] for p in traces], [0, 6000, 7500])
+        self.assertNotIn("Final rollback condition", str(traces))
+        self.assertNotIn("transcript", {k for p in traces for k in p})
+
+    async def test_evidence_past_end_terminates_with_empty_page(self) -> None:
+        service, model = _service(
+            FakeStore(transcript="short"),
+            AIMessage(content="", tool_calls=[{
+                "name": "get_evidence", "id": "past_end",
+                "args": {"evidence_id": str(EVIDENCE_ID), "offset": 100},
+            }]),
+            AIMessage(content="Done."),
+        )
+        await service.ask("Read")
+        page = _tool_payload(model.calls[1][-1])["evidence"]
+        self.assertEqual(page["transcript"], "")
+        self.assertIsNone(page["next_offset"])
+
     async def test_answers_with_validated_citation(self) -> None:
         store = FakeStore()
         service, model = _service(

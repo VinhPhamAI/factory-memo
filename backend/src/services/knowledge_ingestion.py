@@ -73,9 +73,13 @@ def _error_text(exc: BaseException) -> str:
 class KnowledgeIngestionService:
     """Store transcripts as evidence, extract knowledge, then embed and write it."""
 
-    def __init__(self, extractor: SupportsExtract, store: SupportsKnowledgeWrite):
+    def __init__(
+        self, extractor: SupportsExtract, store: SupportsKnowledgeWrite,
+        *, extraction_metadata: dict[str, Any] | None = None,
+    ):
         self._extractor = extractor
         self._store = store
+        self._extraction_metadata = dict(extraction_metadata or {})
 
     async def ingest(
         self,
@@ -114,8 +118,12 @@ class KnowledgeIngestionService:
             if not item.transcript or not item.transcript.strip():
                 results[index] = ValueError("transcript must not be empty")
                 continue
+            metadata = dict(item.metadata or {})
+            if self._extraction_metadata:
+                # Dataset metadata cannot spoof the active extraction settings.
+                metadata["extraction"] = dict(self._extraction_metadata)
             conversations[index] = await self._store.add_conversation(
-                item.transcript.strip(), stated_by=item.stated_by, metadata=item.metadata
+                item.transcript.strip(), stated_by=item.stated_by, metadata=metadata
             )
 
         semaphore = asyncio.Semaphore(concurrency)

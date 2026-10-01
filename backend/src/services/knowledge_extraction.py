@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -73,6 +74,21 @@ class KnowledgeExtractionService:
             )
         self._client = client
         self._prompt_template = prompt_template
+
+    @property
+    def provenance(self) -> dict[str, Any]:
+        """Non-secret settings identifying the extraction that produced a row."""
+        details: dict[str, Any] = {
+            "prompt_sha256": hashlib.sha256(self._prompt_template.encode("utf-8")).hexdigest(),
+        }
+        for name, attribute in (("model", "model_name"), ("max_tokens", "max_tokens")):
+            value = getattr(self._client, attribute, None)
+            if value is not None:
+                details[name] = value
+        thinking = (getattr(self._client, "extra_body", None) or {}).get("thinking")
+        if isinstance(thinking, dict) and "type" in thinking:
+            details["thinking"] = thinking["type"]
+        return details
 
     @classmethod
     def from_env(
