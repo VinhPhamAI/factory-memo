@@ -19,8 +19,9 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import PrivateAttr, ValidationError
 
-from backend.knowledge_bases import maintenance
+from backend.knowledge_bases import Retrieval, maintenance
 from backend.src.agents.agent.service import (
+    DocumentCitation,
     InvalidKnowledgeCitation,
     KnowledgeAgentService,
     KnowledgeAgentUnavailable,
@@ -30,6 +31,7 @@ from backend.src.agents.agent.service import (
 )
 from backend.src.agents.agent.state import merge_evidence
 from backend.src.agents.agent.tools import EvidenceIdInput
+from backend.src.agents.rag.store import ChunkHit, SearchMode
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import (
     KnowledgeRecord,
@@ -471,6 +473,143 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first[-1].event, "run.completed")
         with self.assertRaises(InvalidKnowledgeCitation):
             [e async for e in service.start_stream("again?", thread_id="t").events]
+
+
+class FakeDocumentStore:
+    """Two passages of conversation 12 and one of conversation 3."""
+
+    def __init__(self) -> None:
+        self.chunks = {
+            "12": [
+                ChunkHit("12#0", "12", 0, "", "Expert: clean the lens first.", 0.0),
+                ChunkHit("12#1", "12", 1, "", "Expert: then recalibrate.", 0.0),
+            ],
+            "3": [ChunkHit("3#0", "3", 0, "", "Expert: check the cable.", 0.0)],
+        }
+        self.searches: list[tuple[str, SearchMode, int]] = []
+
+    async def search_documents(self, query, *, mode, k):
+        self.searches.append((query, mode, k))
+        return [
+            ChunkHit("12#0", "12", 0, "", "Expert: clean the lens first.", 0.032, 1, 2),
+            ChunkHit("3#0", "3", 0, "", "Expert: check the cable.", 0.016, 2, None),
+        ][:k]
+
+    async def get_document(self, doc_id):
+        return list(self.chunks.get(doc_id, []))
+
+
+def _call(name: str, call_id: str = "call_1", **args: Any) -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": call_id}])
+
+
+def _document_service(
+    store: FakeDocumentStore, *responses: AIMessage
+) -> tuple[KnowledgeAgentService, ScriptedChatModel]:
+    model = ScriptedChatModel(responses=list(responses))
+    service = KnowledgeAgentService(
+        store=store,
+        model=model,
+        system_prompt="Answer from the documents.",
+        timeout_seconds=10,
+        retrieval=Retrieval.DOCUMENTS,
+    )
+    return service, model
+
+
+class DocumentCitationTest(unittest.TestCase):
+    def test_resolves_document_markers_against_returned_documents(self) -> None:
+        evidence = [{"kind": "document", "doc_id": "12", "title": None}]
+        self.assertEqual(
+            citations_from_evidence("Clean it [D:12]. Again [D:12].", evidence),
+            (DocumentCitation(doc_id="12", title=None),),
+        )
+        with self.assertRaises(InvalidKnowledgeCitation):
+            citations_from_evidence("Replace it [D:7].", evidence)
+
+    def test_document_trace_omits_passage_text(self) -> None:
+        self.assertEqual(
+            public_tool_input("search_documents", {"query": "lens", "k": 3, "x": "hidden"}),
+            {"query": "lens", "k": 3},
+        )
+        output = public_tool_output(
+            "search_documents",
+            {
+                "ok": True,
+                "documents": [
+                    {
+                        "doc_id": "12",
+                        "chunk_id": "12#0",
+                        "title": "",
+                        "text": "private passage",
+                        "retrieval": {"hybrid_score": 0.03, "vector_rank": 1, "lexical_rank": None},
+                    }
+                ],
+            },
+        )
+        self.assertNotIn("private passage", str(output))
+        self.assertEqual(output["documents"][0]["retrieval"], {"hybrid_score": 0.03, "vector_rank": 1})
+        output = public_tool_output(
+            "get_document",
+            {"ok": True, "document": {"doc_id": "12", "passages": ["private passage"], "start": 0}},
+        )
+        self.assertNotIn("private passage", str(output))
+        self.assertEqual(output["document"]["returned_chars"], 15)
+
+
+class DocumentAgentServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_answers_with_document_citations(self) -> None:
+        store = FakeDocumentStore()
+        service, model = _document_service(
+            store,
+            _call("search_documents", query="Why is the rear sensor unstable?"),
+            _call("get_document", "call_2", doc_id="12"),
+            AIMessage(content="Clean the lens, then recalibrate [D:12]."),
+        )
+        answer = await service.ask("Rear sensor unstable?")
+
+        self.assertEqual(answer.citations, (DocumentCitation(doc_id="12", title=None),))
+        self.assertEqual(store.searches, [("Why is the rear sensor unstable?", SearchMode.HYBRID, 5)])
+        found = _tool_payload(model.calls[1][-1])
+        self.assertEqual([item["doc_id"] for item in found["documents"]], ["12", "3"])
+        self.assertEqual(found["documents"][0]["retrieval"]["lexical_rank"], 2)
+        self.assertEqual(found["searches_remaining"], 2)
+        document = _tool_payload(model.calls[2][-1])["document"]
+        self.assertEqual(
+            document["passages"], ["Expert: clean the lens first.", "Expert: then recalibrate."]
+        )
+        self.assertIsNone(document["next_start"])
+
+    async def test_stream_trace_and_logs_omit_document_text(self) -> None:
+        service, _ = _document_service(
+            FakeDocumentStore(),
+            _call("search_documents", query="lens"),
+            AIMessage(content="Clean the lens [D:12]."),
+        )
+        with self.assertLogs("backend.src.agents.agent.service", level="INFO") as logs:
+            events = [
+                event.to_dict()
+                async for event in service.start_stream("lens?", thread_id="t").events
+            ]
+        completed = next(event for event in events if event["type"] == "tool.completed")
+        self.assertEqual(completed["data"]["output"]["count"], 2)
+        self.assertNotIn("clean the lens first", json.dumps(events))
+        self.assertNotIn("clean the lens first", "\n".join(logs.output))
+        citations = next(event for event in events if event["type"] == "answer.citations")
+        self.assertEqual(citations["data"]["citations"], [{"doc_id": "12", "title": None}])
+
+    async def test_missing_document_and_budget(self) -> None:
+        store = FakeDocumentStore()
+        service, model = _document_service(
+            store,
+            _call("get_document", doc_id="99"),
+            *(_call("search_documents", f"call_{i}", query=f"try {i}") for i in range(4)),
+            AIMessage(content="The knowledge base has no answer."),
+        )
+        await service.ask("Unknown?")
+        self.assertEqual(_tool_payload(model.calls[1][-1])["error"], "document_not_found")
+        self.assertEqual(len(store.searches), 3)
+        self.assertEqual(_tool_payload(model.calls[5][-1])["error"], "search_budget_exhausted")
 
 
 if __name__ == "__main__":

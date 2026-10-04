@@ -7,15 +7,31 @@ from backend.knowledge_bases.base import (
     ContextFilter,
     DatasetSpec,
     KnowledgeBaseSpec,
+    Retrieval,
+    RetrievalQuestions,
 )
+from backend.src.agents.rag.chunking import ChunkingConfig
 
+
+DATA = DATA_DIR / "maintainance"
 
 SPEC = KnowledgeBaseSpec.from_directory(
     Path(__file__).parent,
     description=__doc__,
     dataset=DatasetSpec(
-        DATA_DIR / "expert_knowledge_extraction_benchmark_20_conversations_en.csv"
+        DATA / "expert_knowledge_extraction_benchmark_20_conversations_en.csv",
+        id_column="case_id",
     ),
+    # Conversations are searched directly: each is short (44-172 words), so
+    # one chunk per conversation. Set Retrieval.KNOWLEDGE to search records
+    # extracted by extract.md instead (answered with agent.md).
+    retrieval=Retrieval.DOCUMENTS,
+    chunking=ChunkingConfig(),
+    retrieval_questions=RetrievalQuestions(
+        DATA / "retrieval_evaluation_questions_answers.csv",
+        gold_column="gold_case_ids",
+    ),
+    # Knowledge retrieval only.
     context_filters=(
         ContextFilter(
             "machine_id",

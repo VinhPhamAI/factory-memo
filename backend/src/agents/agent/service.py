@@ -19,7 +19,7 @@ from langgraph.types import Overwrite
 from openai import APIError
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.knowledge_bases.base import ContextFilter, KnowledgeBaseSpec
+from backend.knowledge_bases.base import ContextFilter, KnowledgeBaseSpec, Retrieval
 from backend.src.agents.agent.config import (
     RECURSION_LIMIT,
     RUN_TIMEOUT_SECONDS,
@@ -27,6 +27,7 @@ from backend.src.agents.agent.config import (
 )
 from backend.src.agents.agent.graph import build_graph
 from backend.src.agents.agent.state import Evidence, KnowledgeAgentContext
+from backend.src.agents.rag.store import DocumentStore
 from backend.src.storage import KnowledgeStore, StorageError
 
 
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 CITATION_RE = re.compile(
     r"\[K:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\]"
 )
+DOCUMENT_CITATION_RE = re.compile(r"\[D:([^\]\s]{1,200})\]")
 LOG_CONTENT_LIMIT = 2_000
 STREAM_EVENT_VERSION = 1
 PUBLIC_TRACE_STRING_LIMIT = 2_000
@@ -49,7 +51,11 @@ PUBLIC_TOOL_INPUT_FIELDS = {
     },
     "get_knowledge": {"knowledge_id"},
     "get_evidence": {"evidence_id", "offset", "limit"},
+    "search_documents": {"query", "k"},
+    "get_document": {"doc_id", "start"},
 }
+# Source text in tool payloads: kept out of logs and traces.
+SOURCE_TEXT_KEYS = frozenset({"transcript", "text", "passages"})
 SECRET_VALUE_RE = re.compile(
     r"(?i)(api[_-]?key|authorization)(\s*[:=]\s*)([^\s,;]+)"
 )
@@ -104,7 +110,7 @@ class KnowledgeAgentUpstreamError(KnowledgeAgentError):
 
 
 class InvalidKnowledgeCitation(KnowledgeAgentError):
-    """The model cited a knowledge id that no tool returned."""
+    """The model cited a knowledge or document id that no tool returned."""
 
 
 @dataclass(frozen=True)
@@ -118,9 +124,22 @@ class KnowledgeCitation:
 
 
 @dataclass(frozen=True)
+class DocumentCitation:
+    doc_id: str
+    title: str | None
+
+
+Citation = KnowledgeCitation | DocumentCitation
+
+
+def citation_from_dict(item: dict[str, Any]) -> Citation:
+    return DocumentCitation(**item) if "doc_id" in item else KnowledgeCitation(**item)
+
+
+@dataclass(frozen=True)
 class KnowledgeAnswer:
     answer: str
-    citations: tuple[KnowledgeCitation, ...]
+    citations: tuple[Citation, ...]
     request_id: str = ""
 
 
@@ -271,6 +290,20 @@ def _public_knowledge_summary(
     }
 
 
+def _public_document_summary(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    summary = {key: item.get(key) for key in ("doc_id", "chunk_id", "title")}
+    retrieval = item.get("retrieval")
+    if isinstance(retrieval, dict):
+        summary["retrieval"] = {
+            key: retrieval.get(key)
+            for key in ("hybrid_score", "vector_rank", "lexical_rank")
+            if retrieval.get(key) is not None
+        }
+    return {key: _public_value(value) for key, value in summary.items() if value is not None}
+
+
 def public_tool_output(
     tool_name: str, payload: Any, *, context_fields: Collection[str] = ()
 ) -> dict[str, Any]:
@@ -333,6 +366,31 @@ def public_tool_output(
             }.items()
             if value is not None
         }
+    elif tool_name == "search_documents":
+        documents = payload.get("documents")
+        items = documents if isinstance(documents, list) else []
+        result.update(
+            {"count": len(items), "documents": [_public_document_summary(item) for item in items]}
+        )
+    elif tool_name == "get_document":
+        document = payload.get("document")
+        document = document if isinstance(document, dict) else {}
+        passages = document.get("passages")
+        passages = passages if isinstance(passages, list) else []
+        result["document"] = {
+            key: _public_value(value)
+            for key, value in {
+                "doc_id": document.get("doc_id"),
+                "title": document.get("title"),
+                "returned_passages": len(passages),
+                "returned_chars": sum(len(item) for item in passages if isinstance(item, str)),
+                "start": document.get("start"),
+                "total_passages": document.get("total_passages"),
+                "truncated": document.get("truncated"),
+                "next_start": document.get("next_start"),
+            }.items()
+            if value is not None
+        }
     return result
 
 
@@ -379,8 +437,10 @@ def _diagnostic(exc: BaseException) -> tuple[str, str]:
 
 
 def _sanitize_tool_payload(value: Any, *, key: str | None = None) -> Any:
-    if key == "transcript" and isinstance(value, str):
+    if key in SOURCE_TEXT_KEYS and isinstance(value, str):
         return f"<omitted {len(value)} chars>"
+    if key in SOURCE_TEXT_KEYS and isinstance(value, list):
+        return f"<omitted {len(value)} items>"
     if isinstance(value, dict):
         return {
             str(item_key): _sanitize_tool_payload(item_value, key=str(item_key))
@@ -422,10 +482,35 @@ def _tool_status(tool_name: str) -> str:
     return "searching" if tool_name.startswith("search_") else "reading"
 
 
-def citations_from_evidence(
-    answer: str, evidence: list[Evidence]
-) -> tuple[KnowledgeCitation, ...]:
-    """Resolve [K:<id>] markers against knowledge the tools actually returned."""
+def citations_from_evidence(answer: str, evidence: list[Evidence]) -> tuple[Citation, ...]:
+    """Resolve [K:<id>] and [D:<id>] markers against what the tools actually returned."""
+    return (
+        _knowledge_citations(answer, evidence)
+        + _document_citations(answer, evidence)
+    )
+
+
+def _document_citations(answer: str, evidence: list[Evidence]) -> tuple[DocumentCitation, ...]:
+    documents = {
+        str(item["doc_id"]): item
+        for item in evidence
+        if item.get("kind") == "document" and item.get("doc_id") is not None
+    }
+    ordered_ids: list[str] = []
+    for doc_id in DOCUMENT_CITATION_RE.findall(answer):
+        if doc_id not in documents:
+            raise InvalidKnowledgeCitation(
+                f"Citation D:{doc_id} is not present in retrieved evidence"
+            )
+        if doc_id not in ordered_ids:
+            ordered_ids.append(doc_id)
+    return tuple(
+        DocumentCitation(doc_id=doc_id, title=documents[doc_id].get("title"))
+        for doc_id in ordered_ids
+    )
+
+
+def _knowledge_citations(answer: str, evidence: list[Evidence]) -> tuple[KnowledgeCitation, ...]:
     records = {
         str(item["knowledge_id"]).lower(): item
         for item in evidence
@@ -459,13 +544,14 @@ class KnowledgeAgentService:
     def __init__(
         self,
         *,
-        store: KnowledgeStore,
+        store: KnowledgeStore | DocumentStore,
         model: Any,
         system_prompt: str,
         timeout_seconds: float = RUN_TIMEOUT_SECONDS,
         checkpointer: InMemorySaver | None = None,
         context_filters: Sequence[ContextFilter] = (),
         trace_context_keys: Collection[str] = (),
+        retrieval: Retrieval = Retrieval.KNOWLEDGE,
     ) -> None:
         self._store = store
         self._model = model
@@ -479,21 +565,24 @@ class KnowledgeAgentService:
             model,
             system_prompt=system_prompt,
             context_filters=context_filters,
+            retrieval=retrieval,
             checkpointer=self._checkpointer,
         )
 
     @classmethod
     def from_kb(
-        cls, spec: KnowledgeBaseSpec, store: KnowledgeStore
+        cls, spec: KnowledgeBaseSpec, store: KnowledgeStore | DocumentStore
     ) -> "KnowledgeAgentService":
         """Agent with the knowledge base's prompt over its (already open) store."""
 
+        knowledge = spec.retrieval is Retrieval.KNOWLEDGE
         return cls(
             store=store,
             model=build_chat_model_from_env(),
             system_prompt=spec.agent_prompt,
-            context_filters=spec.context_filters,
-            trace_context_keys=spec.trace_context_keys,
+            context_filters=spec.context_filters if knowledge else (),
+            trace_context_keys=spec.trace_context_keys if knowledge else (),
+            retrieval=spec.retrieval,
         )
 
     def start_stream(self, query: str, *, thread_id: str) -> AgentStreamSession:
@@ -774,7 +863,7 @@ class KnowledgeAgentService:
         thread_id = uuid4().hex
         session = self.start_stream(query, thread_id=thread_id)
         answer = ""
-        citations: tuple[KnowledgeCitation, ...] = ()
+        citations: tuple[Citation, ...] = ()
         completed = False
         try:
             async for event in session.events:
@@ -784,7 +873,7 @@ class KnowledgeAgentService:
                     answer = ""
                 elif event.event == "answer.citations":
                     citations = tuple(
-                        KnowledgeCitation(**item)
+                        citation_from_dict(item)
                         for item in event.data.get("citations") or ()
                     )
                 elif event.event == "run.completed":

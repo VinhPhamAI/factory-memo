@@ -7,7 +7,13 @@ new name and register its SPEC below.
 from __future__ import annotations
 
 from backend.knowledge_bases import assetopsbench, enterprise_rag, maintenance
-from backend.knowledge_bases.base import ContextFilter, DatasetSpec, KnowledgeBaseSpec
+from backend.knowledge_bases.base import (
+    ContextFilter,
+    DatasetSpec,
+    KnowledgeBaseSpec,
+    Retrieval,
+    RetrievalQuestions,
+)
 
 
 KNOWLEDGE_BASES: dict[str, KnowledgeBaseSpec] = {
@@ -25,4 +31,12 @@ def get_kb(name: str) -> KnowledgeBaseSpec:
         ) from None
 
 
-__all__ = ["KNOWLEDGE_BASES", "ContextFilter", "DatasetSpec", "KnowledgeBaseSpec", "get_kb"]
+__all__ = [
+    "KNOWLEDGE_BASES",
+    "ContextFilter",
+    "DatasetSpec",
+    "KnowledgeBaseSpec",
+    "Retrieval",
+    "RetrievalQuestions",
+    "get_kb",
+]

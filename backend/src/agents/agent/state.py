@@ -8,15 +8,19 @@ from typing import Annotated, Any
 
 from langchain.agents import AgentState
 
+from backend.src.agents.rag.store import DocumentStore
 from backend.src.storage import KnowledgeStore
 
 
 Evidence = dict[str, Any]
 
 
+_IDENTITY_FIELDS = {"knowledge": "knowledge_id", "document": "doc_id"}
+
+
 def _evidence_key(item: Evidence) -> tuple[str, str]:
     kind = str(item.get("kind", "unknown"))
-    identity = item.get("knowledge_id") if kind == "knowledge" else item.get("evidence_id")
+    identity = item.get(_IDENTITY_FIELDS.get(kind, "evidence_id"))
     return kind, str(identity or "")
 
 
@@ -46,6 +50,7 @@ class KnowledgeAgentState(AgentState):
 
 @dataclass(frozen=True)
 class KnowledgeAgentContext:
-    store: KnowledgeStore
+    # KnowledgeStore for knowledge retrieval, DocumentStore for document retrieval.
+    store: KnowledgeStore | DocumentStore
     now: datetime
     request_id: str = ""

@@ -7,8 +7,13 @@ Examples:
     uv run python -m backend.scripts.kb ingest enterprise_rag --limit 20 --batch-size 8
     uv run python -m backend.scripts.kb ingest maintenance --file transcript.txt
     uv run python -m backend.scripts.kb query maintenance "How do I fix the unstable sensor on M01?"
+    uv run python -m backend.scripts.kb evaluate maintenance
     uv run python -m backend.scripts.kb reembed maintenance
     uv run python -m backend.scripts.kb reset maintenance --yes
+
+Knowledge bases with retrieval="knowledge" extract knowledge records with an
+LLM at ingest; retrieval="documents" chunks and embeds the sources as they are
+(no LLM), and `evaluate` scores that retrieval against labelled questions.
 """
 
 from __future__ import annotations
@@ -20,14 +25,27 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
 from dotenv import load_dotenv
 
 from backend.knowledge_bases import KNOWLEDGE_BASES, KnowledgeBaseSpec, get_kb
-from backend.knowledge_bases.base import PROJECT_ROOT
+from backend.knowledge_bases.base import DATA_DIR, PROJECT_ROOT, Retrieval, RetrievalQuestions
+from backend.knowledge_bases.stores import open_document_store, open_store
 from backend.src.agents.agent import KnowledgeAgentError, KnowledgeAgentService
+from backend.src.agents.agent.service import DocumentCitation
+from backend.src.agents.rag.chunking import Document
+from backend.src.agents.rag.evaluation import (
+    Qrels,
+    format_table,
+    retrieve,
+    save_run,
+    score_modes,
+)
+from backend.src.agents.rag.indexing import index_documents
+from backend.src.agents.rag.store import SearchMode
 from backend.src.services.knowledge_extraction import KnowledgeExtractionService
 from backend.src.services.knowledge_ingestion import (
     IngestionInput,
@@ -48,6 +66,8 @@ DEFAULT_STATED_BY_COLUMN = "stated_by"
 # Headroom for reasoning models, whose thinking tokens count against max_tokens.
 EXTRACTION_MAX_TOKENS = 8192
 TEXT_SUFFIXES = {".txt", ".md"}
+EVAL_RUNS_DIR = DATA_DIR / "kb_eval"
+EVAL_K_VALUES = (1, 3, 5, 10)
 
 
 @dataclass(frozen=True)
@@ -115,6 +135,55 @@ def read_transcripts(
             )
 
 
+def load_retrieval_questions(questions: RetrievalQuestions) -> tuple[dict[str, str], Qrels]:
+    """Questions by id and their gold document ids (qrels), from a labelled CSV."""
+
+    queries: dict[str, str] = {}
+    qrels: Qrels = {}
+    with questions.path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        columns = (questions.id_column, questions.question_column, questions.gold_column)
+        if missing := [column for column in columns if column not in (reader.fieldnames or [])]:
+            raise ValueError(f"{questions.path.name} has no column(s) {', '.join(missing)}")
+        for row_number, row in enumerate(reader, start=2):
+            qid = (row[questions.id_column] or "").strip()
+            question = (row[questions.question_column] or "").strip()
+            gold = [
+                doc_id.strip()
+                for doc_id in (row[questions.gold_column] or "").split(questions.gold_separator)
+                if doc_id.strip()
+            ]
+            if not qid or not question or not gold:
+                raise ValueError(
+                    f"{questions.path.name} row {row_number} needs an id, a question, "
+                    "and gold ids"
+                )
+            if qid in queries:
+                raise ValueError(f"{questions.path.name} repeats question id {qid!r}")
+            queries[qid] = question
+            qrels[qid] = {doc_id: 1 for doc_id in gold}
+    return queries, qrels
+
+
+def to_documents(
+    items: list[TranscriptInput], *, id_column: str | None, title_column: str | None
+) -> list[Document]:
+    """Documents keyed by the dataset id column (else the input label)."""
+
+    documents = [
+        Document(
+            id=item.metadata.get(id_column, item.label) if id_column else item.label,
+            text=item.transcript,
+            title=item.metadata.get(title_column, "") if title_column else "",
+        )
+        for item in items
+    ]
+    ids = [document.id for document in documents]
+    if duplicate := next((doc_id for doc_id in ids if ids.count(doc_id) > 1), None):
+        raise ValueError(f"Document id {duplicate!r} appears more than once")
+    return documents
+
+
 def _positive_int(raw: str) -> int:
     value = int(raw)
     if value <= 0:
@@ -128,7 +197,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("list", help="List registered knowledge bases")
 
-    ingest = commands.add_parser("ingest", help="Extract and store knowledge from transcripts")
+    ingest = commands.add_parser(
+        "ingest", help="Extract knowledge from transcripts, or index them for document retrieval"
+    )
     ingest.add_argument("kb")
     ingest.add_argument(
         "--file",
@@ -167,6 +238,11 @@ def build_parser() -> argparse.ArgumentParser:
         "(by default they are skipped, so an interrupted run can continue)",
     )
     ingest.add_argument(
+        "--reindex",
+        action="store_true",
+        help="Document retrieval: drop the chunk table and index everything again",
+    )
+    ingest.add_argument(
         "--fail-fast",
         action="store_true",
         help="Stop after the batch with the first failed transcript instead of continuing",
@@ -175,6 +251,28 @@ def build_parser() -> argparse.ArgumentParser:
     query = commands.add_parser("query", help="Ask the knowledge agent one question")
     query.add_argument("kb")
     query.add_argument("question")
+
+    evaluate = commands.add_parser(
+        "evaluate",
+        help="Recall/MRR/nDCG of document retrieval on the knowledge base's labelled questions",
+    )
+    evaluate.add_argument("kb")
+    evaluate.add_argument(
+        "--modes",
+        nargs="+",
+        choices=[mode.value for mode in SearchMode],
+        default=[mode.value for mode in SearchMode],
+    )
+    evaluate.add_argument("--k-values", type=_positive_int, nargs="+", default=list(EVAL_K_VALUES))
+    evaluate.add_argument(
+        "--query-instruction",
+        help="Override the embedding query instruction (\"\" disables it), to compare prompts",
+    )
+    evaluate.add_argument(
+        "--output",
+        type=Path,
+        help=f"Run JSON (default: {EVAL_RUNS_DIR.relative_to(PROJECT_ROOT)}/<kb>/)",
+    )
 
     reembed = commands.add_parser(
         "reembed", help="Recompute embeddings after changing EMBEDDING_MODEL / EMBEDDING_DIM"
@@ -221,6 +319,11 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
     if not items:
         raise ValueError(f"Input file contains no transcripts: {path}")
     id_column = dataset.id_column if dataset else None
+    if spec.retrieval is Retrieval.DOCUMENTS:
+        documents = to_documents(
+            items, id_column=id_column, title_column=dataset.title_column if dataset else None
+        )
+        return await index_kb_documents(spec, documents[: args.limit], reindex=args.reindex)
     context_columns = dataset.context_columns if dataset else ()
 
     extractor = KnowledgeExtractionService.from_env(
@@ -290,8 +393,92 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+async def index_kb_documents(
+    spec: KnowledgeBaseSpec, documents: list[Document], *, reindex: bool = False
+) -> int:
+    """Chunk and embed the documents into spec.document_table; already indexed ids are skipped."""
+
+    store = await open_document_store(spec)
+    started = time.perf_counter()
+    try:
+        added = await index_documents(store, documents, spec.chunking, reindex=reindex)
+        total = await store.count_chunks()
+    finally:
+        await store.aclose()
+    print(
+        f"[{spec.name}] Indexing complete: {added} chunks added, {total} in "
+        f"{spec.database}.{spec.document_table} ({time.perf_counter() - started:.1f}s)"
+    )
+    return 0
+
+
+async def evaluate(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
+    if spec.retrieval is not Retrieval.DOCUMENTS:
+        raise ValueError(
+            f"{spec.name!r} uses {spec.retrieval.value} retrieval; evaluate needs documents"
+        )
+    if spec.retrieval_questions is None:
+        raise ValueError(f"{spec.name!r} has no retrieval_questions")
+    queries, qrels = load_retrieval_questions(spec.retrieval_questions)
+    modes = [SearchMode(mode) for mode in args.modes]
+    k_values = sorted({1, *args.k_values})
+    store = await open_document_store(spec, query_instruction=args.query_instruction)
+    try:
+        chunks = await store.count_chunks()
+        if not chunks:
+            raise ValueError(f"{spec.document_table} is empty; run `kb ingest {spec.name}` first")
+        indexed = await store.indexed_doc_ids()
+        index_config = await store.config()
+        hits = await retrieve(store, queries, modes, k=max(k_values))
+    finally:
+        await store.aclose()
+
+    if unknown := sorted({doc for gold in qrels.values() for doc in gold} - indexed):
+        print(f"Warning: gold ids not in the index: {', '.join(unknown)}", file=sys.stderr)
+    summary, per_query = score_modes(qrels, hits, k_values)
+    print(
+        format_table(
+            f"[{spec.name}] {len(queries)} questions, {len(indexed)} documents, "
+            f"{chunks} chunks ({spec.document_table})",
+            summary,
+            k_values,
+        )
+    )
+    # Questions whose top result is not a gold document, per mode.
+    for mode in modes:
+        misses = [qid for qid, metrics in per_query[mode.value].items() if metrics["MRR@1"] < 1]
+        listed = f": {', '.join(misses)}" if misses else ""
+        print(f"  {mode.value}: top result not gold for {len(misses)} questions{listed}")
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    output = args.output or EVAL_RUNS_DIR / spec.name / f"{spec.document_table}_{timestamp}.json"
+    save_run(
+        output,
+        queries=queries,
+        qrels=qrels,
+        hits=hits,
+        summary=summary,
+        per_query=per_query,
+        kb=spec.name,
+        questions=str(spec.retrieval_questions.path.relative_to(PROJECT_ROOT))
+        if spec.retrieval_questions.path.is_relative_to(PROJECT_ROOT)
+        else str(spec.retrieval_questions.path),
+        table=spec.document_table,
+        chunks=chunks,
+        index_config=index_config,
+        query_instruction=(
+            spec.embedding_query_instruction
+            if args.query_instruction is None
+            else args.query_instruction
+        ),
+        k_values=k_values,
+    )
+    print(f"Saved {output}")
+    return 0
+
+
 async def query(spec: KnowledgeBaseSpec, question: str) -> int:
-    store = await KnowledgeStore.for_kb(spec)
+    store = await open_store(spec)
     try:
         answer = await KnowledgeAgentService.from_kb(spec, store).ask(question)
     finally:
@@ -301,6 +488,10 @@ async def query(spec: KnowledgeBaseSpec, question: str) -> int:
     if answer.citations:
         print("\nSources:")
         for citation in answer.citations:
+            if isinstance(citation, DocumentCitation):
+                title = f" {citation.title}" if citation.title else ""
+                print(f"- [D:{citation.doc_id}]{title}")
+                continue
             print(
                 f"- [K:{citation.knowledge_id}] ({citation.type}) "
                 f"{citation.subject}: {citation.claim} "
@@ -310,6 +501,13 @@ async def query(spec: KnowledgeBaseSpec, question: str) -> int:
 
 
 async def reembed(spec: KnowledgeBaseSpec) -> int:
+    if spec.retrieval is Retrieval.DOCUMENTS:
+        # Chunks keep no copy outside the index: rebuild it from the dataset.
+        print(
+            f"[{spec.name}] Document retrieval: run `kb ingest {spec.name} --reindex`",
+            file=sys.stderr,
+        )
+        return 2
     # init_schema would reject a column whose size no longer matches EMBEDDING_DIM.
     store = await KnowledgeStore.for_kb(spec, init_schema=False)
     try:
@@ -344,6 +542,8 @@ async def run(args: argparse.Namespace) -> int:
         return await ingest(spec, args)
     if args.command == "query":
         return await query(spec, args.question)
+    if args.command == "evaluate":
+        return await evaluate(spec, args)
     if args.command == "reembed":
         return await reembed(spec)
     return await reset(spec, confirmed=args.yes)

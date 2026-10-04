@@ -13,12 +13,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.knowledge_bases import KnowledgeBaseSpec
+from backend.knowledge_bases.stores import open_store
 from backend.src.agents.agent.service import (
     STREAM_EVENT_VERSION,
     AgentStreamEvent,
     KnowledgeAgentError,
     KnowledgeAgentService,
 )
+from backend.src.agents.rag.store import DocumentStore
 from backend.src.storage import KnowledgeStore, StorageError
 from backend.src.storage.databases import DatabaseAdminError
 
@@ -38,7 +40,7 @@ class KnowledgeAgentPool:
         self._specs = dict(specs)
         # Pre-built agents, e.g. fakes in HTTP tests.
         self._agents: dict[str, Any] = dict(agents or {})
-        self._stores: list[KnowledgeStore] = []
+        self._stores: list[KnowledgeStore | DocumentStore] = []
         self._lock = asyncio.Lock()
 
     def names(self) -> list[str]:
@@ -56,7 +58,7 @@ class KnowledgeAgentPool:
             raise KeyError(name)
         async with self._lock:
             if name not in self._agents:
-                store = await KnowledgeStore.for_kb(spec)
+                store = await open_store(spec)
                 self._stores.append(store)
                 self._agents[name] = KnowledgeAgentService.from_kb(spec, store)
         return self._agents[name]

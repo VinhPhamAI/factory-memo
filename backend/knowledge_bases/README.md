@@ -12,11 +12,13 @@ stay in `.env`; everything domain-specific lives in `backend/knowledge_bases/<na
 ```
 backend/knowledge_bases/
   __init__.py          # registry: KNOWLEDGE_BASES, get_kb()
-  base.py              # KnowledgeBaseSpec, DatasetSpec, ContextFilter
+  base.py              # KnowledgeBaseSpec, DatasetSpec, ContextFilter, Retrieval
+  stores.py            # open_store(): the store a KB's agent searches
   maintenance/
-    __init__.py        # SPEC: dataset path/columns, filters, text_search_config, ...
+    __init__.py        # SPEC: dataset path/columns, retrieval mode, filters, ...
     extract.md         # extraction prompt; must contain {RAW_CONVERSATION}
-    agent.md           # retrieval agent system prompt
+    agent.md           # agent prompt for knowledge retrieval
+    agent_documents.md # agent prompt for document retrieval
     embedding_query.md # optional query-side embedding instruction
   enterprise_rag/      # EnterpriseRAG-Bench (see below)
     prepare.py         # downloads the questions and their gold documents
@@ -25,6 +27,39 @@ backend/knowledge_bases/
 
 To add a KB, copy `maintenance/` to a new name, edit its prompts and the
 `DatasetSpec`, then add its `SPEC` to `KNOWLEDGE_BASES` in `__init__.py`.
+
+## Retrieval modes
+
+`KnowledgeBaseSpec.retrieval` selects what the agent searches:
+
+| | `knowledge` (default) | `documents` |
+|---|---|---|
+| `ingest` | LLM extracts knowledge records (`extract.md`) | chunks + embeds sources as they are, no LLM |
+| Index | `knowledge_items` + `raw_conversations` | `chunks_<label>` (`backend/src/agents/rag`) |
+| Agent prompt | `agent.md` | `agent_documents.md` |
+| Tools | `search_knowledge`, `get_knowledge`, `get_evidence` | `search_documents` (hybrid: vector + BM25, RRF), `get_document` |
+| Citations | `[K:<knowledge_id>]` | `[D:<doc_id>]`, doc id = `DatasetSpec.id_column` |
+| Evaluation | — | `kb evaluate` on `retrieval_questions` |
+
+Maintenance uses `documents`; `enterprise_rag` and `assetopsbench` use
+`knowledge`. Switching maintenance back is one line in its `SPEC`
+(`retrieval=Retrieval.KNOWLEDGE`): both prompt sets stay in the directory and
+both indexes live side by side in `kb_maintenance`, so neither is lost.
+`context_filters` apply to knowledge retrieval only, since chunks have no
+extracted context.
+
+For document retrieval, `chunking=ChunkingConfig(max_words=..., overlap_sentences=...)`
+sets how sources are split (default: one chunk per source, table `chunks_full`;
+maintenance conversations are 44-172 words). Each setup gets its own table, and
+the stored index config (embedding model/dim, chunking) refuses to mix setups.
+`ingest` skips sources already indexed; `--reindex` rebuilds the table, which is
+also how to apply a new embedding model (`reembed` covers knowledge retrieval only).
+
+`evaluate` reports Recall@k, MRR@k, and nDCG@k for semantic, keyword, and hybrid
+search on `retrieval_questions` (a CSV with question ids, questions, and gold
+source ids separated by `;`), lists the questions whose top result is not gold,
+and saves per-question rankings to `data/kb_eval/<kb>/`. `--query-instruction`
+compares embedding instructions without re-indexing.
 
 Query embedding instructions belong to each KB's optional `embedding_query.md`,
 loaded as `KnowledgeBaseSpec.embedding_query_instruction`. Maintenance uses a
@@ -61,11 +96,12 @@ uv run python -m backend.scripts.kb list
 uv run python -m backend.scripts.kb ingest maintenance --limit 5
 uv run python -m backend.scripts.kb ingest maintenance --file other.csv
 uv run python -m backend.scripts.kb query maintenance "How do I fix the unstable sensor on M01?"
-uv run python -m backend.scripts.kb reembed maintenance
+uv run python -m backend.scripts.kb evaluate maintenance
+uv run python -m backend.scripts.kb reembed enterprise_rag
 uv run python -m backend.scripts.kb reset maintenance --yes
 ```
 
-`ingest` processes one transcript at a time by default. With `--batch-size N`
+For knowledge retrieval, `ingest` processes one transcript at a time by default. With `--batch-size N`
 it extracts N transcripts concurrently (at most `--concurrency` LLM calls in
 flight, default N) and embeds each batch's knowledge in one call; a failed
 transcript is marked `failed` without affecting the rest of its batch. The

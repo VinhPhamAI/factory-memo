@@ -4,12 +4,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from backend.knowledge_bases.base import ContextFilter
+from backend.knowledge_bases.base import ContextFilter, Retrieval
 from backend.src.agents.agent.state import KnowledgeAgentContext, KnowledgeAgentState
-from backend.src.agents.agent.tools import build_search_tool, get_evidence, get_knowledge
+from backend.src.agents.agent.tools import (
+    build_search_tool,
+    get_document,
+    get_evidence,
+    get_knowledge,
+    search_documents,
+)
 
 
-def build_tools(context_filters: Sequence[ContextFilter] = ()) -> list:
+def build_tools(
+    context_filters: Sequence[ContextFilter] = (),
+    retrieval: Retrieval = Retrieval.KNOWLEDGE,
+) -> list:
+    if Retrieval(retrieval) is Retrieval.DOCUMENTS:
+        return [search_documents, get_document]
     return [build_search_tool(context_filters), get_knowledge, get_evidence]
 
 
@@ -18,17 +29,19 @@ def build_graph(
     *,
     system_prompt: str,
     context_filters: Sequence[ContextFilter] = (),
+    retrieval: Retrieval = Retrieval.KNOWLEDGE,
     checkpointer=None,
 ):
     """Build an agent graph around an injectable model, prompt, and checkpointer.
 
-    The system prompt and search filters come from the knowledge base.
+    The system prompt, search filters, and retrieval mode come from the
+    knowledge base.
     """
     from langchain.agents import create_agent
 
     return create_agent(
         model=model,
-        tools=build_tools(context_filters),
+        tools=build_tools(context_filters, retrieval),
         system_prompt=system_prompt,
         state_schema=KnowledgeAgentState,
         context_schema=KnowledgeAgentContext,

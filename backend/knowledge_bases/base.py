@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
+from backend.src.agents.rag.chunking import ChunkingConfig
 from backend.src.services.knowledge_extraction import RAW_CONVERSATION_PLACEHOLDER
 
 
@@ -13,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 EXTRACT_PROMPT_FILE = "extract.md"
 AGENT_PROMPT_FILE = "agent.md"
+DOCUMENTS_AGENT_PROMPT_FILE = "agent_documents.md"
 EMBEDDING_QUERY_PROMPT_FILE = "embedding_query.md"
 DATABASE_PREFIX = "kb_"
 # The database name kb_<name> must stay a plain PostgreSQL identifier.
@@ -30,6 +33,15 @@ def _check_context_key(key: str) -> str:
     return key
 
 
+class Retrieval(str, Enum):
+    """What the agent searches."""
+
+    # Knowledge records an LLM extracted from each source, linked to it as evidence.
+    KNOWLEDGE = "knowledge"
+    # Chunks of the sources themselves (traditional RAG); no extraction step.
+    DOCUMENTS = "documents"
+
+
 @dataclass(frozen=True)
 class DatasetSpec:
     """Default ingestion input: a .csv (one transcript per row), .txt, or .md file."""
@@ -38,7 +50,10 @@ class DatasetSpec:
     transcript_column: str = "raw_conversation"
     stated_by_column: str = "stated_by"
     # Column identifying a row; ingest skips rows already processed in the KB.
+    # Document retrieval uses it as the document id (cited as [D:<id>]).
     id_column: str | None = None
+    # Document retrieval: column prepended to the text as the document title.
+    title_column: str | None = None
     # Columns copied into the context of every record extracted from the row,
     # so search can filter on them (e.g. the source system of a document).
     context_columns: tuple[str, ...] = ()
@@ -46,6 +61,18 @@ class DatasetSpec:
     def __post_init__(self) -> None:
         for column in self.context_columns:
             _check_context_key(column)
+
+
+@dataclass(frozen=True)
+class RetrievalQuestions:
+    """Questions labelled with the dataset ids of the sources that answer them."""
+
+    path: Path
+    id_column: str = "question_id"
+    question_column: str = "question"
+    gold_column: str = "gold_doc_ids"
+    # Separates several gold ids in one cell, e.g. "1;2;13".
+    gold_separator: str = ";"
 
 
 @dataclass(frozen=True)
@@ -82,7 +109,14 @@ class KnowledgeBaseSpec:
     text_search_config: str = "english"
     # None falls back to KNOWLEDGE_MIN_VECTOR_SIMILARITY.
     min_vector_similarity: float | None = None
+    # What the agent searches; DOCUMENTS needs no extraction prompt.
+    retrieval: Retrieval = Retrieval.KNOWLEDGE
+    # Document retrieval: how sources are split before embedding.
+    chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
+    # Gold-labelled questions for `kb evaluate` (document retrieval).
+    retrieval_questions: RetrievalQuestions | None = None
     # Extra search_knowledge arguments; each filters on one context key.
+    # Knowledge retrieval only: document chunks carry no extracted context.
     context_filters: tuple[ContextFilter, ...] = ()
     # Context keys that lead the embedded text of a record (the rest follow
     # alphabetically) because they most change what a claim means.
@@ -104,7 +138,11 @@ class KnowledgeBaseSpec:
                 f"Invalid knowledge base name {self.name!r}: use lowercase "
                 "letters, digits, and underscores, starting with a letter"
             )
-        if RAW_CONVERSATION_PLACEHOLDER not in self.extract_prompt:
+        object.__setattr__(self, "retrieval", Retrieval(self.retrieval))
+        if (
+            self.retrieval is Retrieval.KNOWLEDGE
+            and RAW_CONVERSATION_PLACEHOLDER not in self.extract_prompt
+        ):
             raise ValueError(
                 f"Extraction prompt of {self.name!r} is missing "
                 f"{RAW_CONVERSATION_PLACEHOLDER}"
@@ -117,6 +155,12 @@ class KnowledgeBaseSpec:
         return f"{DATABASE_PREFIX}{self.name}"
 
     @property
+    def document_table(self) -> str:
+        """Chunk table of document retrieval, one per chunking setup."""
+
+        return f"chunks_{self.chunking.label}"
+
+    @property
     def trace_context_keys(self) -> tuple[str, ...]:
         """Context keys whose values may appear in public agent traces."""
 
@@ -127,8 +171,11 @@ class KnowledgeBaseSpec:
     def from_directory(cls, directory: Path, **fields) -> "KnowledgeBaseSpec":
         """Load prompts, including an optional embedding_query.md for retrieval.
 
-        An explicit embedding_query_instruction overrides the file, including
-        an empty string to disable the query prefix for this knowledge base.
+        The agent prompt is agent.md for knowledge retrieval and
+        agent_documents.md for document retrieval; extract.md is optional for
+        document retrieval. An explicit embedding_query_instruction overrides
+        the file, including an empty string to disable the query prefix for
+        this knowledge base.
         """
 
         if "embedding_query_instruction" not in fields:
@@ -139,9 +186,16 @@ class KnowledgeBaseSpec:
                 else ""
             )
 
+        documents = Retrieval(fields.get("retrieval", Retrieval.KNOWLEDGE)) is Retrieval.DOCUMENTS
+        extract_prompt = directory / EXTRACT_PROMPT_FILE
+        agent_prompt = directory / (DOCUMENTS_AGENT_PROMPT_FILE if documents else AGENT_PROMPT_FILE)
         return cls(
             name=fields.pop("name", directory.name),
-            extract_prompt=(directory / EXTRACT_PROMPT_FILE).read_text(encoding="utf-8").strip(),
-            agent_prompt=(directory / AGENT_PROMPT_FILE).read_text(encoding="utf-8").strip(),
+            extract_prompt=(
+                extract_prompt.read_text(encoding="utf-8").strip()
+                if extract_prompt.is_file() or not documents
+                else ""
+            ),
+            agent_prompt=agent_prompt.read_text(encoding="utf-8").strip(),
             **fields,
         )

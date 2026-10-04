@@ -26,8 +26,11 @@ from backend.knowledge_bases import (
     ContextFilter,
     DatasetSpec,
     KnowledgeBaseSpec,
+    Retrieval,
     get_kb,
 )
+from backend.src.agents.agent.graph import build_tools
+from backend.src.agents.rag import ChunkingConfig
 from backend.src.agents.agent.tools import build_search_tool, search_input_model
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import KnowledgeRecord, KnowledgeStore
@@ -81,9 +84,43 @@ class KnowledgeBaseSpecTest(unittest.TestCase):
         spec = get_kb("maintenance")
         self.assertIs(KNOWLEDGE_BASES["maintenance"], spec)
         self.assertEqual(spec.database, "kb_maintenance")
+        self.assertIs(spec.retrieval, Retrieval.DOCUMENTS)
+        self.assertEqual(spec.document_table, "chunks_full")
+        self.assertEqual(spec.dataset.id_column, "case_id")
+        self.assertTrue(spec.dataset.path.is_file())
+        self.assertTrue(spec.retrieval_questions.path.is_file())
+        # extract.md stays loaded so switching back to knowledge retrieval is one line.
         self.assertIn("{RAW_CONVERSATION}", spec.extract_prompt)
         self.assertIn("maintenance knowledge assistant", spec.agent_prompt)
+        self.assertIn("[D:<doc_id>]", spec.agent_prompt)
         self.assertEqual(spec.text_search_config, "english")
+
+    def test_retrieval_mode_picks_prompts_and_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "agent.md").write_text("Cite [K:<id>]")
+            (path / "agent_documents.md").write_text("Cite [D:<id>]")
+            with self.assertRaises(FileNotFoundError):
+                KnowledgeBaseSpec.from_directory(path, name="test")
+            spec = KnowledgeBaseSpec.from_directory(
+                path,
+                name="test",
+                retrieval="documents",
+                chunking=ChunkingConfig(max_words=128, overlap_sentences=1),
+            )
+        self.assertIs(spec.retrieval, Retrieval.DOCUMENTS)
+        self.assertEqual((spec.agent_prompt, spec.extract_prompt), ("Cite [D:<id>]", ""))
+        self.assertEqual(spec.document_table, "chunks_w128_o1")
+        self.assertEqual(
+            [tool.name for tool in build_tools(retrieval=spec.retrieval)],
+            ["search_documents", "get_document"],
+        )
+        self.assertEqual(
+            [tool.name for tool in build_tools()],
+            ["search_knowledge", "get_knowledge", "get_evidence"],
+        )
+        with self.assertRaises(ValueError):
+            _spec("test", retrieval="graph")
 
     def test_unknown_knowledge_base_lists_available_ones(self) -> None:
         with self.assertRaisesRegex(ValueError, "available: .*maintenance"):
