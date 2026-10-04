@@ -173,6 +173,15 @@ class KnowledgeRecordTest(unittest.TestCase):
         record = _record(context={})
         self.assertNotIn("Context:", record.embedding_text())
 
+    def test_case_card_evidence_and_run_provenance_do_not_mask_extraction_gaps(self) -> None:
+        record = _record(context={"machine_id": "M01", "benchmark_run_id": "private-run",
+                                  "case_card": {"action": "Clean the approved optical path.",
+                                                "evidence": [{"quote": "UNEXTRACTED FACT"}]}})
+        self.assertIn("Clean the approved optical path", record.embedding_text())
+        self.assertNotIn("UNEXTRACTED FACT", record.embedding_text())
+        self.assertNotIn("private-run", record.lexical_text())
+        self.assertEqual(record.context["case_card"]["evidence"][0]["quote"], "UNEXTRACTED FACT")
+
     def test_lexical_text_contains_subject_claim_and_stable_context(self) -> None:
         record = _record(
             subject="valve AX-220",

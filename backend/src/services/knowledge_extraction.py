@@ -88,6 +88,9 @@ class KnowledgeExtractionService:
         thinking = (getattr(self._client, "extra_body", None) or {}).get("thinking")
         if isinstance(thinking, dict) and "type" in thinking:
             details["thinking"] = thinking["type"]
+        response_format = (getattr(self._client, "model_kwargs", None) or {}).get("response_format")
+        if response_format:
+            details["response_format"] = response_format
         return details
 
     @classmethod
@@ -99,6 +102,8 @@ class KnowledgeExtractionService:
         model: str | None = None,
         base_url: str | None = None,
         max_tokens: int = 2048,
+        json_mode: bool = False,
+        json_schema: bool = False,
     ) -> "KnowledgeExtractionService":
         """Build the OpenAI-compatible client configured by environment variables.
 
@@ -131,6 +136,13 @@ class KnowledgeExtractionService:
             )
 
         options: dict[str, Any] = {}
+        if json_schema:
+            options["model_kwargs"] = {"response_format": {"type": "json_schema", "json_schema": {
+                "name": "knowledge_extraction", "schema": KnowledgeExtractionResult.model_json_schema(),
+                "strict": False,
+            }}}
+        elif json_mode:
+            options["model_kwargs"] = {"response_format": {"type": "json_object"}}
         # Provider-specific switch for ModelArk/DeepSeek. Leave it unset for
         # endpoints that do not accept a `thinking` request field.
         if thinking := os.getenv("EXTRACTION_THINKING", "").strip():

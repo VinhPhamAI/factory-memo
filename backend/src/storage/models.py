@@ -88,10 +88,17 @@ class KnowledgeRecord(BaseModel):
         """
 
         parts = [f"{self.subject}: {self.claim}"]
-        ordered = [key for key in leading_keys if key in self.context]
-        ordered += sorted(key for key in self.context if key not in ordered)
+        # Benchmark run IDs are provenance, not semantic scope. Case Card
+        # evidence stays available for inspection but is not indexed: otherwise
+        # source quotes could hide omissions from the extracted knowledge.
+        scope_context = {key: value for key, value in self.context.items() if key != "benchmark_run_id"}
+        card = scope_context.get("case_card")
+        if isinstance(card, dict):
+            scope_context["case_card"] = {key: value for key, value in card.items() if key != "evidence"}
+        ordered = [key for key in leading_keys if key in scope_context]
+        ordered += sorted(key for key in scope_context if key not in ordered)
         scope = "; ".join(
-            f"{key}={_compact(self.context[key])}" for key in ordered
+            f"{key}={_compact(scope_context[key])}" for key in ordered
         )
         if scope:
             parts.append(f"Context: {scope}")

@@ -48,9 +48,14 @@ both indexes live side by side in `kb_maintenance`, so neither is lost.
 `context_filters` apply to knowledge retrieval only, since chunks have no
 extracted context.
 
+Maintenance v2 has 40 conversations and 156 positive retrieval questions. Run
+`uv run python -m backend.knowledge_bases.maintenance.prepare` to materialize its
+CSVs; see [maintenance/README.md](maintenance/README.md) for fresh extraction,
+native knowledge retrieval evaluation, and the visual source-to-card audit.
+
 For document retrieval, `chunking=ChunkingConfig(max_words=..., overlap_sentences=...)`
 sets how sources are split (default: one chunk per source, table `chunks_full`;
-maintenance conversations are 44-172 words). Each setup gets its own table, and
+maintenance v2 conversations have 292-434 content words). Each setup gets its own table, and
 the stored index config (embedding model/dim, chunking) refuses to mix setups.
 `ingest` skips sources already indexed; `--reindex` rebuilds the table, which is
 also how to apply a new embedding model (`reembed` covers knowledge retrieval only).

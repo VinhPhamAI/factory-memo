@@ -115,7 +115,7 @@ class DocumentRetrievalEntrypointTest(unittest.TestCase):
         spec = get_kb("maintenance")
         queries, qrels = load_retrieval_questions(spec.retrieval_questions)
         case_ids = {item.metadata["case_id"] for item in read_transcripts(spec.dataset.path)}
-        self.assertEqual(len(queries), 44)
+        self.assertEqual(len(queries), 156)
         self.assertLessEqual({doc for gold in qrels.values() for doc in gold}, case_ids)
 
     def test_documents_are_keyed_by_the_id_column(self) -> None:

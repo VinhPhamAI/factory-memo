@@ -220,6 +220,22 @@ class AsyncKnowledgeExtractionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ExtractionClientConfigTests(unittest.TestCase):
+    def test_json_mode_is_explicit_and_tracked_in_provenance(self) -> None:
+        with mock.patch.dict(os.environ, self.SHARED, clear=True):
+            service = KnowledgeExtractionService.from_env(PROMPT, json_mode=True)
+            self.assertEqual(service._client._get_request_payload("Extract JSON.")["response_format"],
+                             {"type": "json_object"})
+            self.assertEqual(service.provenance["response_format"], {"type": "json_object"})
+
+    def test_json_schema_requires_knowledge_item_type(self) -> None:
+        with mock.patch.dict(os.environ, self.SHARED, clear=True):
+            service = KnowledgeExtractionService.from_env(PROMPT, json_schema=True)
+            response_format = service._client._get_request_payload("Extract JSON.")["response_format"]
+            self.assertEqual(response_format["type"], "json_schema")
+            schema = response_format["json_schema"]["schema"]
+            self.assertIn("type", schema["$defs"]["KnowledgeItem"]["required"])
+            self.assertEqual(service.provenance["response_format"], response_format)
+
     SHARED = {
         "OPENROUTER_API_KEY": "shared-key",
         "OPENROUTER_MODEL": "shared-model",

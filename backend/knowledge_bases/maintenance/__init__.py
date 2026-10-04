@@ -19,16 +19,16 @@ SPEC = KnowledgeBaseSpec.from_directory(
     Path(__file__).parent,
     description=__doc__,
     dataset=DatasetSpec(
-        DATA / "expert_knowledge_extraction_benchmark_20_conversations_en.csv",
+        DATA / "expert_knowledge_extraction_benchmark_40_conversations_en.csv",
         id_column="case_id",
+        title_column="title",
     ),
-    # Conversations are searched directly: each is short (44-172 words), so
-    # one chunk per conversation. Set Retrieval.KNOWLEDGE to search records
-    # extracted by extract.md instead (answered with agent.md).
+    # Full v2 dialogues are the document baseline (one chunk per conversation).
+    # maintenance.bench separately ingests and evaluates extracted Case Cards.
     retrieval=Retrieval.DOCUMENTS,
     chunking=ChunkingConfig(),
     retrieval_questions=RetrievalQuestions(
-        DATA / "retrieval_evaluation_questions_answers.csv",
+        DATA / "retrieval_evaluation_questions_answers_v2.csv",
         gold_column="gold_case_ids",
     ),
     # Knowledge retrieval only.
@@ -45,4 +45,5 @@ SPEC = KnowledgeBaseSpec.from_directory(
         ),
     ),
     embedding_context_keys=("machine_id", "machine_model", "component_model", "condition"),
+    extraction_version="maintenance-case-card-v2",
 )
