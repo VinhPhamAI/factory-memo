@@ -8,7 +8,10 @@ from enum import Enum
 from pathlib import Path
 
 from backend.src.agents.rag.chunking import ChunkingConfig
-from backend.src.services.knowledge_extraction import RAW_CONVERSATION_PLACEHOLDER
+from backend.src.services.knowledge_extraction import (
+    RAW_CONVERSATION_PLACEHOLDER,
+    StructuredExtraction,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -126,6 +129,12 @@ class KnowledgeBaseSpec:
     embedding_query_instruction: str = ""
     # Human-readable extraction contract version; prompt hash tracks exact edits.
     extraction_version: str = "1"
+    # Typed schema the extraction output must match; None accepts plain
+    # knowledge items with any context dictionary.
+    extraction_output_model: type[StructuredExtraction] | None = None
+    # Extracted knowledge starts as a draft for expert review instead of
+    # being approved on ingestion.
+    review_required: bool = False
 
     def __post_init__(self) -> None:
         keys = [item.key for item in self.context_filters]

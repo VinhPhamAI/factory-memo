@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any, Protocol
 
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 DEFAULT_LLM_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
@@ -40,6 +40,9 @@ class KnowledgeItem(BaseModel):
     type: KnowledgeType
     valid_from: date | None = None
     valid_to: date | None = None
+    # Positions of other items of the same result that this item generalizes,
+    # e.g. the cases a lesson was drawn from; ingestion stores their ids.
+    supported_by: list[int] = Field(default_factory=list)
 
 
 class KnowledgeExtractionResult(BaseModel):
@@ -48,6 +51,49 @@ class KnowledgeExtractionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     knowledge_items: list[KnowledgeItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_support_links(self) -> "KnowledgeExtractionResult":
+        count = len(self.knowledge_items)
+        for index, item in enumerate(self.knowledge_items):
+            if any(ref == index or not 0 <= ref < count for ref in item.supported_by):
+                raise ValueError(f"knowledge_items.{index}.supported_by points to no other item")
+        return self
+
+
+def _describe_error(error: dict[str, Any]) -> str:
+    location = ".".join(map(str, error["loc"])) or "<root>"
+    if error["type"] == "value_error":
+        # Raised by extraction schema validators, whose messages never quote input.
+        return f"{location}: {error['msg']}"
+    return f"{location}: {error['type']}"
+
+
+class StructuredExtraction(BaseModel):
+    """Base of a knowledge base's typed extraction output.
+
+    A subclass describes exactly what the LLM must return, so the LLM gets a
+    precise JSON schema and its output is validated against it. to_result()
+    turns it into plain knowledge items, so storage is the same for every
+    knowledge base. Field order is the order the JSON schema lists keys in.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    def to_result(self) -> KnowledgeExtractionResult:
+        raise NotImplementedError
+
+
+def scope_context(scope: BaseModel | None) -> dict[str, Any]:
+    """Context of a typed scope model without its null keys.
+
+    An absent scope key must stay absent: context filters treat a missing key
+    as "applies to every machine", unlike an explicit null.
+    """
+
+    if scope is None:
+        return {}
+    return {key: value for key, value in scope.model_dump().items() if value is not None}
 
 
 class SupportsInvoke(Protocol):
@@ -64,16 +110,32 @@ class KnowledgeExtractionService:
     """LLM-backed service for turning a transcript into knowledge items.
 
     `prompt_template` is the knowledge base's extraction prompt; it must contain
-    {RAW_CONVERSATION}, which is replaced by the transcript.
+    {RAW_CONVERSATION}, which is replaced by the transcript. `output_model` is
+    an optional typed output schema (see StructuredExtraction).
     """
 
-    def __init__(self, client: SupportsInvoke, prompt_template: str):
+    def __init__(
+        self,
+        client: SupportsInvoke,
+        prompt_template: str,
+        *,
+        output_model: type[StructuredExtraction] | None = None,
+    ):
         if RAW_CONVERSATION_PLACEHOLDER not in prompt_template:
             raise ValueError(
                 f"Extraction prompt is missing its {RAW_CONVERSATION_PLACEHOLDER} placeholder"
             )
         self._client = client
         self._prompt_template = prompt_template
+        self._output_model = output_model
+
+    @staticmethod
+    def output_schema(
+        output_model: type[StructuredExtraction] | None = None,
+    ) -> dict[str, Any]:
+        """JSON schema of the extraction output, typed when output_model is set."""
+
+        return (output_model or KnowledgeExtractionResult).model_json_schema()
 
     @property
     def provenance(self) -> dict[str, Any]:
@@ -91,6 +153,8 @@ class KnowledgeExtractionService:
         response_format = (getattr(self._client, "model_kwargs", None) or {}).get("response_format")
         if response_format:
             details["response_format"] = response_format
+        if self._output_model is not None:
+            details["output_model"] = self._output_model.__name__
         return details
 
     @classmethod
@@ -104,12 +168,16 @@ class KnowledgeExtractionService:
         max_tokens: int = 2048,
         json_mode: bool = False,
         json_schema: bool = False,
+        output_model: type[StructuredExtraction] | None = None,
     ) -> "KnowledgeExtractionService":
         """Build the OpenAI-compatible client configured by environment variables.
 
         EXTRACTION_* settings override the shared OPENROUTER_* ones, so bulk
         extraction can use another endpoint than the agent, e.g. a ModelArk
         batch inference endpoint or EXTRACTION_SERVICE_TIER=flex.
+
+        Output is always validated against `output_model` when it is set;
+        json_schema additionally sends that schema as the response format.
         """
 
         resolved_api_key = (
@@ -138,7 +206,9 @@ class KnowledgeExtractionService:
         options: dict[str, Any] = {}
         if json_schema:
             options["model_kwargs"] = {"response_format": {"type": "json_schema", "json_schema": {
-                "name": "knowledge_extraction", "schema": KnowledgeExtractionResult.model_json_schema(),
+                "name": "knowledge_extraction", "schema": cls.output_schema(output_model),
+                # Strict mode needs every key required and provider support;
+                # the response is validated locally either way.
                 "strict": False,
             }}}
         elif json_mode:
@@ -166,7 +236,7 @@ class KnowledgeExtractionService:
             max_tokens=max_tokens,
             **options,
         )
-        return cls(client, prompt_template)
+        return cls(client, prompt_template, output_model=output_model)
 
     def extract(self, raw_conversation: str) -> KnowledgeExtractionResult:
         """Extract and validate knowledge items from one raw conversation."""
@@ -240,14 +310,13 @@ class KnowledgeExtractionService:
                 + f": {exc.msg} at line {exc.lineno}, column {exc.colno}"
             ) from exc
         try:
-            return KnowledgeExtractionResult.model_validate(payload)
+            if self._output_model is None:
+                return KnowledgeExtractionResult.model_validate(payload)
+            return self._output_model.model_validate(payload).to_result()
         except ValidationError as exc:
             # Keep diagnostics useful without logging extracted document contents.
             errors = exc.errors(include_input=False, include_context=False, include_url=False)
-            summary = "; ".join(
-                f"{'.'.join(map(str, error['loc'])) or '<root>'}: {error['type']}"
-                for error in errors[:5]
-            )
+            summary = "; ".join(_describe_error(error) for error in errors[:5])
             raise KnowledgeExtractionError(
                 "The LLM extraction JSON failed schema validation"
                 + diagnostic

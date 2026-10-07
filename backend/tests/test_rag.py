@@ -34,6 +34,7 @@ from backend.src.agents.rag import (
     chunk_documents,
 )
 from backend.src.agents.rag.evaluation import (
+    calibrate_similarity_threshold,
     mean_metrics,
     per_query_metrics,
     rankings_to_run,
@@ -170,6 +171,36 @@ class MetricsTest(unittest.TestCase):
         metrics = per_query_metrics({"q": {"a": 0, "b": 1}}, {"q": ["a", "b"]}, (1, 2))
         self.assertEqual(metrics["q"]["MRR@2"], 0.5)
         self.assertEqual(metrics["q"]["Recall@1"], 0.0)
+
+
+
+class ThresholdCalibrationTest(unittest.TestCase):
+    def test_picks_lowest_threshold_meeting_target_precision(self) -> None:
+        hits = [(0.9, True), (0.8, True), (0.7, False), (0.6, True), (0.5, False), (0.4, False)]
+        calibration = calibrate_similarity_threshold(hits, target_precision=0.75, min_support=1)
+        # 0.6 keeps 3 of 4 hits relevant; 0.5 drops precision to 0.6.
+        self.assertEqual(calibration.threshold, 0.6)
+        self.assertEqual(calibration.precision, 0.75)
+        self.assertEqual(calibration.recall, 1.0)
+        self.assertEqual(calibration.confident_hits, 4)
+        self.assertEqual((calibration.labelled_hits, calibration.relevant_hits), (6, 3))
+
+    def test_tied_scores_share_one_threshold(self) -> None:
+        hits = [(0.8, True), (0.5, True), (0.5, False)]
+        calibration = calibrate_similarity_threshold(hits, target_precision=0.9, min_support=1)
+        self.assertEqual(calibration.threshold, 0.8)
+
+    def test_min_support_rejects_thresholds_backed_by_few_hits(self) -> None:
+        hits = [(0.9, True), (0.8, False), (0.7, False)]
+        calibration = calibrate_similarity_threshold(hits, target_precision=0.9, min_support=2)
+        self.assertIsNone(calibration.threshold)
+        self.assertEqual(calibration.labelled_hits, 3)
+
+    def test_rejects_invalid_settings(self) -> None:
+        with self.assertRaises(ValueError):
+            calibrate_similarity_threshold([], target_precision=0)
+        with self.assertRaises(ValueError):
+            calibrate_similarity_threshold([], min_support=0)
 
 
 @unittest.skipUnless(DATABASE_URL, "TEST_DATABASE_URL is not set")

@@ -24,6 +24,7 @@ from backend.src.storage.models import (
     ConversationStatus,
     KnowledgeRecord,
     KnowledgeSearchHit,
+    KnowledgeStatus,
     RawConversation,
 )
 
@@ -47,7 +48,18 @@ METADATA_COLUMNS = [
     "valid_from",
     "valid_to",
     "conflict_with",
+    "status",
+    "supported_by",
+    "contradicted_by",
+    "superseded_by",
+    "revision",
 ]
+# Columns of a stored record, as read back by search.
+RECORD_COLUMNS = (
+    "id", "subject", "claim", "context", "type", "evidence_id", "stated_by", "created_at",
+    "valid_from", "valid_to", "conflict_with", "status", "supported_by", "contradicted_by",
+    "superseded_by", "revision",
+)
 # pgvector cannot build an HNSW index over wider `vector` columns.
 HNSW_MAX_DIM = 2000
 DEFAULT_SEARCH_K = 5
@@ -74,6 +86,12 @@ _LEXICAL_TOKEN_RE = re.compile(r"\w+(?:[-./]\w+)*")
 
 _KNOWLEDGE_TYPES_SQL = ", ".join(f"'{kind.value}'" for kind in KnowledgeType)
 _STATUSES_SQL = ", ".join(f"'{status.value}'" for status in ConversationStatus)
+_KNOWLEDGE_STATUSES_SQL = ", ".join(f"'{status.value}'" for status in KnowledgeStatus)
+_RECORD_SELECT_SQL = ", ".join(f"k.{column}" for column in RECORD_COLUMNS)
+# Deprecated and replaced records stay readable by id but are never searched.
+_SEARCHABLE_SQL = (
+    f"k.status <> '{KnowledgeStatus.DEPRECATED.value}' AND k.superseded_by IS NULL"
+)
 
 
 class StorageError(RuntimeError):
@@ -414,6 +432,17 @@ class KnowledgeStore:
                 conflict_with UUID[] NOT NULL DEFAULT '{{}}',
                 CHECK (valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to)
             )
+            """,
+            # Review and consolidation columns, added in place to older tables.
+            # Existing rows predate review, so they count as approved.
+            f"""
+            ALTER TABLE {knowledge_table}
+                ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved'
+                    CHECK (status IN ({_KNOWLEDGE_STATUSES_SQL})),
+                ADD COLUMN IF NOT EXISTS supported_by UUID[] NOT NULL DEFAULT '{{}}',
+                ADD COLUMN IF NOT EXISTS contradicted_by UUID[] NOT NULL DEFAULT '{{}}',
+                ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCES {knowledge_table}(id),
+                ADD COLUMN IF NOT EXISTS revision JSONB NOT NULL DEFAULT '{{}}'::jsonb
             """,
             f"ALTER TABLE {knowledge_table} ADD COLUMN IF NOT EXISTS search_text TEXT",
             f"""
@@ -758,7 +787,7 @@ class KnowledgeStore:
                        k.{EMBEDDING_COLUMN} <=> q.embedding AS vector_distance
                 FROM {knowledge_table} AS k
                 CROSS JOIN query_values AS q
-                WHERE {where_sql}
+                WHERE {where_sql} AND {_SEARCHABLE_SQL}
             ),
             vector_candidates AS (
                 SELECT id, vector_distance
@@ -784,7 +813,7 @@ class KnowledgeStore:
                        cardinality(q.query_terms) AS query_term_count
                 FROM {knowledge_table} AS k
                 CROSS JOIN query_values AS q
-                WHERE {where_sql}
+                WHERE {where_sql} AND {_SEARCHABLE_SQL}
                   AND k.search_vector @@ q.lexical_query
                 ORDER BY lexical_score DESC, k.id ASC
                 LIMIT :candidate_k
@@ -821,9 +850,8 @@ class KnowledgeStore:
                        ) AS confident
                 FROM combined
             )
-            SELECT k.id, k.subject, k.claim, k.context, k.type, k.evidence_id,
-                   k.stated_by, k.created_at, k.valid_from, k.valid_to,
-                   k.conflict_with, scored.hybrid_score, scored.vector_rank,
+            SELECT {_RECORD_SELECT_SQL},
+                   scored.hybrid_score, scored.vector_rank,
                    scored.lexical_rank, scored.vector_distance, scored.lexical_score,
                    scored.lexical_matched_terms, scored.confident
             FROM scored
@@ -859,22 +887,7 @@ class KnowledgeStore:
         return [
             KnowledgeSearchHit(
                 record=KnowledgeRecord.model_validate(
-                    {
-                        key: row[key]
-                        for key in (
-                            "id",
-                            "subject",
-                            "claim",
-                            "context",
-                            "type",
-                            "evidence_id",
-                            "stated_by",
-                            "created_at",
-                            "valid_from",
-                            "valid_to",
-                            "conflict_with",
-                        )
-                    }
+                    {key: row[key] for key in RECORD_COLUMNS}
                 ),
                 hybrid_score=float(row["hybrid_score"]),
                 vector_rank=row["vector_rank"],

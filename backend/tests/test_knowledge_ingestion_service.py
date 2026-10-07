@@ -24,7 +24,7 @@ from backend.src.services.knowledge_ingestion import (
     IngestionResult,
     KnowledgeIngestionService,
 )
-from backend.src.storage import ConversationStatus, RawConversation
+from backend.src.storage import ConversationStatus, KnowledgeStatus, RawConversation
 
 
 class FakeExtractor:
@@ -185,6 +185,34 @@ class KnowledgeIngestionServiceTest(unittest.IsolatedAsyncioTestCase):
         for record in store.knowledge:
             self.assertEqual(record.evidence_id, result.evidence_id)
             self.assertEqual(record.stated_by, "Maintenance Expert")
+
+    async def test_records_default_to_approved_without_links(self) -> None:
+        store = FakeStore()
+        await KnowledgeIngestionService(FakeExtractor(EXTRACTED), store).ingest("Expert: x")
+        self.assertEqual({r.status for r in store.knowledge}, {KnowledgeStatus.APPROVED})
+        self.assertEqual([r.supported_by for r in store.knowledge], [[], []])
+
+    async def test_support_links_resolve_within_each_conversation(self) -> None:
+        def extracted(name: str) -> KnowledgeExtractionResult:
+            return KnowledgeExtractionResult(knowledge_items=[
+                KnowledgeItem(subject=name, claim="Case.", type=KnowledgeType.CASE),
+                KnowledgeItem(subject=name, claim="Case.", type=KnowledgeType.CASE),
+                KnowledgeItem(subject=name, claim="Lesson.", type=KnowledgeType.HEURISTIC,
+                              supported_by=[1, 0]),
+            ])
+
+        store = FakeStore()
+        service = KnowledgeIngestionService(
+            FakeExtractor({"Expert: a": extracted("a"), "Expert: b": extracted("b")}),
+            store, knowledge_status=KnowledgeStatus.DRAFT,
+        )
+        results = await service.ingest_batch(
+            [IngestionInput("Expert: a"), IngestionInput("Expert: b")]
+        )
+        for result in results:
+            first, second, lesson = result.records
+            self.assertEqual(lesson.supported_by, [second.id, first.id])
+            self.assertEqual({r.status for r in result.records}, {KnowledgeStatus.DRAFT})
 
     async def test_conversation_without_knowledge_is_processed(self) -> None:
         store = FakeStore()

@@ -13,6 +13,7 @@ from backend.src.services.knowledge_extraction import KnowledgeExtractionResult
 from backend.src.storage.models import (
     ConversationStatus,
     KnowledgeRecord,
+    KnowledgeStatus,
     RawConversation,
 )
 
@@ -76,10 +77,13 @@ class KnowledgeIngestionService:
     def __init__(
         self, extractor: SupportsExtract, store: SupportsKnowledgeWrite,
         *, extraction_metadata: dict[str, Any] | None = None,
+        knowledge_status: KnowledgeStatus = KnowledgeStatus.APPROVED,
     ):
         self._extractor = extractor
         self._store = store
         self._extraction_metadata = dict(extraction_metadata or {})
+        # DRAFT when the knowledge base requires expert review.
+        self._knowledge_status = KnowledgeStatus(knowledge_status)
 
     async def ingest(
         self,
@@ -145,14 +149,19 @@ class KnowledgeIngestionService:
                 await self._fail(conversations[index], outcome)
                 results[index] = outcome
                 continue
-            records[index] = [
+            group = [
                 KnowledgeRecord.from_extracted(
                     item,
                     evidence_id=conversations[index].id,
                     stated_by=inputs[index].stated_by,
+                    status=self._knowledge_status,
                 )
                 for item in outcome.knowledge_items
             ]
+            # Support links point to positions in the result; store record ids.
+            for record, item in zip(group, outcome.knowledge_items, strict=True):
+                record.supported_by = [group[position].id for position in item.supported_by]
+            records[index] = group
             if inputs[index].context:
                 for record in records[index]:
                     record.context = {**record.context, **inputs[index].context}

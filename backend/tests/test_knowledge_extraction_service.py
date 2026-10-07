@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import os
 import sys
 import unittest
@@ -17,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.knowledge_bases import get_kb
+from backend.knowledge_bases.maintenance.schema import MaintenanceExtraction
 from backend.src.services.knowledge_extraction import (
     KnowledgeExtractionError,
     KnowledgeExtractionService,
@@ -179,6 +181,145 @@ class KnowledgeExtractionServiceTests(unittest.TestCase):
             )
 
 
+CASE = {
+    "subject": "WG-21", "valid_from": None, "valid_to": None,
+    "context": {"machine_id": "M03", "machine_model": None, "condition": "cold start"},
+    "case_card": {
+        "context": "Cold start, line 2.", "observation": "Misfire on first welds.",
+        "reasoning": "Loose cable connector.", "action": "Reseat the connector.",
+        "outcome": None, "evidence": [{"turn_id": "T02", "quote": "It misfires cold."}],
+    },
+}
+
+
+def lesson(**fields) -> dict:
+    return {
+        "subject": "weld gun", "claim": "Check the cable connector first on cold misfires.",
+        "steps": None, "mandatory": False, "valid_from": None, "valid_to": None,
+        "context": {"machine_model": "WG"}, "case_refs": [], **fields,
+    }
+
+
+def copy(value: dict) -> dict:
+    return json.loads(json.dumps(value))
+
+
+class MaintenanceExtractionTests(unittest.TestCase):
+    def _extract(self, cases: list[dict], lessons: list[dict] = ()):
+        client = FakeLLM(json.dumps({"cases": cases, "lessons": list(lessons)}))
+        service = KnowledgeExtractionService(
+            client, PROMPT, output_model=MaintenanceExtraction
+        )
+        return service.extract("Expert: x").knowledge_items
+
+    def test_case_claim_is_rendered_from_its_card(self) -> None:
+        item, = self._extract([CASE])
+        self.assertEqual(item.type, KnowledgeType.CASE)
+        self.assertEqual(item.claim, (
+            "Cold start, line 2.\nObservation: Misfire on first welds.\n"
+            "Reasoning: Loose cable connector.\nAction: Reseat the connector.\n"
+            "Outcome: not stated"
+        ))
+        # A null scope key is dropped so the record stays unscoped for it.
+        self.assertEqual(set(item.context), {"machine_id", "condition", "case_card"})
+        card = item.context["case_card"]
+        # Nested nulls stay: an explicit null outcome is part of the card.
+        self.assertIsNone(card["outcome"])
+        self.assertEqual(card["evidence"][0], {"turn_id": "T02", "quote": "It misfires cold."})
+        self.assertEqual(item.supported_by, [])
+
+    def test_lesson_type_is_derived_from_its_fields(self) -> None:
+        steps = ["Isolate power.", "Reseat the connector."]
+        items = self._extract([], [
+            lesson(),
+            lesson(steps=steps),
+            lesson(mandatory=True),
+            lesson(mandatory=True, steps=steps),
+        ])
+        self.assertEqual([item.type for item in items], [
+            KnowledgeType.HEURISTIC, KnowledgeType.PROCEDURE,
+            KnowledgeType.RULE, KnowledgeType.RULE,
+        ])
+
+    def test_lesson_steps_are_rendered_into_the_claim(self) -> None:
+        item, = self._extract([], [lesson(steps=["Isolate power.", "Reseat the connector."])])
+        self.assertEqual(item.claim, (
+            "Check the cable connector first on cold misfires.\n"
+            "1. Isolate power.\n2. Reseat the connector."
+        ))
+        self.assertEqual(item.context, {
+            "machine_model": "WG", "steps": ["Isolate power.", "Reseat the connector."],
+        })
+
+    def test_case_refs_become_item_positions_after_cases(self) -> None:
+        other = copy(CASE)
+        other["subject"] = "WG-22"
+        items = self._extract([CASE, other], [lesson(case_refs=[1, 0, 1])])
+        self.assertEqual([item.type for item in items[:2]], [KnowledgeType.CASE] * 2)
+        self.assertEqual(items[2].supported_by, [0, 1])
+
+    def test_rejects_output_that_breaks_the_schema(self) -> None:
+        def changed_card(**card) -> dict:
+            case = copy(CASE)
+            case["case_card"].update(card)
+            return case
+
+        no_card = copy(CASE)
+        del no_card["case_card"]
+        extra_scope = copy(CASE)
+        extra_scope["context"]["shift"] = "night"
+        written_claim = copy(CASE)
+        written_claim["claim"] = "Restated card."
+        rejected = {
+            "cases.0.case_card: missing": ([no_card], []),
+            "case_card.evidence": ([changed_card(evidence=[])], []),
+            "case_card.severity": ([changed_card(severity="high")], []),
+            "cases.0.context.shift": ([extra_scope], []),
+            "cases.0.claim": ([written_claim], []),
+            "lessons.0.case_refs points to no case": ([CASE], [lesson(case_refs=[1])]),
+            "lessons.0.type": ([], [lesson(type="rule")]),
+        }
+        for location, (cases, lessons) in rejected.items():
+            with self.subTest(location=location):
+                with self.assertRaisesRegex(KnowledgeExtractionError, location):
+                    self._extract(cases, lessons)
+
+    def test_maintenance_kb_uses_case_lesson_schema(self) -> None:
+        self.assertIs(MAINTENANCE.extraction_output_model, MaintenanceExtraction)
+        self.assertTrue(MAINTENANCE.review_required)
+        schema = KnowledgeExtractionService.output_schema(MaintenanceExtraction)
+        self.assertEqual(list(schema["properties"]), ["cases", "lessons"])
+        self.assertFalse(schema["additionalProperties"])
+        case = schema["$defs"]["MaintenanceCase"]
+        self.assertNotIn("claim", case["properties"])
+        self.assertIn("case_card", case["required"])
+        self.assertNotIn("type", schema["$defs"]["MaintenanceLesson"]["properties"])
+        self.assertFalse(schema["$defs"]["MaintenanceScope"]["additionalProperties"])
+
+
+class SupportLinkTests(unittest.TestCase):
+    def test_rejects_self_and_missing_support_links(self) -> None:
+        for refs in ([0], [2], [-1]):
+            with self.subTest(refs=refs):
+                payload = {"knowledge_items": [
+                    {"subject": "a", "claim": "A.", "type": "rule", "supported_by": refs},
+                    {"subject": "b", "claim": "B.", "type": "case"},
+                ]}
+                with self.assertRaisesRegex(
+                    KnowledgeExtractionError,
+                    "knowledge_items.0.supported_by points to no other item",
+                ):
+                    KnowledgeExtractionService(FakeLLM(json.dumps(payload)), PROMPT).extract("x")
+
+    def test_accepts_links_to_other_items(self) -> None:
+        payload = {"knowledge_items": [
+            {"subject": "a", "claim": "A.", "type": "rule", "supported_by": [1]},
+            {"subject": "b", "claim": "B.", "type": "case"},
+        ]}
+        items = KnowledgeExtractionService(FakeLLM(json.dumps(payload)), PROMPT).extract("x")
+        self.assertEqual(items.knowledge_items[0].supported_by, [1])
+
+
 class AsyncFakeLLM(FakeLLM):
     def __init__(self, response: str):
         super().__init__(response)
@@ -235,6 +376,15 @@ class ExtractionClientConfigTests(unittest.TestCase):
             schema = response_format["json_schema"]["schema"]
             self.assertIn("type", schema["$defs"]["KnowledgeItem"]["required"])
             self.assertEqual(service.provenance["response_format"], response_format)
+
+    def test_json_schema_sends_output_model_schema(self) -> None:
+        with mock.patch.dict(os.environ, self.SHARED, clear=True):
+            service = KnowledgeExtractionService.from_env(
+                PROMPT, json_schema=True, output_model=MaintenanceExtraction
+            )
+            response_format = service._client._get_request_payload("Extract JSON.")["response_format"]
+            self.assertIn("CaseCard", response_format["json_schema"]["schema"]["$defs"])
+            self.assertEqual(service.provenance["output_model"], "MaintenanceExtraction")
 
     SHARED = {
         "OPENROUTER_API_KEY": "shared-key",

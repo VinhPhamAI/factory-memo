@@ -36,6 +36,7 @@ from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import (
     KnowledgeRecord,
     KnowledgeSearchHit,
+    KnowledgeStatus,
     RawConversation,
     StorageError,
 )
@@ -378,6 +379,60 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
         payload = _tool_payload(model.calls[1][-1])
         self.assertEqual(payload["match"], "confident")
         self.assertEqual([item["id"] for item in payload["knowledge"]], [str(RECORD.id)])
+
+    async def test_payloads_omit_unpopulated_conflicts(self) -> None:
+        service, model = _service(
+            FakeStore(),
+            _search_call(query="unstable rear sensor"),
+            AIMessage(content="", tool_calls=[{
+                "name": "get_knowledge", "id": "read", "args": {"knowledge_id": str(RECORD.id)},
+            }]),
+            AIMessage(content="Done."),
+        )
+        await service.ask("sensor?")
+        searched, read = (_tool_payload(model.calls[i][-1]) for i in (1, 2))
+        self.assertEqual(read["knowledge"]["id"], str(RECORD.id))
+        self.assertNotIn("conflicting_knowledge", read)
+        for record in (searched["knowledge"][0], read["knowledge"]):
+            self.assertNotIn("conflict_with", record)
+
+    async def test_search_is_compact_and_get_knowledge_returns_the_card(self) -> None:
+        case = KnowledgeRecord(
+            subject="WG-21", claim="Cold start.\nObservation: Misfire.", type=KnowledgeType.CASE,
+            context={"machine_id": "M03", "case_card": {"observation": "Misfire."}},
+            evidence_id=EVIDENCE_ID, status=KnowledgeStatus.DRAFT,
+        )
+        lesson = KnowledgeRecord(
+            subject="weld gun", claim="Check the connector first.\n1. Isolate power.",
+            type=KnowledgeType.PROCEDURE, context={"steps": ["Isolate power."]},
+            evidence_id=EVIDENCE_ID, supported_by=[case.id],
+        )
+
+        class CaseStore(FakeStore):
+            async def get_knowledge(self, ids):
+                return [case] if case.id in ids else []
+
+        service, model = _service(
+            CaseStore(hits=[_hit(case), _hit(lesson)]),
+            _search_call(query="weld gun misfire"),
+            AIMessage(content="", tool_calls=[{
+                "name": "get_knowledge", "id": "read", "args": {"knowledge_id": str(case.id)},
+            }]),
+            AIMessage(content="Done."),
+        )
+        await service.ask("misfire?")
+        searched, read = (_tool_payload(model.calls[i][-1]) for i in (1, 2))
+        found_case, found_lesson = searched["knowledge"]
+        self.assertEqual(found_case["context"], {"machine_id": "M03"})
+        self.assertEqual(found_case["status"], "draft")
+        self.assertNotIn("supported_by", found_case)
+        self.assertEqual(found_lesson["context"], {})
+        self.assertEqual(found_lesson["supported_by"], [str(case.id)])
+        self.assertEqual(found_lesson["status"], "approved")
+        self.assertEqual(read["knowledge"]["context"]["case_card"], {"observation": "Misfire."})
+        for record in (found_case, found_lesson, read["knowledge"]):
+            self.assertNotIn("revision", record)
+            self.assertNotIn("superseded_by", record)
 
     async def test_weak_results_are_returned_as_low_confidence(self) -> None:
         records = [

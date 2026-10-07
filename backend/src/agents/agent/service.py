@@ -264,6 +264,7 @@ def _public_knowledge_summary(
         "knowledge_id": item.get("id") or item.get("knowledge_id"),
         "subject": item.get("subject"),
         "type": item.get("type"),
+        "status": item.get("status"),
         "validity": item.get("validity"),
     }
     if public_context:
@@ -332,19 +333,8 @@ def public_tool_output(
             }
         )
     elif tool_name == "get_knowledge":
-        knowledge = _public_knowledge_summary(
+        result["knowledge"] = _public_knowledge_summary(
             payload.get("knowledge"), context_fields=context_fields
-        )
-        conflicts = payload.get("conflicting_knowledge")
-        conflict_items = conflicts if isinstance(conflicts, list) else []
-        result.update(
-            {
-                "knowledge": knowledge,
-                "conflicts": [
-                    _public_knowledge_summary(item, context_fields=context_fields)
-                    for item in conflict_items
-                ],
-            }
         )
     elif tool_name == "get_evidence":
         evidence = payload.get("evidence")

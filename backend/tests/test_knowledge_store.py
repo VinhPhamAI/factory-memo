@@ -17,7 +17,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from langchain_core.documents import Document
 
 from backend.src.services.knowledge_extraction import KnowledgeItem, KnowledgeType
-from backend.src.storage import KnowledgeRecord, KnowledgeSearchHit, build_knowledge_filter
+from backend.src.storage import (
+    KnowledgeRecord,
+    KnowledgeSearchHit,
+    KnowledgeStatus,
+    build_knowledge_filter,
+)
 from backend.src.storage.knowledge_store import (
     DEFAULT_MIN_VECTOR_SIMILARITY,
     MAX_LEXICAL_TERMS,
@@ -147,6 +152,7 @@ class KnowledgeRecordTest(unittest.TestCase):
         self.assertEqual(record.type, KnowledgeType.RULE)
         self.assertEqual(record.valid_from, date(2026, 3, 1))
         self.assertEqual(record.conflict_with, [])
+        self.assertEqual(record.status, KnowledgeStatus.APPROVED)
         self.assertIsNotNone(record.created_at.tzinfo)
         # The record must not share the extracted item's context dict.
         record.context["machine_id"] = "M02"
@@ -173,13 +179,17 @@ class KnowledgeRecordTest(unittest.TestCase):
         record = _record(context={})
         self.assertNotIn("Context:", record.embedding_text())
 
-    def test_case_card_evidence_and_run_provenance_do_not_mask_extraction_gaps(self) -> None:
+    def test_rendered_structure_and_run_provenance_are_not_indexed(self) -> None:
+        # The claim already renders the card and steps; indexing them again would
+        # double their weight, and evidence quotes must not mask extraction gaps.
         record = _record(context={"machine_id": "M01", "benchmark_run_id": "private-run",
+                                  "steps": ["Isolate power."],
                                   "case_card": {"action": "Clean the approved optical path.",
                                                 "evidence": [{"quote": "UNEXTRACTED FACT"}]}})
-        self.assertIn("Clean the approved optical path", record.embedding_text())
-        self.assertNotIn("UNEXTRACTED FACT", record.embedding_text())
-        self.assertNotIn("private-run", record.lexical_text())
+        for text in ("Clean the approved optical path", "UNEXTRACTED FACT",
+                     "Isolate power", "private-run"):
+            self.assertNotIn(text, record.lexical_text())
+        self.assertIn("machine_id=M01", record.embedding_text())
         self.assertEqual(record.context["case_card"]["evidence"][0]["quote"], "UNEXTRACTED FACT")
 
     def test_lexical_text_contains_subject_claim_and_stable_context(self) -> None:
@@ -222,6 +232,35 @@ class KnowledgeRecordTest(unittest.TestCase):
             Document(id=str(record.id), page_content=record.claim, metadata=record.to_metadata())
         )
         self.assertEqual(restored.conflict_with, [])
+
+    def test_lifecycle_fields_round_trip_through_document(self) -> None:
+        case, newer = uuid4(), uuid4()
+        record = _record(
+            status=KnowledgeStatus.DRAFT, supported_by=[case], contradicted_by=[],
+            superseded_by=newer, revision={"action": "merge", "from": [str(case)]},
+        )
+        metadata = record.to_metadata()
+        self.assertEqual(metadata["status"], "draft")
+        self.assertEqual(metadata["supported_by"], "{" + str(case) + "}")
+        self.assertEqual(metadata["contradicted_by"], "{}")
+        self.assertEqual(metadata["superseded_by"], str(newer))
+        restored = KnowledgeRecord.from_document(Document(
+            id=str(record.id), page_content=record.claim,
+            metadata={**metadata, "revision": '{"action": "merge", "from": ["%s"]}' % case},
+        ))
+        self.assertEqual(restored, record)
+
+    def test_rows_without_lifecycle_columns_are_approved_and_unlinked(self) -> None:
+        record = _record()
+        metadata = record.to_metadata()
+        for key in ("status", "supported_by", "contradicted_by", "superseded_by", "revision"):
+            metadata.pop(key)
+        restored = KnowledgeRecord.from_document(
+            Document(id=str(record.id), page_content=record.claim, metadata=metadata)
+        )
+        self.assertEqual(restored.status, KnowledgeStatus.APPROVED)
+        self.assertEqual((restored.supported_by, restored.superseded_by, restored.revision),
+                         ([], None, {}))
 
     def test_from_document_accepts_native_database_types(self) -> None:
         record = _record(conflict_with=[uuid4()])

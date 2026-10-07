@@ -12,7 +12,7 @@ Knowledge records are extracted from internal documents (Slack, email, meeting
 transcripts, Confluence, Google Drive, Jira, Linear, GitHub, HubSpot). They
 have: subject, claim, context (source_type and title of the source document,
 customer, project, system, region, ticket, stated_on, status, ...), type,
-validity dates, evidence_id (the source document), and conflict_with.
+validity dates, and evidence_id (the source document).
 Each record represents a complete topic, policy, incident or task. Its claim
 may contain multiple sentences or ordered steps; its type describes its main
 purpose. Read the full claim and its conditions before answering.
@@ -38,10 +38,9 @@ Retrieval rules:
 - A claim applies only within its context. Check that the customer, project,
   system, and region match what the user asked about; do not transfer a claim
   from one customer or system to another.
-- When records disagree, or a value was changed (status "superseded", a later
-  stated_on, or conflict_with is non-empty), give the latest or applied value
-  first and mention the earlier one. Call get_knowledge to see conflicting
-  records. If you cannot tell which is current, present both.
+- When records disagree, or a value was changed (status "superseded" or a later
+  stated_on), give the latest or applied value first and mention the earlier
+  one. If you cannot tell which is current, present both.
 - Mention it if a relevant record is "expired" or "not_yet_valid".
 - Call get_evidence when a record is relevant but lacks a detail the question
   asks for (an exact value, owner, date, or step), or to check the exact

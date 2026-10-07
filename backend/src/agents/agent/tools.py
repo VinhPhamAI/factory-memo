@@ -134,15 +134,33 @@ def _validity(record: KnowledgeRecord, today: date) -> str:
     return "current"
 
 
+# Structured context that the claim already renders as text.
+_RENDERED_CONTEXT_KEYS = frozenset({"case_card", "steps"})
+
+
 def _record_payload(
     record: KnowledgeRecord,
     today: date,
     *,
     search_hit: KnowledgeSearchHit | None = None,
 ) -> dict[str, Any]:
-    payload = record.model_dump(mode="json")
+    # conflict_with is reserved for future consolidation and nothing fills it
+    # yet: an always-empty field would read as "no known conflicts". The
+    # revision note is for reviewers, not for answering.
+    payload = record.model_dump(mode="json", exclude={"conflict_with", "revision"})
     payload["validity"] = _validity(record, today)
+    # Links are shown only when present, to keep payloads small.
+    for key in ("supported_by", "contradicted_by", "superseded_by"):
+        if not payload[key]:
+            del payload[key]
     if search_hit is not None:
+        # Search results stay compact: Case Cards and steps are already
+        # rendered into the claim; get_knowledge returns them in full.
+        payload["context"] = {
+            key: value
+            for key, value in record.context.items()
+            if key not in _RENDERED_CONTEXT_KEYS
+        }
         payload["retrieval"] = {
             "hybrid_score": round(search_hit.hybrid_score, 6),
             "vector_rank": search_hit.vector_rank,
@@ -180,7 +198,7 @@ def _knowledge_evidence(record: KnowledgeRecord) -> Evidence:
         "stated_by": record.stated_by,
         "valid_from": record.valid_from,
         "valid_to": record.valid_to,
-        "conflict_with": [str(i) for i in record.conflict_with],
+        "status": record.status.value,
     }
 
 
@@ -350,7 +368,7 @@ def build_search_tool(context_filters: Sequence[ContextFilter] = ()) -> BaseTool
 
 @tool(args_schema=KnowledgeIdInput)
 async def get_knowledge(knowledge_id: UUID, runtime: ToolRuntime) -> Command:
-    """Read one knowledge record in full, including the records it conflicts with."""
+    """Read one knowledge record in full."""
     context: KnowledgeAgentContext = runtime.context
     _log_call(context, "get_knowledge", knowledge_id=knowledge_id)
     found = await context.store.get_knowledge([knowledge_id])
@@ -362,25 +380,9 @@ async def get_knowledge(knowledge_id: UUID, runtime: ToolRuntime) -> Command:
             [],
         )
     record = found[0]
-    conflicts = await context.store.get_knowledge(record.conflict_with)
-    today = context.now.date()
-    payload = {
-        "ok": True,
-        "knowledge": _record_payload(record, today),
-        "conflicting_knowledge": [_record_payload(item, today) for item in conflicts],
-    }
-    _log_result(
-        context,
-        "get_knowledge",
-        knowledge_id=knowledge_id,
-        found=True,
-        conflict_ids=[str(item.id) for item in conflicts],
-    )
-    return _command(
-        runtime,
-        payload,
-        [_knowledge_evidence(record), *(_knowledge_evidence(item) for item in conflicts)],
-    )
+    payload = {"ok": True, "knowledge": _record_payload(record, context.now.date())}
+    _log_result(context, "get_knowledge", knowledge_id=knowledge_id, found=True)
+    return _command(runtime, payload, [_knowledge_evidence(record)])
 
 
 @tool(args_schema=EvidenceIdInput)

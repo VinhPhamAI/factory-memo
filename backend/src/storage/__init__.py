@@ -9,6 +9,7 @@ from backend.src.storage.models import (
     ConversationStatus,
     KnowledgeRecord,
     KnowledgeSearchHit,
+    KnowledgeStatus,
     RawConversation,
 )
 
@@ -16,6 +17,7 @@ __all__ = [
     "ConversationStatus",
     "KnowledgeRecord",
     "KnowledgeSearchHit",
+    "KnowledgeStatus",
     "KnowledgeStore",
     "RawConversation",
     "StorageError",

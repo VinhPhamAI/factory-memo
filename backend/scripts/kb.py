@@ -52,7 +52,7 @@ from backend.src.services.knowledge_ingestion import (
     IngestionResult,
     KnowledgeIngestionService,
 )
-from backend.src.storage import KnowledgeStore, StorageError
+from backend.src.storage import KnowledgeStatus, KnowledgeStore, StorageError
 from backend.src.storage.databases import (
     DatabaseAdminError,
     database_exists,
@@ -327,7 +327,11 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
     context_columns = dataset.context_columns if dataset else ()
 
     extractor = KnowledgeExtractionService.from_env(
-        spec.extract_prompt, max_tokens=EXTRACTION_MAX_TOKENS
+        spec.extract_prompt,
+        max_tokens=EXTRACTION_MAX_TOKENS,
+        # A typed output schema is also sent as the response format.
+        json_schema=spec.extraction_output_model is not None,
+        output_model=spec.extraction_output_model,
     )
     store = await KnowledgeStore.for_kb(spec)
     concurrency = args.concurrency or args.batch_size
@@ -345,6 +349,9 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
         ingestion = KnowledgeIngestionService(
             extractor, store,
             extraction_metadata={"version": spec.extraction_version, **extractor.provenance},
+            knowledge_status=(
+                KnowledgeStatus.DRAFT if spec.review_required else KnowledgeStatus.APPROVED
+            ),
         )
         for start in range(0, len(items), args.batch_size):
             batch = items[start : start + args.batch_size]

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +96,71 @@ def mean_metrics(per_query: Mapping[str, Mapping[str, float]]) -> dict[str, floa
         name: sum(row[name] for row in per_query.values()) / len(per_query)
         for name in names
     }
+
+
+@dataclass(frozen=True)
+class ThresholdCalibration:
+    """Result of calibrating a similarity threshold on labelled hits."""
+
+    # None when no threshold reaches the target precision with enough support.
+    threshold: float | None
+    # Precision and recall of hits at or above the threshold.
+    precision: float
+    recall: float
+    confident_hits: int
+    labelled_hits: int
+    relevant_hits: int
+
+
+def calibrate_similarity_threshold(
+    hits: Iterable[tuple[float, bool]],
+    *,
+    target_precision: float = 0.9,
+    min_support: int = 10,
+) -> ThresholdCalibration:
+    """Lowest similarity threshold whose hits reach `target_precision`.
+
+    `hits` are (vector_similarity, relevant) pairs from labelled searches, e.g.
+    the top-k knowledge hits of benchmark questions judged against their gold
+    sources. A hit at or above the threshold counts as confident, as in
+    KnowledgeStore (min_vector_similarity), so the lowest qualifying threshold
+    keeps the most relevant hits. At least `min_support` hits must clear it, so
+    a few lucky top hits cannot justify a threshold. Only the vector side of
+    `confident` is calibrated; lexical confidence uses term overlap.
+    """
+
+    if not 0 < target_precision <= 1:
+        raise ValueError("target_precision must be in (0, 1]")
+    if min_support < 1:
+        raise ValueError("min_support must be at least 1")
+    labelled = sorted(
+        ((float(score), bool(relevant)) for score, relevant in hits if not math.isnan(score)),
+        key=lambda hit: hit[0],
+        reverse=True,
+    )
+    total_relevant = sum(relevant for _, relevant in labelled)
+    best: ThresholdCalibration | None = None
+    seen = relevant_seen = 0
+    for index, (score, relevant) in enumerate(labelled):
+        seen += 1
+        relevant_seen += relevant
+        # Ties share one threshold: evaluate only after the last hit of a score.
+        if index + 1 < len(labelled) and labelled[index + 1][0] == score:
+            continue
+        precision = relevant_seen / seen
+        if seen >= min_support and precision >= target_precision:
+            best = ThresholdCalibration(
+                threshold=score,
+                precision=precision,
+                recall=relevant_seen / total_relevant if total_relevant else 0.0,
+                confident_hits=seen,
+                labelled_hits=len(labelled),
+                relevant_hits=total_relevant,
+            )
+    return best or ThresholdCalibration(
+        threshold=None, precision=0.0, recall=0.0, confident_hits=0,
+        labelled_hits=len(labelled), relevant_hits=total_relevant,
+    )
 
 
 async def retrieve(

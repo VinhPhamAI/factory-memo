@@ -70,7 +70,9 @@ async def ingest_run(args: argparse.Namespace) -> int:
     source = read_source()
     source_hash = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
     spec = get_kb("maintenance")
-    extractor = KnowledgeExtractionService.from_env(spec.extract_prompt, max_tokens=8192, json_schema=True)
+    extractor = KnowledgeExtractionService.from_env(
+        spec.extract_prompt, max_tokens=8192, json_schema=True, output_model=spec.extraction_output_model
+    )
     checkpoint = args.run_dir / "extraction.json"
     if checkpoint.exists():
         run = json.loads(checkpoint.read_text())

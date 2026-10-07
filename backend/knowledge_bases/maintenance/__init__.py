@@ -10,6 +10,7 @@ from backend.knowledge_bases.base import (
     Retrieval,
     RetrievalQuestions,
 )
+from backend.knowledge_bases.maintenance.schema import MaintenanceExtraction
 from backend.src.agents.rag.chunking import ChunkingConfig
 
 
@@ -45,5 +46,7 @@ SPEC = KnowledgeBaseSpec.from_directory(
         ),
     ),
     embedding_context_keys=("machine_id", "machine_model", "component_model", "condition"),
-    extraction_version="maintenance-case-card-v2",
+    extraction_version="maintenance-case-lesson-v1",
+    extraction_output_model=MaintenanceExtraction,
+    review_required=True,
 )

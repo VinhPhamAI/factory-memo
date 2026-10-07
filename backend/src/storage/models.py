@@ -28,6 +28,16 @@ class ConversationStatus(str, Enum):
     FAILED = "failed"
 
 
+class KnowledgeStatus(str, Enum):
+    """Review state of a knowledge record."""
+
+    # Extracted but not yet reviewed by an expert; still searchable.
+    DRAFT = "draft"
+    APPROVED = "approved"
+    # Retired or replaced; kept for citations and history, never searched.
+    DEPRECATED = "deprecated"
+
+
 class RawConversation(BaseModel):
     """A stored transcript that knowledge records cite as evidence."""
 
@@ -54,6 +64,14 @@ class KnowledgeRecord(BaseModel):
     valid_from: date | None = None
     valid_to: date | None = None
     conflict_with: list[UUID] = Field(default_factory=list)
+    status: KnowledgeStatus = KnowledgeStatus.APPROVED
+    # Cases a generalized record was drawn from, and cases that contradict it.
+    supported_by: list[UUID] = Field(default_factory=list)
+    contradicted_by: list[UUID] = Field(default_factory=list)
+    # The record that replaced this one; replaced records are not searched.
+    superseded_by: UUID | None = None
+    # Why the record last changed: action, reason, actor, run, previous ids.
+    revision: dict[str, Any] = Field(default_factory=dict)
     # Vectors are storage detail: keep them out of dumps, tool payloads, and logs.
     embedding: list[float] | None = Field(default=None, exclude=True, repr=False)
 
@@ -65,8 +83,13 @@ class KnowledgeRecord(BaseModel):
         evidence_id: UUID,
         stated_by: str | None = None,
         created_at: datetime | None = None,
+        status: KnowledgeStatus = KnowledgeStatus.APPROVED,
     ) -> "KnowledgeRecord":
-        """Attach ingestion metadata to one LLM-extracted knowledge item."""
+        """Attach ingestion metadata to one LLM-extracted knowledge item.
+
+        item.supported_by holds positions within the extraction result; the
+        caller resolves them to record ids once every record exists.
+        """
 
         return cls(
             subject=item.subject,
@@ -78,6 +101,7 @@ class KnowledgeRecord(BaseModel):
             created_at=created_at or _utcnow(),
             valid_from=item.valid_from,
             valid_to=item.valid_to,
+            status=status,
         )
 
     def embedding_text(self, leading_keys: Sequence[str] = ()) -> str:
@@ -88,13 +112,13 @@ class KnowledgeRecord(BaseModel):
         """
 
         parts = [f"{self.subject}: {self.claim}"]
-        # Benchmark run IDs are provenance, not semantic scope. Case Card
-        # evidence stays available for inspection but is not indexed: otherwise
-        # source quotes could hide omissions from the extracted knowledge.
-        scope_context = {key: value for key, value in self.context.items() if key != "benchmark_run_id"}
-        card = scope_context.get("case_card")
-        if isinstance(card, dict):
-            scope_context["case_card"] = {key: value for key, value in card.items() if key != "evidence"}
+        # Benchmark run IDs are provenance, not semantic scope. Structured
+        # content (a Case Card, procedure steps) is already rendered into the
+        # claim, so it is not indexed twice; Case Card evidence quotes are never
+        # indexed, as they could hide omissions from the extracted knowledge.
+        scope_context = {
+            key: value for key, value in self.context.items() if key not in _UNINDEXED_CONTEXT
+        }
         ordered = [key for key in leading_keys if key in scope_context]
         ordered += sorted(key for key in scope_context if key not in ordered)
         scope = "; ".join(
@@ -122,9 +146,12 @@ class KnowledgeRecord(BaseModel):
             "created_at": self.created_at,
             "valid_from": self.valid_from,
             "valid_to": self.valid_to,
-            # A Postgres array literal lets the server coerce it to UUID[],
-            # including the empty case that a bare Python list cannot type.
-            "conflict_with": "{" + ",".join(str(i) for i in self.conflict_with) + "}",
+            "conflict_with": _uuid_array(self.conflict_with),
+            "status": self.status.value,
+            "supported_by": _uuid_array(self.supported_by),
+            "contradicted_by": _uuid_array(self.contradicted_by),
+            "superseded_by": str(self.superseded_by) if self.superseded_by else None,
+            "revision": self.revision,
         }
 
     @classmethod
@@ -135,9 +162,9 @@ class KnowledgeRecord(BaseModel):
         context = metadata.get("context") or {}
         if isinstance(context, str):
             context = json.loads(context)
-        conflict_with = metadata.get("conflict_with") or []
-        if isinstance(conflict_with, str):
-            conflict_with = [i for i in conflict_with.strip("{}").split(",") if i]
+        revision = metadata.get("revision") or {}
+        if isinstance(revision, str):
+            revision = json.loads(revision)
         return cls(
             id=document.id,
             subject=metadata["subject"],
@@ -149,7 +176,12 @@ class KnowledgeRecord(BaseModel):
             created_at=metadata["created_at"],
             valid_from=metadata.get("valid_from"),
             valid_to=metadata.get("valid_to"),
-            conflict_with=conflict_with,
+            conflict_with=_parse_uuid_array(metadata.get("conflict_with")),
+            status=metadata.get("status") or KnowledgeStatus.APPROVED,
+            supported_by=_parse_uuid_array(metadata.get("supported_by")),
+            contradicted_by=_parse_uuid_array(metadata.get("contradicted_by")),
+            superseded_by=metadata.get("superseded_by"),
+            revision=revision,
         )
 
 
@@ -174,6 +206,24 @@ class KnowledgeSearchHit:
         if self.vector_distance is None:
             return None
         return 1.0 - self.vector_distance
+
+
+# Context keys left out of the embedded and full-text indexed text.
+_UNINDEXED_CONTEXT = frozenset({"benchmark_run_id", "case_card", "steps"})
+
+
+def _uuid_array(ids: Sequence[UUID]) -> str:
+    # A Postgres array literal lets the server coerce it to UUID[], including
+    # the empty case that a bare Python list cannot type.
+    return "{" + ",".join(str(i) for i in ids) + "}"
+
+
+def _parse_uuid_array(value: Any) -> list[Any]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [i for i in value.strip("{}").split(",") if i]
+    return list(value)
 
 
 def _compact(value: Any) -> str:
