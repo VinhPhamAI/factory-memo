@@ -314,6 +314,124 @@ gold facts + one junk fact) scores 1.0 on recall, MC, answer correctness and fac
 fact precision equal to the share of real facts. Answering with a distractor scores ~0.1 answer
 score and 0% correctness. Empty predictions score 0.
 
+## End-to-end example
+
+A real test-split conversation (`conv_057_1`) and its three questions, one per knowledge source,
+scored for a deliberately imperfect system. Files: [`examples/predictions_example.jsonl`](examples/predictions_example.jsonl)
+and [`examples/results_example.json`](examples/results_example.json).
+
+### 1. Input — what the system reads (`public/` only)
+
+Manual chunk (`public/corpus_chunks.jsonl`, abridged):
+
+```json
+{"chunk_id": "melservo_je_p0069_c01", "doc_id": "melservo_je",
+ "section_path": ["1. SERVO AMPLIFIER TROUBLESHOOTING", "1.6 Trouble which does not trigger an alarm/warning"],
+ "page_start": 69, "page_end": 69,
+ "text": "| Description | Cause | Checkpoint | Action | Target |\n| The servo motor does not operate. | The setting of the torque limit is incorrect. | Check if the torque limit value is \"0\". [A], [C]: [Pr. PA11] and [Pr. PA12] ... | Set it correctly. |\n| A machine is interfering with the servo motor. | Check if a machine is interfering. | Remove the interference. | ..."}
+```
+
+Conversation (`public/conversations.jsonl`, 8 turns, abridged; no facts or `fact_turns`):
+
+```json
+{"conversation_id": "conv_057_1",
+ "speakers": [{"id": "junior_01", "role": "junior_technician"}, {"id": "expert_01", "role": "senior_technician"}],
+ "turns": [
+  {"turn_id": 1, "speaker": "junior_01", "text": "Hey, I'm stuck on MR-JE-AX932 on Line 8. The servo motor won't rotate when I give the start command, but there's no alarm or warning ... should I swap it?"},
+  {"turn_id": 2, "speaker": "expert_01", "text": "Hold on, don't swap anything yet. On Line 8, first check for mechanical binding by manually turning the ball screw. If it moves freely, then we go check parameters."},
+  {"turn_id": 4, "speaker": "expert_01", "text": "We had a similar incident in 2022 on Line 8, and it was a piece of swarf jamming the coupling, not electrical settings. ... make sure the safety gate is closed, because the brake release signal on this machine is interlocked with the gate."},
+  {"turn_id": 6, "speaker": "expert_01", "text": "Right, when PA11 is zero, temporarily set it to 100% to test motor movement. But revert it immediately after diagnosis, don't leave it like that."}
+ ]}
+```
+
+Questions (`public/questions_test.jsonl`):
+
+```json
+{"question_id": "q_0158", "question": "On MR-JE-AX932, the servo motor won't move and PA11 currently reads zero — what temporary setting should I try to test movement, and what must I do afterward?",
+ "options": {"A": "Temporarily set PA11 to 0% to test movement, then leave it at that value.",
+             "B": "Permanently set PA11 to 100% to test movement, then check for alarms afterward.",
+             "C": "Temporarily set PA11 to 100% to test movement, then revert it right after diagnosis.",
+             "D": "Temporarily set PA11 to 50% to test movement, then revert it after a restart."}}
+{"question_id": "q_0159", "question": "MR-JE-AX932 on Line 8 won't rotate after a tool change with no alarm shown — what should I check first and what parameter could be causing this?",
+ "options": {"A": "Check the electromagnetic brake power supply first, then inspect the command pulse wiring.",
+             "B": "Check ball screw binding manually, then verify torque limit parameter is not set to 0.",
+             "C": "Swap the servo amplifier immediately, then verify the control mode parameter is correct.",
+             "D": "Turn on SON and LSP/LSN signals first, then check the torque limit parameter value."}}
+{"question_id": "q_0160", "question": "On an MR-JE servo amplifier, the servo motor won't run and no alarm or warning shows. What should I check if the machine itself is interfering with the motor?",
+ "options": {"A": "Check whether a machine is interfering and remove the interference.",
+             "B": "Turn on the electromagnetic brake power supply.",
+             "C": "Check the torque limit value and set it correctly.",
+             "D": "Check the SON state and turn SON on."}}
+```
+
+### 2. Output — what the system writes (`predictions.jsonl`)
+
+```json
+{"type": "extraction", "conversation_id": "conv_057_1", "facts": [
+  "On Line 8, check for mechanical binding by turning the ball screw by hand before checking parameters.",
+  "When PA11 (torque limit) is 0, temporarily set it to 100% to test motor movement and revert it right after diagnosis.",
+  "The brake release on MR-JE-AX932's machine is interlocked with the safety gate, so close the gate before troubleshooting.",
+  "Servo amplifiers sometimes need replacement."]}
+{"type": "answer", "question_id": "q_0158", "choice": "C",
+ "answer": "Set PA11 to 100% temporarily to check whether the motor moves, then put PA11 back right after the diagnosis.",
+ "retrieved": [{"type": "conversation", "id": "conv_057_1", "turn_id": 6}, {"type": "conversation", "id": "conv_057_1", "turn_id": 8},
+               {"type": "document", "id": "melservo_je_p0069_c01"}]}
+{"type": "answer", "question_id": "q_0159", "choice": "B",
+ "answer": "First turn the ball screw by hand to rule out mechanical binding; on Line 8 that is always the first check.",
+ "retrieved": [{"type": "conversation", "id": "conv_057_1", "turn_id": 2}, {"type": "conversation", "id": "conv_057_1", "turn_id": 4},
+               {"type": "conversation", "id": "conv_057_1", "turn_id": 8}]}
+{"type": "answer", "question_id": "q_0160", "choice": "A",
+ "answer": "Check whether a machine is interfering with the servo motor and remove the interference.",
+ "retrieved": [{"type": "document", "id": "melservo_je_p0070_c01"}, {"type": "document", "doc_id": "melservo_je", "page": 69}]}
+```
+
+The second item of q_0160 matches by `doc_id` + `page`, as a system with its own chunking would report it.
+
+### 3. Gold (hidden) and scores
+
+Gold for these questions (from `benchmark/test.jsonl`, abridged):
+
+```json
+{"question_id": "q_0158", "knowledge_source": "expert_only", "difficulty": "medium",
+ "required_evidence": [{"type": "conversation", "id": "conv_057_1", "turn_id": 6}],
+ "reference_answer": "Temporarily set PA11 to 100% to test motor movement, then revert it immediately after diagnosis so it isn't left in that state.",
+ "answer_key_points": ["Set PA11 temporarily to 100%", "This is done to test motor movement", "Revert PA11 immediately after diagnosis"],
+ "correct_option": "C"}
+{"question_id": "q_0159", "knowledge_source": "expert_and_docs", "difficulty": "medium",
+ "required_evidence": [{"type": "document", "id": "melservo_je_p0069_c01", "doc_id": "melservo_je", "pages": [69, 69]},
+                       {"type": "conversation", "id": "conv_057_1", "turn_id": 2}],
+ "reference_answer": "First check for mechanical binding by manually turning the ball screw on Line 8; if it moves freely, check whether the torque limit parameter is set to 0, as an incorrect torque limit setting prevents motor operation without triggering an alarm.",
+ "answer_key_points": ["Check for mechanical binding first by manually turning the ball screw on Line 8",
+                       "If the ball screw moves freely, check parameters",
+                       "An incorrect torque limit setting (value of 0) causes the motor not to operate without an alarm"],
+ "correct_option": "B"}
+{"question_id": "q_0160", "knowledge_source": "docs_only", "difficulty": "easy",
+ "required_evidence": [{"type": "document", "id": "melservo_je_p0069_c01", "doc_id": "melservo_je", "pages": [69, 69]}],
+ "reference_answer": "If a machine is interfering with the servo motor, check whether a machine is interfering and remove the interference.",
+ "correct_option": "A"}
+```
+
+`uv run python benchmark/evaluate.py --predictions benchmark/examples/predictions_example.jsonl --split test --facts --k 1,3,5`
+gives these per-question rows:
+
+| Question | Cell | Recall@1 | Recall@3 | Context Precision@3 | MC | Answer score | Correct |
+|---|---|---|---|---|---|---|---|
+| q_0158 | expert_only / medium | 1.0 | 1.0 | 1.0 | ✔ C | 1.00 | ✔ |
+| q_0159 | expert_and_docs / medium | 0.5 | 0.5 | 1.0 | ✔ B | 0.33 | ✘ |
+| q_0160 | docs_only / easy | 0.0 | 1.0 | 0.5 | ✔ A | 1.00 | ✔ |
+
+- **q_0159** — the system used only the expert's know-how and ignored the manual: the chunk was
+  never retrieved (Recall 0.5) and the judge marked 2 of 3 key points missing (check parameters
+  when the screw turns freely; torque limit = 0). It still picked the right option, which is why
+  free-text Answer Correctness is the stricter measure.
+- **q_0160** — the right chunk was found but ranked second: Recall@1 = 0, Context Precision@3 = 0.5.
+- **Fact capture for `conv_057_1`** — precision 0.75, recall 0.75. The extraction covers ef1, ef3 and
+  ef4 but misses **ef2** (the 2022 swarf jam, `historical_experience`), and "Servo amplifiers
+  sometimes need replacement." matches no gold fact.
+
+The "Overall" table printed for this file is close to 0 because the other 397 test questions are
+unanswered and score 0; read the per-question rows (`per_question` in the results JSON).
+
 ## Reproduce
 
 Environment (`.env` at the repository root, OpenAI-compatible endpoint):
@@ -353,6 +471,7 @@ corresponding `generation/*.jsonl` file to regenerate a step.
 | `generation/qa_slots.jsonl`, `qa_drafts.jsonl` | generate_qa | planned evidence slots and generated drafts |
 | `benchmark/qa.jsonl`, `train.jsonl`, `test.jsonl`, `manifest.json` | generate_qa | gold benchmark |
 | `public/*.jsonl` | generate_qa | system inputs |
+| `examples/predictions_example.jsonl`, `results_example.json` | hand-written / evaluate | the [end-to-end example](#end-to-end-example) |
 
 Prompts live in `prompts/` (`generate_scenario.md`, `generate_conversation.md`, `generate_qa.md`,
 `judge_answer.md`, `judge_facts.md`).
