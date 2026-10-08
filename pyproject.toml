@@ -13,6 +13,7 @@ dependencies = [
     "langchain-postgres>=0.0.18",
     "openai>=2.41.1",
     "psycopg[binary]>=3.3.6",
+    "pymupdf>=1.28.2",
     "python-dotenv>=1.2.3",
     "streamlit>=1.50.0",
     "uvicorn>=0.34.2",
