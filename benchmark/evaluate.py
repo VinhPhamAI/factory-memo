@@ -3,6 +3,7 @@
     uv run python benchmark/evaluate.py --predictions run.jsonl --split test --out results.json
     uv run python benchmark/evaluate.py --predictions run.jsonl --skip-llm     # retrieval + MC only
     uv run python benchmark/evaluate.py --predictions run.jsonl --facts        # + fact precision/recall
+    uv run python benchmark/evaluate.py --predictions run.jsonl --question-ids ids.txt  # a sample only
 
 Predictions JSONL (one object per line):
     {"type": "answer", "question_id": "q_0001", "answer": "...", "choice": "B",
@@ -84,6 +85,11 @@ async def main_async(args: argparse.Namespace) -> None:
     questions = read_jsonl(SPLITS[args.split])
     if not questions:
         raise SystemExit("No gold questions; run generate_qa.py first")
+    if args.question_ids:
+        wanted = set(Path(args.question_ids).read_text(encoding="utf-8").split())
+        questions = [q for q in questions if q["question_id"] in wanted]
+        if missing := wanted - {q["question_id"] for q in questions}:
+            raise SystemExit(f"Not in split {args.split}: {', '.join(sorted(missing))}")
     preds = read_jsonl(Path(args.predictions))
     answers = {p["question_id"]: p for p in preds if p.get("type", "answer") == "answer" and "question_id" in p}
     extracted = {p["conversation_id"]: p.get("facts", []) for p in preds if p.get("type") == "extraction"}
@@ -116,7 +122,8 @@ async def main_async(args: argparse.Namespace) -> None:
         conversations = read_jsonl(CONVERSATIONS_PATH)
         scenarios = {s["scenario_id"]: s for s in read_jsonl(SCENARIOS_PATH)}
         conv_scenario = {c["conversation_id"]: c["scenario_id"] for c in conversations}
-        split_convs = sorted({q["conversation_id"] for q in questions}) if args.split != "all" else sorted(conv_scenario)
+        subset = args.split != "all" or args.question_ids
+        split_convs = sorted({q["conversation_id"] for q in questions}) if subset else sorted(conv_scenario)
         llm = llm or LLMClient()
         fact_rows = await judge_facts(llm, split_convs, extracted, scenarios, conv_scenario)
 
@@ -165,6 +172,7 @@ def main() -> None:
     parser.add_argument("--predictions", required=True)
     parser.add_argument("--split", choices=list(SPLITS), default="test")
     parser.add_argument("--k", default="1,3,5,10")
+    parser.add_argument("--question-ids", help="file of question ids (whitespace-separated): score only these")
     parser.add_argument("--skip-llm", action="store_true", help="no answer judge (retrieval + MC only)")
     parser.add_argument("--facts", action="store_true", help="also judge fact precision/recall (LLM)")
     parser.add_argument("--out")

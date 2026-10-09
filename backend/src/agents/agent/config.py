@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from backend.src.services.knowledge_extraction import DEFAULT_LLM_BASE_URL
+from backend.src.services.llm import DEFAULT_LLM_BASE_URL
 
 
 MODEL_TIMEOUT_SECONDS = 60

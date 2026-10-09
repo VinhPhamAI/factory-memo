@@ -7,6 +7,7 @@ from backend.src.storage.knowledge_store import (
 )
 from backend.src.storage.models import (
     ConversationStatus,
+    KnowledgeLinkUpdate,
     KnowledgeRecord,
     KnowledgeSearchHit,
     KnowledgeStatus,
@@ -15,6 +16,7 @@ from backend.src.storage.models import (
 
 __all__ = [
     "ConversationStatus",
+    "KnowledgeLinkUpdate",
     "KnowledgeRecord",
     "KnowledgeSearchHit",
     "KnowledgeStatus",

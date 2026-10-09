@@ -64,7 +64,7 @@ class KnowledgeRecord(BaseModel):
     valid_from: date | None = None
     valid_to: date | None = None
     conflict_with: list[UUID] = Field(default_factory=list)
-    status: KnowledgeStatus = KnowledgeStatus.APPROVED
+    status: KnowledgeStatus = KnowledgeStatus.DRAFT
     # Cases a generalized record was drawn from, and cases that contradict it.
     supported_by: list[UUID] = Field(default_factory=list)
     contradicted_by: list[UUID] = Field(default_factory=list)
@@ -83,7 +83,7 @@ class KnowledgeRecord(BaseModel):
         evidence_id: UUID,
         stated_by: str | None = None,
         created_at: datetime | None = None,
-        status: KnowledgeStatus = KnowledgeStatus.APPROVED,
+        status: KnowledgeStatus = KnowledgeStatus.DRAFT,
     ) -> "KnowledgeRecord":
         """Attach ingestion metadata to one LLM-extracted knowledge item.
 
@@ -177,12 +177,30 @@ class KnowledgeRecord(BaseModel):
             valid_from=metadata.get("valid_from"),
             valid_to=metadata.get("valid_to"),
             conflict_with=_parse_uuid_array(metadata.get("conflict_with")),
-            status=metadata.get("status") or KnowledgeStatus.APPROVED,
+            status=metadata.get("status") or KnowledgeStatus.DRAFT,
             supported_by=_parse_uuid_array(metadata.get("supported_by")),
             contradicted_by=_parse_uuid_array(metadata.get("contradicted_by")),
             superseded_by=metadata.get("superseded_by"),
             revision=revision,
         )
+
+
+@dataclass(frozen=True)
+class KnowledgeLinkUpdate:
+    """Links added to a stored record when new knowledge relates to it.
+
+    Content is never edited in place: a changed idea is a new record that
+    supersedes the old one, so citations of the old one stay valid.
+    """
+
+    record_id: UUID
+    supported_by: tuple[UUID, ...] = ()
+    contradicted_by: tuple[UUID, ...] = ()
+    conflict_with: tuple[UUID, ...] = ()
+    # Retires the record (status deprecated) in favour of this one.
+    superseded_by: UUID | None = None
+    # Appended to revision["history"], to explain the change.
+    event: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ from backend.src.services.knowledge_extraction import (
     RAW_CONVERSATION_PLACEHOLDER,
     StructuredExtraction,
 )
+from backend.src.services.ontology import Ontology
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +21,7 @@ EXTRACT_PROMPT_FILE = "extract.md"
 AGENT_PROMPT_FILE = "agent.md"
 DOCUMENTS_AGENT_PROMPT_FILE = "agent_documents.md"
 EMBEDDING_QUERY_PROMPT_FILE = "embedding_query.md"
+ONTOLOGY_FILE = "ontology.yaml"
 DATABASE_PREFIX = "kb_"
 # The database name kb_<name> must stay a plain PostgreSQL identifier.
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,59}$")
@@ -132,9 +134,11 @@ class KnowledgeBaseSpec:
     # Typed schema the extraction output must match; None accepts plain
     # knowledge items with any context dictionary.
     extraction_output_model: type[StructuredExtraction] | None = None
-    # Extracted knowledge starts as a draft for expert review instead of
-    # being approved on ingestion.
+    # Legacy compatibility for knowledge bases that still declare review policy.
+    # Ingestion now stores extracted records as drafts regardless of this flag.
     review_required: bool = False
+    # Known values of context keys; extracted context is normalized to it.
+    ontology: Ontology | None = None
 
     def __post_init__(self) -> None:
         keys = [item.key for item in self.context_filters]
@@ -142,6 +146,9 @@ class KnowledgeBaseSpec:
             raise ValueError(f"Duplicate context filters in {self.name!r}")
         for key in self.embedding_context_keys:
             _check_context_key(key)
+        if self.ontology is not None:
+            for key in self.ontology.keys:
+                _check_context_key(key)
         if not _NAME_RE.match(self.name):
             raise ValueError(
                 f"Invalid knowledge base name {self.name!r}: use lowercase "
@@ -178,7 +185,7 @@ class KnowledgeBaseSpec:
 
     @classmethod
     def from_directory(cls, directory: Path, **fields) -> "KnowledgeBaseSpec":
-        """Load prompts, including an optional embedding_query.md for retrieval.
+        """Load prompts and the optional ontology.yaml and embedding_query.md.
 
         The agent prompt is agent.md for knowledge retrieval and
         agent_documents.md for document retrieval; extract.md is optional for
@@ -194,6 +201,9 @@ class KnowledgeBaseSpec:
                 if query_prompt.is_file()
                 else ""
             )
+
+        if "ontology" not in fields and (directory / ONTOLOGY_FILE).is_file():
+            fields["ontology"] = Ontology.from_file(directory / ONTOLOGY_FILE)
 
         documents = Retrieval(fields.get("retrieval", Retrieval.KNOWLEDGE)) is Retrieval.DOCUMENTS
         extract_prompt = directory / EXTRACT_PROMPT_FILE

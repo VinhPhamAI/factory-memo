@@ -144,13 +144,12 @@ def _record_payload(
     *,
     search_hit: KnowledgeSearchHit | None = None,
 ) -> dict[str, Any]:
-    # conflict_with is reserved for future consolidation and nothing fills it
-    # yet: an always-empty field would read as "no known conflicts". The
-    # revision note is for reviewers, not for answering.
-    payload = record.model_dump(mode="json", exclude={"conflict_with", "revision"})
+    # The revision notes (verification, consolidation) are for reviewers,
+    # not for answering.
+    payload = record.model_dump(mode="json", exclude={"revision"})
     payload["validity"] = _validity(record, today)
     # Links are shown only when present, to keep payloads small.
-    for key in ("supported_by", "contradicted_by", "superseded_by"):
+    for key in ("supported_by", "contradicted_by", "conflict_with", "superseded_by"):
         if not payload[key]:
             del payload[key]
     if search_hit is not None:

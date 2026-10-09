@@ -6,6 +6,7 @@ Examples:
     uv run python -m backend.scripts.kb ingest maintenance --batch-size 8
     uv run python -m backend.scripts.kb ingest enterprise_rag --limit 20 --batch-size 8
     uv run python -m backend.scripts.kb ingest maintenance --file transcript.txt
+    uv run python -m backend.scripts.kb ingest maintenance --extract --verify llm --limit 5
     uv run python -m backend.scripts.kb query maintenance "How do I fix the unstable sensor on M01?"
     uv run python -m backend.scripts.kb evaluate maintenance
     uv run python -m backend.scripts.kb reembed maintenance
@@ -13,7 +14,11 @@ Examples:
 
 Knowledge bases with retrieval="knowledge" extract knowledge records with an
 LLM at ingest; retrieval="documents" chunks and embeds the sources as they are
-(no LLM), and `evaluate` scores that retrieval against labelled questions.
+(no LLM), and `evaluate` scores that retrieval against labelled questions;
+`ingest --extract` runs knowledge extraction on such a knowledge base too.
+Extracted records are normalized to the knowledge base's ontology, verified
+against their transcript, and consolidated with stored knowledge; all are
+stored as drafts for expert review.
 """
 
 from __future__ import annotations
@@ -46,13 +51,15 @@ from backend.src.agents.rag.evaluation import (
 )
 from backend.src.agents.rag.indexing import index_documents
 from backend.src.agents.rag.store import SearchMode
+from backend.src.services.knowledge_consolidation import DEFAULT_ISOLATION_KEY, KnowledgeConsolidator
 from backend.src.services.knowledge_extraction import KnowledgeExtractionService
 from backend.src.services.knowledge_ingestion import (
     IngestionInput,
     IngestionResult,
     KnowledgeIngestionService,
 )
-from backend.src.storage import KnowledgeStatus, KnowledgeStore, StorageError
+from backend.src.services.knowledge_verification import KnowledgeVerifier, VerifyMode
+from backend.src.storage import KnowledgeRecord, KnowledgeStore, StorageError
 from backend.src.storage.databases import (
     DatabaseAdminError,
     database_exists,
@@ -243,6 +250,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Document retrieval: drop the chunk table and index everything again",
     )
     ingest.add_argument(
+        "--extract",
+        action="store_true",
+        help="Document retrieval: extract knowledge records instead of indexing chunks",
+    )
+    ingest.add_argument(
+        "--verify",
+        choices=[mode.value for mode in VerifyMode],
+        default=VerifyMode.QUOTES.value,
+        help="Check records against their transcript: quotes and numbers, plus an LLM "
+        "judge for llm (VERIFY_* settings); results are stored, records stay drafts "
+        "(default: quotes)",
+    )
+    ingest.add_argument(
+        "--no-consolidate",
+        action="store_true",
+        help="Store every record as new instead of merging or linking it with stored "
+        "lessons (CONSOLIDATION_* settings)",
+    )
+    ingest.add_argument(
         "--fail-fast",
         action="store_true",
         help="Stop after the batch with the first failed transcript instead of continuing",
@@ -319,7 +345,7 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
     if not items:
         raise ValueError(f"Input file contains no transcripts: {path}")
     id_column = dataset.id_column if dataset else None
-    if spec.retrieval is Retrieval.DOCUMENTS:
+    if spec.retrieval is Retrieval.DOCUMENTS and not args.extract:
         documents = to_documents(
             items, id_column=id_column, title_column=dataset.title_column if dataset else None
         )
@@ -332,14 +358,19 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
         # A typed output schema is also sent as the response format.
         json_schema=spec.extraction_output_model is not None,
         output_model=spec.extraction_output_model,
+        ontology=spec.ontology,
     )
+    verifier = KnowledgeVerifier.from_env(args.verify)
     store = await KnowledgeStore.for_kb(spec)
     concurrency = args.concurrency or args.batch_size
     succeeded = failed = knowledge_items = 0
     started = time.perf_counter()
     try:
         if id_column and not args.no_resume:
-            done = await store.processed_metadata_values(id_column)
+            # Benchmark runs ingest the same rows into the same tables.
+            done = await store.processed_metadata_values(
+                id_column, without_key=DEFAULT_ISOLATION_KEY
+            )
             remaining = [item for item in items if item.metadata.get(id_column) not in done]
             if skipped := len(items) - len(remaining):
                 print(f"[{spec.name}] Skipping {skipped} already processed rows ({id_column})")
@@ -349,9 +380,9 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
         ingestion = KnowledgeIngestionService(
             extractor, store,
             extraction_metadata={"version": spec.extraction_version, **extractor.provenance},
-            knowledge_status=(
-                KnowledgeStatus.DRAFT if spec.review_required else KnowledgeStatus.APPROVED
-            ),
+            ontology=spec.ontology,
+            verifier=verifier,
+            consolidator=None if args.no_consolidate else KnowledgeConsolidator.from_env(store),
         )
         for start in range(0, len(items), args.batch_size):
             batch = items[start : start + args.batch_size]
@@ -373,13 +404,19 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
             )
             # Failed transcripts are marked failed in the DB; the rest are kept.
             for item, result in zip(batch, results, strict=True):
-                if isinstance(result, IngestionResult):
+                if isinstance(result, IngestionResult) and result.duplicate_of:
+                    succeeded += 1
+                    print(f"{item.label}: already ingested (evidence {result.duplicate_of})")
+                elif isinstance(result, IngestionResult):
                     succeeded += 1
                     knowledge_items += len(result.records)
+                    actions = ", ".join(f"{n} {name}" for name, n in result.consolidation.items())
                     print(
                         f"{item.label}: {len(result.records)} knowledge items "
-                        f"(evidence {result.evidence_id})"
+                        f"(evidence {result.evidence_id})" + (f"; {actions}" if actions else "")
                     )
+                    for note in review_notes(result.records):
+                        print(f"  {note}")
                 else:
                     failed += 1
                     print(
@@ -398,6 +435,28 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
         f"(batch size {args.batch_size}, concurrency {concurrency})"
     )
     return 1 if failed else 0
+
+
+def review_notes(records: tuple[KnowledgeRecord, ...]) -> list[str]:
+    """One line per record whose ontology or verification needs an expert."""
+
+    notes = []
+    for record in records:
+        problems = []
+        ontology = record.revision.get("ontology") or {}
+        for section in ("unknown", "misplaced", "conflicts"):
+            if ontology.get(section):
+                problems.append(f"ontology {section}: {ontology[section]}")
+        verify = record.revision.get("verify") or {}
+        if verify and not verify.get("passed", True):
+            details = verify.get("issues") or [verify.get("error") or verify.get("verdict")]
+            problems.append(
+                "verify" + (f" {verify['verdict']}" if verify.get("verdict") else "")
+                + ": " + "; ".join(map(str, details))
+            )
+        if problems:
+            notes.append(f"{record.type.value} {record.subject!r}: " + " | ".join(problems))
+    return notes
 
 
 async def index_kb_documents(

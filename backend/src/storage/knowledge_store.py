@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage.models import (
     ConversationStatus,
+    KnowledgeLinkUpdate,
     KnowledgeRecord,
     KnowledgeSearchHit,
     KnowledgeStatus,
@@ -434,16 +435,17 @@ class KnowledgeStore:
             )
             """,
             # Review and consolidation columns, added in place to older tables.
-            # Existing rows predate review, so they count as approved.
+            # Nothing is approved without an expert, existing rows included.
             f"""
             ALTER TABLE {knowledge_table}
-                ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved'
+                ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft'
                     CHECK (status IN ({_KNOWLEDGE_STATUSES_SQL})),
                 ADD COLUMN IF NOT EXISTS supported_by UUID[] NOT NULL DEFAULT '{{}}',
                 ADD COLUMN IF NOT EXISTS contradicted_by UUID[] NOT NULL DEFAULT '{{}}',
                 ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCES {knowledge_table}(id),
                 ADD COLUMN IF NOT EXISTS revision JSONB NOT NULL DEFAULT '{{}}'::jsonb
             """,
+            f"ALTER TABLE {knowledge_table} ALTER COLUMN status SET DEFAULT 'draft'",
             f"ALTER TABLE {knowledge_table} ADD COLUMN IF NOT EXISTS search_text TEXT",
             f"""
             UPDATE {knowledge_table}
@@ -579,8 +581,14 @@ class KnowledgeStore:
                     {"id": conversation_id, "status": status.value, "error": error},
                 )
 
-    async def processed_metadata_values(self, key: str) -> set[str]:
-        """Values of metadata[key] over conversations that were fully ingested."""
+    async def processed_metadata_values(
+        self, key: str, *, without_key: str | None = None
+    ) -> set[str]:
+        """Values of metadata[key] over conversations that were fully ingested.
+
+        Conversations whose metadata has `without_key` (e.g. benchmark runs)
+        are left out.
+        """
 
         async with self._errors("read ingested conversations"):
             async with self._engine.connect() as conn:
@@ -589,12 +597,41 @@ class KnowledgeStore:
                         text(
                             f"SELECT DISTINCT metadata ->> :key "
                             f"FROM {self._table(RAW_CONVERSATION_TABLE)} "
-                            "WHERE status = :status AND metadata ? :key"
+                            "WHERE status = :status AND metadata ? :key "
+                            "AND NOT (CAST(:without_key AS text) IS NOT NULL "
+                            "AND metadata ? CAST(:without_key AS text))"
                         ),
-                        {"key": key, "status": ConversationStatus.PROCESSED.value},
+                        {
+                            "key": key,
+                            "status": ConversationStatus.PROCESSED.value,
+                            "without_key": without_key,
+                        },
                     )
                 ).scalars()
                 return {value for value in values if value is not None}
+
+    async def find_processed_conversation(
+        self, transcript_sha256: str, *, without_key: str | None = None
+    ) -> UUID | None:
+        """Earliest fully ingested conversation with this transcript hash."""
+
+        async with self._errors("read ingested conversations"):
+            async with self._engine.connect() as conn:
+                return await conn.scalar(
+                    text(
+                        f"SELECT id FROM {self._table(RAW_CONVERSATION_TABLE)} "
+                        "WHERE status = :status "
+                        "AND metadata ->> 'transcript_sha256' = :sha "
+                        "AND NOT (CAST(:without_key AS text) IS NOT NULL "
+                        "AND metadata ? CAST(:without_key AS text)) "
+                        "ORDER BY created_at, id LIMIT 1"
+                    ),
+                    {
+                        "sha": transcript_sha256,
+                        "status": ConversationStatus.PROCESSED.value,
+                        "without_key": without_key,
+                    },
+                )
 
     async def get_conversation(self, conversation_id: UUID) -> RawConversation | None:
         async with self._errors("read a conversation"):
@@ -621,11 +658,18 @@ class KnowledgeStore:
         for record, vector in zip(missing, vectors, strict=True):
             record.embedding = list(vector)
 
-    async def add_knowledge(self, records: Sequence[KnowledgeRecord]) -> list[UUID]:
-        """Embed (if not done yet) and store knowledge records; returns their ids."""
+    async def add_knowledge(
+        self,
+        records: Sequence[KnowledgeRecord],
+        *,
+        updates: Sequence[KnowledgeLinkUpdate] = (),
+    ) -> list[UUID]:
+        """Embed (if not done yet) and store records; returns their ids.
 
-        if not records:
-            return []
+        `updates` link stored records to the new ones (or to each other) in
+        the same transaction, so a failure leaves neither half behind.
+        """
+
         await self.embed_knowledge(records)
         for record in records:
             if len(record.embedding or []) != self._vector_size:
@@ -633,18 +677,140 @@ class KnowledgeStore:
                     f"Embedding for knowledge {record.id} has "
                     f"{len(record.embedding or [])} dimensions, expected {self._vector_size}"
                 )
+        if not records and not updates:
+            return []
 
-        store = await self._vector()
+        columns = [ID_COLUMN, CONTENT_COLUMN, EMBEDDING_COLUMN, *METADATA_COLUMNS]
+        insert = text(
+            f"INSERT INTO {self._table(KNOWLEDGE_TABLE)} "
+            f"({', '.join(columns)}) VALUES ({', '.join(':' + c for c in columns)})"
+        )
+        rows = [
+            {
+                ID_COLUMN: record.id,
+                CONTENT_COLUMN: record.claim,
+                EMBEDDING_COLUMN: json.dumps(record.embedding, separators=(",", ":")),
+                **{
+                    column: json.dumps(value, ensure_ascii=False, default=str)
+                    if isinstance(value, dict) else value
+                    for column, value in record.to_metadata(self._embedding_context_keys).items()
+                },
+            }
+            for record in records
+        ]
         async with self._errors("store knowledge"):
-            await store.aadd_embeddings(
-                texts=[record.claim for record in records],
-                embeddings=[record.embedding for record in records],
-                metadatas=[
-                    record.to_metadata(self._embedding_context_keys) for record in records
-                ],
-                ids=[str(record.id) for record in records],
-            )
+            async with self._engine.begin() as conn:
+                if rows:
+                    await conn.execute(insert, rows)
+                if updates:
+                    await self._apply_link_updates(conn, updates)
         return [record.id for record in records]
+
+    async def _apply_link_updates(
+        self, conn: Any, updates: Sequence[KnowledgeLinkUpdate]
+    ) -> None:
+        knowledge_table = self._table(KNOWLEDGE_TABLE)
+        ids = list(dict.fromkeys(update.record_id for update in updates))
+        current = {
+            row["id"]: dict(row)
+            for row in (
+                await conn.execute(
+                    text(
+                        "SELECT id, supported_by, contradicted_by, conflict_with, "
+                        f"superseded_by, status, revision FROM {knowledge_table} "
+                        "WHERE id = ANY(:ids) ORDER BY id FOR UPDATE"
+                    ),
+                    {"ids": ids},
+                )
+            ).mappings()
+        }
+        if missing := [str(i) for i in ids if i not in current]:
+            raise StorageError(f"Cannot link unknown knowledge: {', '.join(missing)}")
+        for update in updates:
+            row = current[update.record_id]
+            for column in ("supported_by", "contradicted_by", "conflict_with"):
+                row[column] = list(
+                    dict.fromkeys([*(row[column] or []), *getattr(update, column)])
+                )
+            # The first replacement wins; a later one is only recorded.
+            if update.superseded_by is not None and row["superseded_by"] is None:
+                row["superseded_by"] = update.superseded_by
+                row["status"] = KnowledgeStatus.DEPRECATED.value
+            if update.event is not None:
+                revision = dict(row["revision"] or {})
+                revision["history"] = [*revision.get("history", []), update.event]
+                row["revision"] = revision
+        await conn.execute(
+            text(
+                f"UPDATE {knowledge_table} SET "
+                "supported_by = CAST(:supported_by AS uuid[]), "
+                "contradicted_by = CAST(:contradicted_by AS uuid[]), "
+                "conflict_with = CAST(:conflict_with AS uuid[]), "
+                "superseded_by = :superseded_by, status = :status, "
+                "revision = CAST(:revision AS jsonb) WHERE id = :id"
+            ),
+            [
+                {
+                    "id": row["id"],
+                    "supported_by": row["supported_by"],
+                    "contradicted_by": row["contradicted_by"],
+                    "conflict_with": row["conflict_with"],
+                    "superseded_by": row["superseded_by"],
+                    "status": row["status"],
+                    "revision": json.dumps(row["revision"], ensure_ascii=False, default=str),
+                }
+                for row in current.values()
+            ],
+        )
+
+    async def similar_knowledge(
+        self,
+        record: KnowledgeRecord,
+        *,
+        k: int = DEFAULT_SEARCH_K,
+        types: Collection[KnowledgeType | str] = (),
+        filters: dict[str, Any] | None = None,
+        min_similarity: float = 0.0,
+    ) -> list[tuple[KnowledgeRecord, float]]:
+        """Searchable records nearest to an embedded record, with cosine similarity.
+
+        Used to find what new knowledge duplicates, refines, or contradicts.
+        """
+
+        if record.embedding is None:
+            await self.embed_knowledge([record])
+        where_sql, parameters = _compile_knowledge_filter(filters)
+        type_sql = "TRUE"
+        if types:
+            type_sql = "k.type = ANY(:types)"
+            parameters["types"] = [KnowledgeType(kind).value for kind in types]
+        statement = text(
+            f"""
+            SELECT {_RECORD_SELECT_SQL},
+                   1 - (k.{EMBEDDING_COLUMN} <=> CAST(:embedding AS vector)) AS similarity
+            FROM {self._table(KNOWLEDGE_TABLE)} AS k
+            WHERE {where_sql} AND {type_sql} AND {_SEARCHABLE_SQL} AND k.id <> :id
+              AND 1 - (k.{EMBEDDING_COLUMN} <=> CAST(:embedding AS vector)) >= :min_similarity
+            ORDER BY k.{EMBEDDING_COLUMN} <=> CAST(:embedding AS vector), k.id
+            LIMIT :k
+            """
+        )
+        parameters.update({
+            "embedding": json.dumps(record.embedding, separators=(",", ":")),
+            "id": record.id,
+            "k": max(1, min(k, MAX_SEARCH_K)),
+            "min_similarity": min_similarity,
+        })
+        async with self._errors("find similar knowledge"):
+            async with self._engine.connect() as conn:
+                rows = (await conn.execute(statement, parameters)).mappings().all()
+        return [
+            (
+                KnowledgeRecord.model_validate({key: row[key] for key in RECORD_COLUMNS}),
+                float(row["similarity"]),
+            )
+            for row in rows
+        ]
 
     async def reembed_knowledge(self) -> int:
         """Recompute every stored embedding with the current model, in place.
