@@ -1,7 +1,8 @@
 """Turn raw conversations into stored, embedded knowledge records.
 
-Optional steps, in order: normalize record scope to the knowledge base's
-ontology, verify records against their transcript, and consolidate them
+Optional steps, in order: normalize record scope with the knowledge base's
+record normalizer (e.g. an equipment catalog) and its ontology, verify records
+against their transcript, and consolidate them
 with the stored knowledge. Each step only annotates records (revision) or
 links them; every record is stored as a draft for expert review.
 """
@@ -11,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import UUID
@@ -29,6 +30,10 @@ from backend.src.storage.models import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# Rewrites the scope of the records extracted from one transcript in place.
+RecordNormalizer = Callable[[str, list[KnowledgeRecord]], None]
 
 
 class SupportsExtract(Protocol):
@@ -110,6 +115,7 @@ class KnowledgeIngestionService:
         *,
         extraction_metadata: dict[str, Any] | None = None,
         ontology: Ontology | None = None,
+        normalizer: RecordNormalizer | None = None,
         verifier: KnowledgeVerifier | None = None,
         consolidator: KnowledgeConsolidator | None = None,
     ):
@@ -117,6 +123,7 @@ class KnowledgeIngestionService:
         self._store = store
         self._extraction_metadata = dict(extraction_metadata or {})
         self._ontology = ontology
+        self._normalizer = normalizer
         self._verifier = verifier
         self._consolidator = consolidator
 
@@ -209,9 +216,12 @@ class KnowledgeIngestionService:
             for record, item in zip(group, outcome.knowledge_items, strict=True):
                 record.supported_by = [group[position].id for position in item.supported_by]
             records[index] = group
-            for record in group:
-                if inputs[index].context:
+            if inputs[index].context:
+                for record in group:
                     record.context = {**record.context, **inputs[index].context}
+            if self._normalizer is not None:
+                self._normalizer(conversations[index].transcript, group)
+            for record in group:
                 if self._ontology is not None:
                     record.context, report = self._ontology.normalize(record.context)
                     if ontology_report := report.to_dict():

@@ -92,7 +92,7 @@ class FakeStore:
         for record in records:
             record.embedding = [0.0]
 
-    async def add_knowledge(self, records):
+    async def add_knowledge(self, records, *, updates=()):
         if self.fail_on_write:
             raise RuntimeError("database down")
         if self.fail_write_for and any(
@@ -165,6 +165,31 @@ class KnowledgeIngestionServiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record.context, {"machine_id": "M09", "source_type": "slack"})
         # The extracted items themselves are left untouched.
         self.assertEqual(EXTRACTED.knowledge_items[0].context, {"machine_id": "M01"})
+
+    async def test_normalizer_runs_per_transcript_before_the_ontology(self) -> None:
+        from backend.src.services.ontology import Ontology
+
+        seen = []
+
+        def normalizer(transcript, records):
+            seen.append((transcript, [dict(record.context) for record in records]))
+            for record in records:
+                record.context["machine_id"] = "machine 1"
+
+        ontology = Ontology.from_dict(
+            {"keys": {"machine_id": {"values": {"M01": {"aliases": ["machine 1"]}}}}}
+        )
+        service = KnowledgeIngestionService(
+            FakeExtractor(EXTRACTED), FakeStore(), ontology=ontology, normalizer=normalizer
+        )
+        result = await service.ingest("Expert: clean the lens first.", context={"line": "L1"})
+
+        transcript, contexts = seen[0]
+        self.assertEqual(transcript, "Expert: clean the lens first.")
+        # The normalizer sees the input context and the whole group.
+        self.assertEqual(contexts, [{"machine_id": "M01", "line": "L1"}] * 2)
+        self.assertEqual([r.context["machine_id"] for r in result.records], ["M01", "M01"])
+        self.assertIn("normalized", result.records[0].revision["ontology"])
 
     async def test_ingest_links_records_to_evidence(self) -> None:
         store = FakeStore()

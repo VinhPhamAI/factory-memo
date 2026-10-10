@@ -94,6 +94,19 @@ differs per KB is which `context` keys matter:
 - `DatasetSpec.id_column`: rows whose id is already processed are skipped by
   `ingest`, so an interrupted run continues where it stopped (`--no-resume`
   to disable).
+- `ontology` (optional `ontology.yaml`): canonical values, aliases and implied
+  keys of context keys; extracted context is normalized to it and the changes
+  and unknown values are kept in `revision["ontology"]`.
+- `record_normalizer`: called with the transcript and its records before the
+  ontology, for fixes an exact lookup cannot make. `industrial_qa` uses its
+  equipment catalog: curated families, component models and sites in
+  `catalog_types.yaml`, plus the asset IDs, lines and stations of the public
+  conversations in the generated `catalog_assets.yaml` (rebuild with
+  `uv run python -m backend.knowledge_bases.industrial_qa.catalog build`). It
+  moves asset IDs into `machine_id`, splits "Dong Nai Line 1", fills a missing
+  asset from the cited cases or the conversation, and records its changes in
+  `revision["catalog"]`. Both files also extend the ontology, so the catalog
+  version is part of the extraction provenance (`ontology_sha256`).
 
 Every command takes the KB to act on:
 ```
@@ -128,7 +141,10 @@ An error with `finish_reason=length` and `reasoning_tokens=8192` means the
 model used the entire CLI output budget before producing JSON. Shortening
 the prompt reduces input tokens; disabling reasoning addresses this output
 budget problem. Raising the budget permits more token use rather than saving it.
-Batch size controls parallel requests, not tokens per document.
+Batch size controls parallel requests, not tokens per document. Consolidation
+has its own switch, `CONSOLIDATION_THINKING=disabled`; when its JSON is cut
+off, every lesson of the conversation is added as new and the error is kept in
+the record's `revision["consolidation"]`.
 
 ## EnterpriseRAG-Bench (`enterprise_rag`)
 

@@ -227,7 +227,7 @@ class KnowledgeSearchHit:
 
 
 # Context keys left out of the embedded and full-text indexed text.
-_UNINDEXED_CONTEXT = frozenset({"benchmark_run_id", "case_card", "steps"})
+_UNINDEXED_CONTEXT = frozenset({"benchmark_run_id", "case_card", "source_turns", "steps"})
 
 
 def _uuid_array(ids: Sequence[UUID]) -> str:

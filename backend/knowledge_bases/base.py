@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from backend.src.agents.rag.chunking import ChunkingConfig
 from backend.src.services.knowledge_extraction import (
@@ -13,6 +15,9 @@ from backend.src.services.knowledge_extraction import (
     StructuredExtraction,
 )
 from backend.src.services.ontology import Ontology
+
+if TYPE_CHECKING:
+    from backend.src.storage import KnowledgeRecord
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -139,6 +144,9 @@ class KnowledgeBaseSpec:
     review_required: bool = False
     # Known values of context keys; extracted context is normalized to it.
     ontology: Ontology | None = None
+    # Rewrites the scope of the records of one transcript before the ontology
+    # (see KnowledgeIngestionService), e.g. with an equipment catalog.
+    record_normalizer: Callable[[str, list[KnowledgeRecord]], None] | None = None
 
     def __post_init__(self) -> None:
         keys = [item.key for item in self.context_filters]

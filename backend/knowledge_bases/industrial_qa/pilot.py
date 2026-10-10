@@ -6,21 +6,33 @@ Steps (each resumes from <run-dir>/run.json; `all` runs them in order):
 
 - select: pick --sample questions of the train split (of one --source only, if
   given), one per conversation, spread over the knowledge_source x difficulty
-  cells.
+  cells; or the questions listed in --question-ids, to rerun an earlier sample.
 - ingest: index every manual chunk as a document (embeddings only), and
   extract knowledge from the sampled questions' conversations (plus
   --distractors other conversations of the split): Case Cards and lessons,
-  normalized to the failure-mode ontology, verified against the transcript and
+  normalized to the equipment catalog (catalog.py) and the failure-mode
+  ontology, verified against the transcript and
   consolidated with the records of the same run only (--no-consolidate skips
   it).
-- answer: search the run's knowledge records and the manual chunks for each
-  question (its knowledge_source is not public), answer it with one LLM call,
-  and write predictions.jsonl for benchmark/evaluate.py. Questions answered by
-  an earlier attempt are not asked again.
+- renormalize: rescope the stored records of --from-run-dir with the current
+  equipment catalog and ontology, without extracting again, and copy its
+  sample into a new --run-dir; then run answer and evaluate there to measure
+  the catalog alone. The records are updated in place (they belong to the run
+  id), so the old run keeps its result files but not its database state.
+- answer: search the run's knowledge records (at most --per-conversation of one
+  conversation) and the manual chunks for each question (its knowledge_source
+  is not public), answer it with one LLM call, and write predictions.jsonl for
+  benchmark/evaluate.py. The evidence ranking puts the sources the answer cites
+  first, in citation order, then the others; predictions_uncited.jsonl keeps
+  the ranking before that. Questions answered by an earlier attempt are not
+  asked again.
 - evaluate: score the sample with benchmark/evaluate.py (retrieval and MC;
-  answers and extracted facts too when the MODELARK_* judge is configured) into
-  results.json, plus the gold evidence among the turns of the top k records and
-  the gold expert facts stated at a turn some extracted record points to.
+  answers and extracted facts too when a judge is configured: MODELARK_*,
+  else the EXTRACTION_* / OPENROUTER_* model) into results.json, plus the gold
+  evidence among the turns of the top k records, the gold expert facts stated
+  at a turn some extracted record points to, and ingestion quality
+  (verification, scope, catalog changes, case/lesson overlap, consolidation
+  errors).
 
 The system under test reads only benchmark/public/; gold files are used to
 choose the sample and to score it.
@@ -34,25 +46,27 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
+from uuid import UUID
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 from backend.knowledge_bases.base import PROJECT_ROOT
-from backend.knowledge_bases.industrial_qa import SPEC
+from backend.knowledge_bases.industrial_qa import CATALOG, SPEC
 from backend.knowledge_bases.stores import open_document_store
 from backend.scripts.kb import EXTRACTION_MAX_TOKENS, review_notes
 from backend.src.agents.rag.chunking import Document
 from backend.src.agents.rag.indexing import index_documents
 from backend.src.services import llm
 from backend.src.services.knowledge_consolidation import KnowledgeConsolidator
-from backend.src.services.knowledge_extraction import KnowledgeExtractionService
+from backend.src.services.knowledge_extraction import KnowledgeExtractionService, KnowledgeType
 from backend.src.services.knowledge_ingestion import (
     IngestionInput,
     IngestionResult,
@@ -78,6 +92,11 @@ ANSWER_MAX_TOKENS = 8192
 # Turns a lesson maps to when it quotes none (see record_turns).
 LESSON_TURNS = 2
 RETRIEVED_LIMIT = 20
+# Knowledge hits fetched per requested record, so the per-conversation cap
+# still leaves k records.
+OVERFETCH = 2
+# Context keys that are provenance or rendered elsewhere, not a record's scope.
+UNSCOPED_CONTEXT = frozenset({"case_card", "steps", "source_turns", "benchmark_run_id"})
 # Speaker roles whose turns carry expert knowledge; records point to these only
 # (the others report symptoms or ask).
 EXPERT_ROLES = frozenset({"maintenance_engineer", "controls_engineer", "senior_technician"})
@@ -183,9 +202,17 @@ def select(args: argparse.Namespace) -> dict[str, Any]:
     if args.split != "train":
         raise SystemExit("Pilot runs require the train split")
     questions = gold_questions("train")
-    picked = select_questions(
-        [q for q in questions if args.source in (None, q["knowledge_source"])], args.sample, args.seed
-    )
+    if args.question_ids:
+        by_id = {q["question_id"]: q for q in questions}
+        wanted = args.question_ids.read_text(encoding="utf-8").split()
+        if unknown := [qid for qid in wanted if qid not in by_id]:
+            raise SystemExit(f"Not train questions: {', '.join(unknown)}")
+        picked = [by_id[qid] for qid in wanted]
+    else:
+        picked = select_questions(
+            [q for q in questions if args.source in (None, q["knowledge_source"])],
+            args.sample, args.seed,
+        )
     conversation_ids = [q["conversation_id"] for q in picked]
     others = sorted({q["conversation_id"] for q in questions} - set(conversation_ids))
     distractors = random.Random(args.seed).sample(others, min(args.distractors, len(others)))
@@ -288,6 +315,7 @@ async def ingest(args: argparse.Namespace, run: dict[str, Any]) -> int:
             extractor, store,
             extraction_metadata={"version": SPEC.extraction_version, **extractor.provenance},
             ontology=SPEC.ontology,
+            normalizer=SPEC.record_normalizer,
             verifier=KnowledgeVerifier.from_env(args.verify),
             consolidator=consolidator,
         )
@@ -315,6 +343,8 @@ async def ingest(args: argparse.Namespace, run: dict[str, Any]) -> int:
                 "consolidation": result.consolidation,
             }
             actions = ", ".join(f"{n} {name}" for name, n in result.consolidation.items())
+            if errors := sum("error" in r.revision.get("consolidation", {}) for r in result.records):
+                actions += f"; consolidation failed for {errors}"
             print(f"{cid}: {len(result.records)} records" + (f" ({actions})" if actions else ""))
             for note in review_notes((*result.records, *result.merged)):
                 print(f"  {note}")
@@ -324,6 +354,123 @@ async def ingest(args: argparse.Namespace, run: dict[str, Any]) -> int:
     save(args.run_dir / "run.json", run)
     failed = sum(c["status"] != "processed" for c in run["conversations"].values())
     return 1 if failed else 0
+
+
+# ---------------------------------------------------------------- renormalize
+
+# Revision keys a re-normalization rewrites; links and history are kept.
+SCOPE_REVISION_KEYS = ("catalog", "ontology")
+
+
+def normalize_scope(transcript: str, records: list[KnowledgeRecord]) -> None:
+    """The scope steps of ingestion: the record normalizer, then the ontology.
+
+    The new ontology report keeps the spellings normalized before and replaces
+    what still needs review.
+    """
+
+    if SPEC.record_normalizer is not None:
+        SPEC.record_normalizer(transcript, records)
+    if SPEC.ontology is None:
+        return
+    for record in records:
+        record.context, report = SPEC.ontology.normalize(record.context)
+        old = record.revision.get("ontology") or {}
+        merged = {
+            section: {**old.get(section, {}), **new}
+            for section, new in report.to_dict().items()
+        }
+        for section in ("normalized", "implied"):
+            if old.get(section) and section not in merged:
+                merged[section] = old[section]
+        if merged != old:
+            record.revision = {**record.revision, "ontology": merged}
+
+
+def start_renormalized_run(args: argparse.Namespace) -> None:
+    """Copy the sample of --from-run-dir into a new --run-dir."""
+
+    if args.from_run_dir is None:
+        raise SystemExit("renormalize needs --from-run-dir, the run whose records to rescope")
+    if (args.run_dir / "run.json").exists():
+        return  # resumed
+    source = args.from_run_dir / "run.json"
+    if not source.is_file():
+        raise SystemExit(f"No run.json in {args.from_run_dir}")
+    args.run_dir.mkdir(parents=True, exist_ok=True)
+    run = json.loads(source.read_text(encoding="utf-8"))
+    run["renormalized_from"] = str(args.from_run_dir)
+    save(args.run_dir / "run.json", run)
+    if (args.from_run_dir / "question_ids.txt").is_file():
+        shutil.copy(args.from_run_dir / "question_ids.txt", args.run_dir / "question_ids.txt")
+
+
+async def renormalize(args: argparse.Namespace, run: dict[str, Any]) -> int:
+    """Rescope the run's stored records with the current catalog and ontology.
+
+    Updates the records in place (context, search text, embedding and the
+    catalog/ontology revision) and mirrors them in run.json; extraction,
+    verification and consolidation are not repeated. The records belong to
+    the run id, so --from-run-dir keeps its result files but its database
+    records change too.
+    """
+
+    conversations = public_conversations()
+    keys = SPEC.embedding_context_keys
+    totals: dict[str, int] = defaultdict(int)
+    store = await KnowledgeStore.for_kb(SPEC)
+    try:
+        for cid, conversation in run["conversations"].items():
+            if conversation.get("status") != "processed":
+                continue
+            rows = [*conversation["records"], *conversation.get("merged", [])]
+            ids = [UUID(row["id"]) for row in conversation["records"]]
+            stored = await store.get_knowledge(ids)
+            if missing := len(ids) - len(stored):
+                print(f"{cid}: {missing} records not in the database", file=sys.stderr)
+            stored_ids = {record.id for record in stored}
+            # Merged records are not stored but count in ingestion quality.
+            group = [*stored, *(
+                KnowledgeRecord.model_validate(row) for row in conversation.get("merged", [])
+                if UUID(row["id"]) not in stored_ids
+            )]
+            before = {
+                record.id: (dict(record.context), record.embedding_text(keys))
+                for record in group
+            }
+            normalize_scope(render_transcript(conversations[cid]), group)
+            changed = [
+                record for record in group
+                if (record.context, record.embedding_text(keys)) != before[record.id]
+            ]
+            updated = await store.update_knowledge_scope(
+                [record for record in changed if record.id in stored_ids],
+                revision_keys=SCOPE_REVISION_KEYS,
+            )
+            by_id = {str(record.id): record for record in group}
+            for row in rows:
+                if (record := by_id.get(row["id"])) is not None:
+                    row["context"] = record.context
+                    row["revision"] = {**row.get("revision", {}), **{
+                        key: record.revision[key]
+                        for key in SCOPE_REVISION_KEYS if key in record.revision
+                    }}
+            totals["records"] += len(group)
+            totals["changed"] += len(changed)
+            totals["updated"] += updated
+            totals["with_machine_id"] += sum(bool(r.context.get("machine_id")) for r in group)
+            print(f"{cid}: {len(changed)}/{len(group)} records rescoped, {updated} updated")
+    finally:
+        await store.aclose()
+    run["renormalized"] = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "catalog_sha256": CATALOG.sha256,
+        "ontology_sha256": SPEC.ontology.sha256 if SPEC.ontology else None,
+        **totals,
+    }
+    save(args.run_dir / "run.json", run)
+    print("Renormalized: " + json.dumps(dict(totals)))
+    return 0
 
 
 # --------------------------------------------------------------------- answer
@@ -352,20 +499,23 @@ def record_turns(
 ) -> list[int]:
     """Conversation turns a record points to, for turn-level retrieval scoring.
 
-    `turns` are the candidates (the expert turns, see expert_turns). A Case Card names the turns of its evidence quotes, ranked by the words
-    they share with the question (a card quotes the symptoms before the
-    expert's answer). A lesson quotes none: it maps to the `limit` turns
-    sharing the most words with its claim.
+    `turns` are the candidates (the expert turns, see expert_turns). A Case
+    Card names the turns of its evidence quotes, a lesson its source_turns;
+    they are ranked by the words they share with the question (a card quotes
+    the symptoms before the expert's answer). A record naming no turn (one of
+    an older extraction) maps to the `limit` turns sharing the most words with
+    its claim.
     """
 
     evidence = (record.context.get("case_card") or {}).get("evidence") or []
-    quoted = set()
-    for item in evidence:
-        if match := re.fullmatch(r"T0*(\d+)", str(item.get("turn_id") or "")):
-            quoted.add(int(match.group(1)))
-    quoted_turns = [turn for turn in turns if turn["turn_id"] in quoted]
-    if quoted_turns:
-        return [turn_id for _, turn_id in _by_overlap(question, quoted_turns)]
+    named = [item.get("turn_id") for item in evidence] + list(record.context.get("source_turns") or [])
+    cited = {
+        int(match.group(1))
+        for label in named if (match := re.fullmatch(r"T0*(\d+)", str(label or "")))
+    }
+    cited_turns = [turn for turn in turns if turn["turn_id"] in cited]
+    if cited_turns:
+        return [turn_id for _, turn_id in _by_overlap(question, cited_turns)]
     ranked = _by_overlap(f"{record.subject} {record.claim}", turns)
     return [turn_id for overlap, turn_id in ranked[:limit] if overlap]
 
@@ -411,6 +561,31 @@ def retrieved_ranking(
     return interleave(concatenate(record_items, limit=None), chunk_items)
 
 
+def cited_ranking(
+    sources: dict[str, dict[str, Any]], cited: list[str], uncited: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Items of the cited sources in citation order, then the uncited ranking.
+
+    The answer model has read every source, so its citations rerank them.
+    """
+
+    return concatenate([*(sources[label]["items"] for label in cited), uncited])
+
+
+def cap_per_conversation(hits: list[Any], cap: int, k: int) -> list[Any]:
+    """The first k hits, with at most `cap` of one conversation (0: no cap)."""
+
+    kept: list[Any] = []
+    per_conversation: dict[str, int] = defaultdict(int)
+    for hit in hits:
+        evidence = str(hit.record.evidence_id)
+        if cap and per_conversation[evidence] >= cap:
+            continue
+        per_conversation[evidence] += 1
+        kept.append(hit)
+    return kept[:k]
+
+
 class AnswerOutput(BaseModel):
     answer: str = Field(min_length=1)
     choice: Literal["A", "B", "C", "D"]
@@ -420,7 +595,7 @@ class AnswerOutput(BaseModel):
 def render_record(label: str, record: KnowledgeRecord) -> str:
     scope = {
         key: value for key, value in record.context.items()
-        if key not in {"case_card", "steps", "benchmark_run_id"} and value not in (None, "", [])
+        if key not in UNSCOPED_CONTEXT and value not in (None, "", [])
     }
     head = f"[{label}] {record.type.value}: {record.subject}"
     if scope:
@@ -465,9 +640,13 @@ async def answer(args: argparse.Namespace, run: dict[str, Any]) -> int:
 
     async def search(question: str) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
         knowledge_hits, chunk_hits = await asyncio.gather(
-            store.search_knowledge(question, k=args.k, filters=run_filter(run)),
+            store.search_knowledge(
+                question, k=args.k * (OVERFETCH if args.per_conversation else 1),
+                filters=run_filter(run),
+            ),
             documents.search(question, k=args.k),
         )
+        knowledge_hits = cap_per_conversation(knowledge_hits, args.per_conversation, args.k)
         sources: dict[str, dict[str, Any]] = {}
         record_items: list[list[dict[str, Any]]] = []
         for rank, hit in enumerate(knowledge_hits, start=1):
@@ -502,13 +681,15 @@ async def answer(args: argparse.Namespace, run: dict[str, Any]) -> int:
             task="answer",
         )
         print(f"{qid}: {output.choice} ({len(sources)} sources)")
+        cited = list(dict.fromkeys(label for label in output.sources if label in sources))
         return {
             "question_id": qid,
             "question": question["question"],
             "answer": output.answer,
             "choice": output.choice,
-            "cited": [label for label in output.sources if label in sources],
-            "retrieved": retrieved,
+            "cited": cited,
+            "retrieved": cited_ranking(sources, cited, retrieved),
+            "retrieved_uncited": retrieved,
             "sources": {label: {k: v for k, v in s.items() if k != "text"}
                         for label, s in sources.items()},
         }
@@ -529,17 +710,18 @@ async def answer(args: argparse.Namespace, run: dict[str, Any]) -> int:
             done[qid] = outcome
     answers = [done[qid] for qid in run["question_ids"] if qid in done]
     save(path, answers)
-    predictions = [
-        {"type": "answer", "question_id": a["question_id"], "answer": a["answer"],
-         "choice": a["choice"], "retrieved": a["retrieved"]}
-        for a in answers
-    ] + [
+    extractions = [
         # Every extracted record is one fact; case claims render the whole card.
         {"type": "extraction", "conversation_id": cid,
          "facts": [record.claim for record in extracted(processed[cid])]}
         for cid in run["conversation_ids"] if cid in processed
     ]
-    write_jsonl(args.run_dir / "predictions.jsonl", predictions)
+    for name, ranking in (("predictions", "retrieved"), ("predictions_uncited", "retrieved_uncited")):
+        write_jsonl(args.run_dir / f"{name}.jsonl", [
+            {"type": "answer", "question_id": a["question_id"], "answer": a["answer"],
+             "choice": a["choice"], "retrieved": a.get(ranking, a["retrieved"])}
+            for a in answers
+        ] + extractions)
     print(f"Answered {len(answers)}/{len(run['question_ids'])}; wrote "
           f"{args.run_dir / 'predictions.jsonl'}")
     return 0 if len(answers) == len(run["question_ids"]) else 1
@@ -548,30 +730,59 @@ async def answer(args: argparse.Namespace, run: dict[str, Any]) -> int:
 # ------------------------------------------------------------------- evaluate
 
 
-def judge_configured() -> bool:
-    return all(os.getenv(name) for name in ("MODELARK_BASEURL", "MODELARK_APIKEY", "MODELARK_MODELNAME"))
+def judge_env() -> dict[str, str] | None:
+    """Environment for benchmark/evaluate.py's judge, None when no model is set.
+
+    MODELARK_* wins; otherwise the judge is the EXTRACTION_* (else
+    OPENROUTER_*) model, which may also be the model under test.
+    """
+
+    def setting(name: str) -> str | None:
+        return os.getenv(f"EXTRACTION_{name}") or os.getenv(f"OPENROUTER_{name}")
+
+    judge = {
+        "MODELARK_BASEURL": os.getenv("MODELARK_BASEURL")
+        or setting("BASE_URL") or llm.DEFAULT_LLM_BASE_URL,
+        "MODELARK_APIKEY": os.getenv("MODELARK_APIKEY") or setting("API_KEY"),
+        "MODELARK_MODELNAME": os.getenv("MODELARK_MODELNAME") or setting("MODEL"),
+    }
+    if not all(judge.values()):
+        return None
+    return {**os.environ, **judge}  # type: ignore[dict-item]
+
+
+def run_evaluator(
+    args: argparse.Namespace, run: dict[str, Any], predictions: str, out: Path,
+    env: dict[str, str] | None,
+) -> int:
+    command = [
+        sys.executable, str(BENCHMARK_DIR / "evaluate.py"),
+        "--predictions", str(args.run_dir / predictions),
+        "--split", run["split"],
+        "--question-ids", str(args.run_dir / "question_ids.txt"),
+        "--k", "1,3,5,10",
+        "--out", str(out),
+    ]
+    command += ["--facts"] if env else ["--skip-llm"]
+    return subprocess.run(command, cwd=PROJECT_ROOT, check=False, env=env).returncode
 
 
 def evaluate(args: argparse.Namespace, run: dict[str, Any]) -> int:
     results = args.run_dir / "results.json"
-    command = [
-        sys.executable, str(BENCHMARK_DIR / "evaluate.py"),
-        "--predictions", str(args.run_dir / "predictions.jsonl"),
-        "--split", run["split"],
-        "--question-ids", str(args.run_dir / "question_ids.txt"),
-        "--k", "1,3,5,10",
-        "--out", str(results),
-    ]
-    if args.skip_llm or not judge_configured():
-        if not args.skip_llm:
-            print("MODELARK_* judge settings are missing: scoring retrieval and MC only")
-        command.append("--skip-llm")
-    else:
-        command.append("--facts")
-    completed = subprocess.run(command, cwd=PROJECT_ROOT, check=False)
-    if completed.returncode:
-        return completed.returncode
+    env = None if args.skip_llm else judge_env()
+    if env is None and not args.skip_llm:
+        print("No judge model is configured: scoring retrieval and MC only")
+    elif env is not None:
+        print(f"Judge: {env['MODELARK_MODELNAME']}")
+    if code := run_evaluator(args, run, "predictions.jsonl", results, env):
+        return code
     scores = json.loads(results.read_text(encoding="utf-8"))
+    uncited = args.run_dir / "results_uncited.json"
+    if (args.run_dir / "predictions_uncited.jsonl").exists():
+        # Retrieval before the citation rerank; the answers are the same.
+        if code := run_evaluator(args, run, "predictions_uncited.jsonl", uncited, None):
+            return code
+        scores["uncited_retrieval"] = json.loads(uncited.read_text(encoding="utf-8"))["overall"]
     answers = json.loads((args.run_dir / "answers.json").read_text(encoding="utf-8"))
     if answers:
         scores["record_recall"] = record_recall(answers, run["split"])
@@ -579,10 +790,14 @@ def evaluate(args: argparse.Namespace, run: dict[str, Any]) -> int:
             f"{name} {value:.3f}" for name, value in scores["record_recall"].get("overall", {}).items()
         ))
     scores["extraction_turn_coverage"] = extraction_coverage(run)
+    scores["ingestion_quality"] = ingestion_quality(run)
+    if answers:
+        scores["retrieval_diversity"] = retrieval_diversity(answers)
     save(results, scores)
     coverage = scores["extraction_turn_coverage"]
     print(f"Extraction: {coverage['records']} records; expert facts stated at a turn a record "
           f"points to: {coverage['covered']}/{coverage['expert_facts']}")
+    print("Ingestion: " + json.dumps(scores["ingestion_quality"]["summary"]))
     return 0
 
 
@@ -637,16 +852,80 @@ def extraction_coverage(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def ingestion_quality(run: dict[str, Any]) -> dict[str, Any]:
+    """Verification, scope, case/lesson overlap and consolidation of the records."""
+
+    records = [
+        record for conversation in run["conversations"].values()
+        if conversation.get("status") == "processed" for record in extracted(conversation)
+    ]
+    by_conversation: dict[str, list[KnowledgeRecord]] = defaultdict(list)
+    for record in records:
+        by_conversation[str(record.evidence_id)].append(record)
+    overlaps = []
+    for group in by_conversation.values():
+        case_words = set().union(*(
+            tokens(record.claim) for record in group if record.type is KnowledgeType.CASE
+        ))
+        for record in group:
+            if record.type is not KnowledgeType.CASE and (words := tokens(record.claim)):
+                overlaps.append(len(words & case_words) / len(words))
+    lessons = [record for record in records if record.type is not KnowledgeType.CASE]
+    consolidation = [record.revision.get("consolidation") or {} for record in lessons]
+    types: dict[str, int] = defaultdict(int)
+    for record in records:
+        types[record.type.value] += 1
+    summary = {
+        "records": len(records),
+        "verify_passed": sum(bool((r.revision.get("verify") or {}).get("passed")) for r in records),
+        "scoped": sum(any(k not in UNSCOPED_CONTEXT for k in r.context) for r in records),
+        "lessons_with_source_turns": sum(bool(r.context.get("source_turns")) for r in lessons),
+        "lesson_case_overlap": round(sum(overlaps) / len(overlaps), 3) if overlaps else 0.0,
+        "lessons_mostly_in_case": sum(share >= 0.8 for share in overlaps),
+        "consolidation_errors": sum("error" in note for note in consolidation),
+        "with_machine_id": sum(bool(r.context.get("machine_id")) for r in records),
+        "catalog_changed": sum(bool(r.revision.get("catalog")) for r in records),
+        "catalog_inherited": sum(bool((r.revision.get("catalog") or {}).get("inherited")) for r in records),
+        "ontology_unknown": sum(bool((r.revision.get("ontology") or {}).get("unknown")) for r in records),
+    }
+    actions: dict[str, int] = defaultdict(int)
+    for note in consolidation:
+        actions[note.get("action", "none")] += 1
+    return {"summary": summary, "types": dict(types), "consolidation_actions": dict(actions)}
+
+
+def retrieval_diversity(answers: list[dict[str, Any]], k: int = 10) -> dict[str, float]:
+    """Mean distinct conversations among a question's top k records."""
+
+    distinct = [
+        len({s["conversation_id"] for label, s in a["sources"].items() if label.startswith("K")
+             and int(label[1:]) <= k})
+        for a in answers
+    ]
+    return {f"conversations@{k}": round(sum(distinct) / len(distinct), 3) if distinct else 0.0}
+
+
 # ----------------------------------------------------------------------- main
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=("select", "ingest", "answer", "evaluate", "all"))
+    parser.add_argument(
+        "command", choices=("select", "ingest", "renormalize", "answer", "evaluate", "all")
+    )
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument(
+        "--from-run-dir", type=Path,
+        help="renormalize: the run whose stored records to rescope; its sample is "
+             "copied into a new --run-dir",
+    )
     parser.add_argument("--split", choices=SPLITS, default="train")
     parser.add_argument("--sample", type=int, default=10, help="questions to run (default 10)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--question-ids", type=Path,
+        help="file of train question ids to run instead of a sampled selection",
+    )
     parser.add_argument(
         "--source", choices=("expert_only", "expert_and_docs", "docs_only"),
         help="only questions of this knowledge_source",
@@ -658,6 +937,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verify", choices=[m.value for m in VerifyMode], default="quotes")
     parser.add_argument("--k", type=int, default=8, help="records and chunks searched per question")
+    parser.add_argument(
+        "--per-conversation", type=int, default=3,
+        help="most records of one conversation among the k (0: no cap)",
+    )
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument(
         "--skip-llm", action="store_true", help="evaluate without the answer and fact judge"
@@ -670,9 +953,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def run_async(args: argparse.Namespace) -> int:
+    if args.command == "renormalize":
+        start_renormalized_run(args)
     run = select(args)
     if args.command == "select":
         return 0
+    if args.command == "renormalize":
+        return await renormalize(args, run)
     if args.command in ("ingest", "all"):
         if code := await ingest(args, run):
             return code
@@ -686,7 +973,8 @@ async def run_async(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = build_parser().parse_args()
-    if args.sample < 1 or args.k < 1 or args.concurrency < 1 or args.distractors < 0:
+    if (args.sample < 1 or args.k < 1 or args.concurrency < 1 or args.distractors < 0
+            or args.per_conversation < 0):
         raise SystemExit("--sample, --k and --concurrency must be positive")
     load_dotenv(PROJECT_ROOT / ".env")
     return asyncio.run(run_async(args))

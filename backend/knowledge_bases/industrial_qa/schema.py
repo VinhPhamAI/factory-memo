@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.src.services.knowledge_extraction import (
     KnowledgeExtractionResult,
@@ -15,13 +17,39 @@ from backend.src.services.knowledge_extraction import (
 )
 
 
+_TURN_ID_RE = re.compile(r"\[?T?0*(\d+)\]?")
+_TURN_MARKER_RE = re.compile(r"\s*\[(T\d+)\]\s*")
+
+
+def canonical_turn_id(value: Any) -> Any:
+    """Canonical T05-style turn ID of "T5", "[T05]" or 5; other values unchanged."""
+
+    match = _TURN_ID_RE.fullmatch(str(value).strip()) if value is not None else None
+    return f"T{int(match.group(1)):02d}" if match else value
+
+
 class CaseEvidence(BaseModel):
-    """A verbatim transcript excerpt supporting the case."""
+    """A verbatim transcript excerpt and the turn it is quoted from."""
 
     model_config = ConfigDict(extra="forbid")
 
-    turn_id: str | None = None
+    turn_id: str = Field(pattern=r"^T\d{2,}$")
     quote: str = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _split_turn_marker(cls, data: Any) -> Any:
+        # Models copy the transcript's "[T05]" line marker into the quote
+        # instead of turn_id; the quote is then not verbatim.
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        quote = str(data.get("quote") or "")
+        if markers := _TURN_MARKER_RE.findall(quote):
+            data["quote"] = _TURN_MARKER_RE.sub(" ", quote).strip()
+            data["turn_id"] = data.get("turn_id") or markers[0]
+        data["turn_id"] = canonical_turn_id(data.get("turn_id"))
+        return data
 
 
 class CaseCard(BaseModel):
@@ -38,21 +66,21 @@ class CaseCard(BaseModel):
 
 
 class IndustrialScope(BaseModel):
-    """Where a case or lesson applies; null fields are not stored."""
+    """Where a case or lesson applies; every key is decided, null ones are not stored."""
 
     model_config = ConfigDict(extra="forbid")
 
-    machine_id: str | None = None
-    machine_model: str | None = None
-    component_id: str | None = None
-    component_model: str | None = None
-    line_id: str | None = None
-    station: str | None = None
-    product_model: str | None = None
-    configuration: str | None = None
-    serial_range: str | None = None
-    condition: str | None = None
-    failure_mode: str | None = None
+    machine_id: str | None
+    machine_model: str | None
+    component_id: str | None
+    component_model: str | None
+    line_id: str | None
+    station: str | None
+    product_model: str | None
+    configuration: str | None
+    serial_range: str | None
+    condition: str | None
+    failure_mode: str | None
 
 
 class IndustrialCase(BaseModel):
@@ -61,16 +89,16 @@ class IndustrialCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     subject: str = Field(min_length=1)
+    scope: IndustrialScope
+    case_card: CaseCard
     valid_from: date | None = None
     valid_to: date | None = None
-    context: IndustrialScope = Field(default_factory=IndustrialScope)
-    case_card: CaseCard
 
     def to_item(self) -> KnowledgeItem:
         return KnowledgeItem(
             subject=self.subject,
             claim=render_case_claim(self.case_card),
-            context={**scope_context(self.context), "case_card": self.case_card.model_dump()},
+            context={**scope_context(self.scope), "case_card": self.case_card.model_dump()},
             type=KnowledgeType.CASE,
             valid_from=self.valid_from,
             valid_to=self.valid_to,
@@ -83,13 +111,20 @@ class IndustrialLesson(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     subject: str = Field(min_length=1)
+    scope: IndustrialScope
     claim: str = Field(min_length=1)
     steps: list[str] | None = None
     mandatory: bool = False
+    # Expert turns stating or endorsing the lesson.
+    source_turns: list[str] = Field(min_length=1)
+    case_refs: list[int] = Field(default_factory=list)
     valid_from: date | None = None
     valid_to: date | None = None
-    context: IndustrialScope = Field(default_factory=IndustrialScope)
-    case_refs: list[int] = Field(default_factory=list)
+
+    @field_validator("source_turns", mode="before")
+    @classmethod
+    def _canonical_turns(cls, value: Any) -> Any:
+        return [canonical_turn_id(item) for item in value] if isinstance(value, list) else value
 
     @property
     def knowledge_type(self) -> KnowledgeType:
@@ -100,7 +135,7 @@ class IndustrialLesson(BaseModel):
         return KnowledgeType.HEURISTIC
 
     def to_item(self, case_positions: list[int]) -> KnowledgeItem:
-        context = scope_context(self.context)
+        context = {**scope_context(self.scope), "source_turns": list(self.source_turns)}
         claim = self.claim.strip()
         if self.steps:
             context["steps"] = list(self.steps)
@@ -119,10 +154,14 @@ class IndustrialLesson(BaseModel):
 
 
 class IndustrialQaExtraction(StructuredExtraction):
-    """Everything extracted from one benchmark conversation."""
+    """Everything extracted from one benchmark conversation.
 
-    cases: list[IndustrialCase] = Field(default_factory=list)
+    Lessons come first: the model writes the reusable ideas, then cases that
+    keep only what is specific to the incident.
+    """
+
     lessons: list[IndustrialLesson] = Field(default_factory=list)
+    cases: list[IndustrialCase] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_case_refs(self) -> "IndustrialQaExtraction":

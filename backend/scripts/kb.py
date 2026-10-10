@@ -381,6 +381,7 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
             extractor, store,
             extraction_metadata={"version": spec.extraction_version, **extractor.provenance},
             ontology=spec.ontology,
+            normalizer=spec.record_normalizer,
             verifier=verifier,
             consolidator=None if args.no_consolidate else KnowledgeConsolidator.from_env(store),
         )

@@ -168,7 +168,7 @@ def _describe(index: int, record: KnowledgeRecord) -> str:
 
 
 # Rendered into the claim already, or provenance rather than content.
-_UNJUDGED_CONTEXT = frozenset({"case_card", "steps", "benchmark_run_id"})
+_UNJUDGED_CONTEXT = frozenset({"case_card", "steps", "source_turns", "benchmark_run_id"})
 
 
 # ------------------------------------------------------------ deterministic

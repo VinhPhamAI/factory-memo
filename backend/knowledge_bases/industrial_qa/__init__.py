@@ -7,12 +7,18 @@ Manual chunks are indexed as documents in the same database.
 
 from pathlib import Path
 
-from backend.knowledge_bases.base import ContextFilter, KnowledgeBaseSpec
+from backend.knowledge_bases.base import ONTOLOGY_FILE, ContextFilter, KnowledgeBaseSpec
+from backend.knowledge_bases.industrial_qa.catalog import Catalog
 from backend.knowledge_bases.industrial_qa.schema import IndustrialQaExtraction
 
 
+DIRECTORY = Path(__file__).parent
+# Canonical equipment names (catalog_types.yaml + catalog_assets.yaml).
+CATALOG = Catalog.from_files()
+
+
 SPEC = KnowledgeBaseSpec.from_directory(
-    Path(__file__).parent,
+    DIRECTORY,
     name="industrial_qa",
     description=__doc__,
     context_filters=(
@@ -26,6 +32,8 @@ SPEC = KnowledgeBaseSpec.from_directory(
         ),
     ),
     embedding_context_keys=("machine_id", "machine_model", "component_model", "condition"),
-    extraction_version="industrial-qa-case-lesson-v1",
+    extraction_version="industrial-qa-case-lesson-v2",
     extraction_output_model=IndustrialQaExtraction,
+    ontology=CATALOG.ontology(DIRECTORY / ONTOLOGY_FILE),
+    record_normalizer=CATALOG.normalize_records,
 )

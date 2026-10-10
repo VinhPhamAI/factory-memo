@@ -908,6 +908,53 @@ class KnowledgeStore:
         self._vector_store = None
         return len(records)
 
+    async def update_knowledge_scope(
+        self, records: Sequence[KnowledgeRecord], *, revision_keys: Sequence[str] = ()
+    ) -> int:
+        """Store the new context of records in place, without re-extraction.
+
+        Re-embeds the records and refreshes their search text, since both
+        include the context; of the revision only `revision_keys` are written,
+        so links and history recorded since they were read are kept. Returns
+        the number of rows updated.
+        """
+
+        if not records:
+            return 0
+        for record in records:
+            record.embedding = None
+        await self.embed_knowledge(records)
+        for record in records:
+            if len(record.embedding or []) != self._vector_size:
+                raise StorageError(
+                    f"Embedding for knowledge {record.id} has "
+                    f"{len(record.embedding or [])} dimensions, expected {self._vector_size}"
+                )
+        statement = text(
+            f"UPDATE {self._table(KNOWLEDGE_TABLE)} SET "
+            "context = CAST(:context AS jsonb), search_text = :search_text, "
+            f"{EMBEDDING_COLUMN} = CAST(:embedding AS vector), "
+            "revision = COALESCE(revision, '{}'::jsonb) || CAST(:revision AS jsonb) "
+            "WHERE id = :id RETURNING id"
+        )
+        updated = 0
+        async with self._errors("update knowledge scope"):
+            async with self._engine.begin() as conn:
+                for record in records:
+                    result = await conn.execute(statement, {
+                        "id": record.id,
+                        "context": json.dumps(record.context, ensure_ascii=False, default=str),
+                        "search_text": record.lexical_text(self._embedding_context_keys),
+                        "embedding": json.dumps(record.embedding, separators=(",", ":")),
+                        "revision": json.dumps(
+                            {key: record.revision[key] for key in revision_keys
+                             if key in record.revision},
+                            ensure_ascii=False, default=str,
+                        ),
+                    })
+                    updated += len(result.scalars().all())
+        return updated
+
     async def search_knowledge(
         self,
         query: str,

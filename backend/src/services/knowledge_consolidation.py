@@ -28,7 +28,9 @@ from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage.models import KnowledgeLinkUpdate, KnowledgeRecord
 
 
-CONSOLIDATION_MAX_TOKENS = 4096
+# Reasoning models spend part of this budget thinking before the JSON; set
+# CONSOLIDATION_THINKING=disabled where the endpoint supports it.
+CONSOLIDATION_MAX_TOKENS = 8192
 DEFAULT_CANDIDATES = 5
 # Below this cosine similarity a stored lesson is not shown to the LLM.
 DEFAULT_MIN_SIMILARITY = 0.3
@@ -340,7 +342,7 @@ def _annotate(record: KnowledgeRecord, note: dict[str, Any]) -> None:
 def _describe(label: str, record: KnowledgeRecord) -> str:
     scope = {
         key: value for key, value in record.context.items()
-        if key not in {"case_card", "steps", DEFAULT_ISOLATION_KEY}
+        if key not in {"case_card", "steps", "source_turns", DEFAULT_ISOLATION_KEY}
     }
     header = f"{label} [{record.type.value}, {record.status.value}] {record.subject}"
     validity = ", ".join(
