@@ -6,9 +6,10 @@ new name and register its SPEC below.
 
 from __future__ import annotations
 
-from backend.knowledge_bases import assetopsbench, enterprise_rag, maintenance
+from backend.knowledge_bases import assetopsbench, enterprise_rag, industrial_qa, maintenance
 from backend.knowledge_bases.base import (
     ContextFilter,
+    AnswerPipeline,
     DatasetSpec,
     KnowledgeBaseSpec,
     Retrieval,
@@ -17,7 +18,7 @@ from backend.knowledge_bases.base import (
 
 
 KNOWLEDGE_BASES: dict[str, KnowledgeBaseSpec] = {
-    spec.name: spec for spec in (maintenance.SPEC, enterprise_rag.SPEC, assetopsbench.SPEC)
+    spec.name: spec for spec in (maintenance.SPEC, enterprise_rag.SPEC, assetopsbench.SPEC, industrial_qa.SPEC)
 }
 
 
@@ -33,6 +34,7 @@ def get_kb(name: str) -> KnowledgeBaseSpec:
 
 __all__ = [
     "KNOWLEDGE_BASES",
+    "AnswerPipeline",
     "ContextFilter",
     "DatasetSpec",
     "KnowledgeBaseSpec",

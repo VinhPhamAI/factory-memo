@@ -256,19 +256,22 @@ class IndustrialLookupPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.matches(filters, {"machine_model": "FX5"}))
 
     async def test_online_agent_uses_the_same_asset_policy(self):
-        from langchain.messages import AIMessage
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from backend.knowledge_bases.industrial_qa.service import IndustrialQaService
         from backend.src.agents.agent.service import KnowledgeAgentService
-        from backend.tests.test_knowledge_agent import FakeStore, ScriptedChatModel, _search_call
+        from backend.tests.test_knowledge_agent import FakeStore
 
         store = FakeStore(hits=[])
-        model = ScriptedChatModel(responses=[
-            _search_call(query="Check the encoder", machine_id="MR-JE-AX549", machine_model="FX5"),
-            AIMessage(content="No evidence."),
-        ])
-        with mock.patch("backend.src.agents.agent.service.build_chat_model_from_env", return_value=model):
+        documents = SimpleNamespace(search=AsyncMock(return_value=[]))
+        written = '{"answer":"No evidence.","sources":[],"checklist":[]}'
+        with mock.patch("backend.src.services.llm.chat_client_from_env", return_value=object()), \
+                mock.patch("backend.src.services.llm.ainvoke", AsyncMock(return_value=written)), \
+                mock.patch("backend.knowledge_bases.industrial_qa.service.open_document_store",
+                           AsyncMock(return_value=documents)):
             service = KnowledgeAgentService.from_kb(SPEC, store)
-            [event async for event in service.start_stream("Check the encoder", thread_id="family").events]
-        self.assertEqual(len(store.searches), 1)
+            self.assertIsInstance(service, IndustrialQaService)
+            await service.ask("Check MR-JE-AX549 encoder")
         filters = store.searches[0][1]
         self.assertTrue(self.matches(filters, {"machine_id": "MR-JE-AX549", "machine_model": "MR-JE-70A"}))
         self.assertFalse(self.matches(filters, {"machine_id": "MR-JE-AX550", "machine_model": "MR-JE"}))

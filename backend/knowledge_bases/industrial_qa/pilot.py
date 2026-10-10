@@ -81,7 +81,6 @@ PUBLIC_DIR = BENCHMARK_DIR / "public"
 GOLD_DIR = BENCHMARK_DIR / "benchmark"
 GENERATION_DIR = BENCHMARK_DIR / "generation"
 SPLITS = ("train",)
-ANSWER_PROMPT = (Path(__file__).parent / "answer.md").read_text(encoding="utf-8").strip()
 # The KB's query instruction asks for knowledge records; chunks are manual passages.
 DOCUMENT_QUERY_INSTRUCTION = (
     "Given a question from a factory maintenance engineer, retrieve the "
@@ -277,7 +276,9 @@ def expert_turns(conversation: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def chunk_document(chunk: dict[str, Any]) -> Document:
-    return Document(id=chunk["chunk_id"], title=" > ".join(chunk["section_path"]), text=chunk["text"])
+    return Document(id=chunk["chunk_id"], title=" > ".join(chunk["section_path"]), text=chunk["text"],
+                    metadata={"reference_doc_id": chunk["doc_id"], "page_start": chunk["page_start"],
+                              "page_end": chunk["page_end"], "section_path": chunk["section_path"]})
 
 
 async def ingest(args: argparse.Namespace, run: dict[str, Any], *, extractor=None) -> int:
@@ -612,9 +613,12 @@ def render_chunk(label: str, chunk: dict[str, Any]) -> str:
 
 
 def answer_prompt(question: dict[str, Any], sources: list[str]) -> str:
+    # Historical ablations load their own prompt only when explicitly used.
+    # Importing the official benchmark adapters needs no experiment files.
+    baseline = Path(__file__).with_name("baseline_answer.md").read_text(encoding="utf-8").strip()
     options = "\n".join(f"{letter}. {text}" for letter, text in sorted(question["options"].items()))
     return (
-        ANSWER_PROMPT.replace("{QUESTION}", question["question"])
+        baseline.replace("{QUESTION}", question["question"])
         .replace("{OPTIONS}", options)
         .replace("{SOURCES}", "\n\n".join(sources) or "(no sources found)")
     )
@@ -622,8 +626,12 @@ def answer_prompt(question: dict[str, Any], sources: list[str]) -> str:
 
 async def answer(
     args: argparse.Namespace, run: dict[str, Any], *, retrieve=None, generate=None, init_schema=True,
-    checkpoint_every=0,
+    checkpoint_every=0, official=True,
 ) -> int:
+    if official:
+        from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, ScopedRetrieval
+        retrieve = retrieve if retrieve is not None else ScopedRetrieval()
+        generate = generate if generate is not None else CompleteAnswer()
     processed = {cid: c for cid, c in run["conversations"].items() if c["status"] == "processed"}
     if missing := [cid for cid in run["conversation_ids"] if cid not in processed]:
         print(f"Warning: {len(missing)} conversations not extracted: {', '.join(missing)}",

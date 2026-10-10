@@ -405,7 +405,7 @@ class KnowledgeAgentServiceTest(unittest.IsolatedAsyncioTestCase):
         lesson = KnowledgeRecord(
             subject="weld gun", claim="Check the connector first.\n1. Isolate power.",
             type=KnowledgeType.PROCEDURE, context={"steps": ["Isolate power."]},
-            evidence_id=EVIDENCE_ID, supported_by=[case.id],
+            evidence_id=EVIDENCE_ID, supported_by=[case.id], status=KnowledgeStatus.APPROVED,
         )
 
         class CaseStore(FakeStore):

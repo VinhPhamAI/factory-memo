@@ -546,9 +546,13 @@ async def evaluate(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
 
 async def query(spec: KnowledgeBaseSpec, question: str) -> int:
     store = await open_store(spec)
+    agent = None
     try:
-        answer = await KnowledgeAgentService.from_kb(spec, store).ask(question)
+        agent = KnowledgeAgentService.from_kb(spec, store)
+        answer = await agent.ask(question)
     finally:
+        if agent is not None:
+            await agent.aclose()
         await store.aclose()
 
     print(answer.answer)

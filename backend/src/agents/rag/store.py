@@ -17,7 +17,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -66,6 +66,7 @@ class ChunkHit:
     score: float
     vector_rank: int | None = None
     lexical_rank: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _identifier(name: str) -> str:
@@ -104,6 +105,7 @@ def rrf_fuse(
                 score=score,
                 vector_rank=vector_rank,
                 lexical_rank=lexical_rank,
+                metadata=hit.metadata,
             )
         )
     fused.sort(
@@ -447,7 +449,7 @@ class DocumentStore:
 
         statement = text(
             f"""
-            SELECT id, doc_id, chunk_index, title, content
+            SELECT id, doc_id, chunk_index, title, content, metadata
             FROM {self._table(self._table_name)}
             WHERE doc_id = :doc_id
             ORDER BY chunk_index
@@ -464,9 +466,42 @@ class DocumentStore:
                 title=row["title"],
                 text=row["content"],
                 score=0.0,
+                metadata=row.get("metadata") or {},
             )
             for row in rows
         ]
+
+    async def adjacent_chunks(self, chunk_ids: Sequence[str]) -> list[ChunkHit]:
+        """Immediate indexed neighbors; supports legacy page-chunk document IDs."""
+        if not chunk_ids:
+            return []
+        statement = text(f"""
+            WITH ordered AS (
+                SELECT id,
+                    lag(id) OVER w AS previous_id, lead(id) OVER w AS next_id
+                FROM {self._table(self._table_name)}
+                WINDOW w AS (
+                    PARTITION BY COALESCE(metadata->>'reference_doc_id', metadata->>'doc_id',
+                        regexp_replace(doc_id, '_p[0-9]+_c[0-9]+$', ''))
+                    ORDER BY CASE WHEN metadata->>'page_start' ~ '^[0-9]+$'
+                        THEN (metadata->>'page_start')::integer
+                        ELSE COALESCE(substring(doc_id from '_p([0-9]+)')::integer, 0) END,
+                        doc_id, chunk_index
+                )
+            ), neighbors AS (
+                SELECT previous_id AS id FROM ordered WHERE id = ANY(:ids)
+                UNION SELECT next_id FROM ordered WHERE id = ANY(:ids)
+            )
+            SELECT c.id, c.doc_id, c.chunk_index, c.title, c.content, c.metadata
+            FROM {self._table(self._table_name)} c JOIN neighbors n ON n.id = c.id
+            ORDER BY c.doc_id, c.chunk_index
+        """)
+        async with self._errors("read adjacent passages"):
+            async with self._engine.connect() as conn:
+                rows = (await conn.execute(statement, {"ids": list(chunk_ids)})).mappings().all()
+        return [ChunkHit(chunk_id=row["id"], doc_id=row["doc_id"], chunk_index=row["chunk_index"],
+                         title=row["title"], text=row["content"], score=0.0,
+                         metadata=row.get("metadata") or {}) for row in rows]
 
     # ------------------------------------------------------------------ search
 
@@ -485,7 +520,7 @@ class DocumentStore:
 
         statement = text(
             f"""
-            SELECT id, doc_id, chunk_index, title, content,
+            SELECT id, doc_id, chunk_index, title, content, metadata,
                    embedding <=> CAST(:embedding AS vector) AS distance
             FROM {self._table(self._table_name)}
             ORDER BY distance
@@ -516,6 +551,7 @@ class DocumentStore:
                 text=row["content"],
                 score=1.0 - float(row["distance"]),
                 vector_rank=rank,
+                metadata=row.get("metadata") or {},
             )
             for rank, row in enumerate(rows, start=1)
         ]
@@ -567,7 +603,7 @@ class DocumentStore:
                 ORDER BY score DESC, p.chunk_id
                 LIMIT :k
             )
-            SELECT c.id, c.doc_id, c.chunk_index, c.title, c.content, s.score
+            SELECT c.id, c.doc_id, c.chunk_index, c.title, c.content, c.metadata, s.score
             FROM scores AS s
             JOIN {chunks} AS c ON c.id = s.chunk_id
             ORDER BY s.score DESC, c.id
@@ -591,6 +627,7 @@ class DocumentStore:
                 text=row["content"],
                 score=float(row["score"]),
                 lexical_rank=rank,
+                metadata=row.get("metadata") or {},
             )
             for rank, row in enumerate(rows, start=1)
         ]

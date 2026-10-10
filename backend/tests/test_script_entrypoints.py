@@ -152,6 +152,7 @@ class IngestionCommandTest(unittest.IsolatedAsyncioTestCase):
         extractor = KnowledgeExtractionService(FakeLLM('{"knowledge_items":[]}'), spec.extract_prompt)
         store = FakeStore()
         store.processed_metadata_values = mock.AsyncMock(return_value=set())
+        store.find_processed_conversation = mock.AsyncMock(return_value=None)
         store.aclose = mock.AsyncMock()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "source.txt"

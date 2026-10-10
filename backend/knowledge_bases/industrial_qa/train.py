@@ -22,10 +22,7 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 from backend.knowledge_bases.industrial_qa import SPEC, pilot
-from backend.knowledge_bases.industrial_qa.experiment import CompleteAnswer, ScopedRetrieval, sha
-
-
-BASELINE = pilot.PROJECT_ROOT / "data/industrial_qa_runs/ablations-20261010-v1/baseline"
+from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, ScopedRetrieval, benchmark_scope, sha
 
 
 def make_run(questions, baseline, directory):
@@ -50,8 +47,7 @@ def make_run(questions, baseline, directory):
 
 
 def search_scope(run):
-    return {"$or": [{"context.benchmark_run_id": {"$eq": value}}
-                    for value in [run["run_id"], *run["reused_run_ids"]]]}
+    return benchmark_scope(run)
 
 
 def prepare(args):
@@ -88,8 +84,7 @@ def prepare(args):
     sources = [Path(__file__), Path(pilot.__file__), Path(__file__).with_name("experiment.py"),
                *(Path(__file__).with_name(name) for name in
                  ("schema.py", "extract.md", "catalog_types.yaml", "catalog_assets.yaml", "ontology.yaml")),
-               Path(__file__).with_name("experiments") / "rerank.md",
-               Path(__file__).with_name("experiments") / "answer_complete.md"]
+               *(Path(__file__).with_name(n) for n in ("benchmark_adapter.py", "retrieval.py", "answering.py", "pipeline.py", "rerank.md", "answer.md"))]
     manifest = {
         "policy": "H1+H3", "database": database, "run_id": run["run_id"], "split": "train",
         "question_ids": run["question_ids"], "conversation_ids": run["conversation_ids"],
@@ -246,7 +241,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("select", "ingest", "answer", "evaluate", "all"))
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--from-run-dir", type=Path, default=BASELINE)
+    parser.add_argument("--from-run-dir", type=Path, required=True)
     parser.add_argument("--k", type=int, default=8)
     parser.add_argument("--per-conversation", type=int, default=3)
     parser.add_argument("--concurrency", type=int, default=4)

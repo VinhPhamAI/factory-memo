@@ -19,7 +19,7 @@ from langgraph.types import Overwrite
 from openai import APIError
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.knowledge_bases.base import ContextFilter, KnowledgeBaseSpec, Retrieval
+from backend.knowledge_bases.base import AnswerPipeline, ContextFilter, KnowledgeBaseSpec, Retrieval
 from backend.src.agents.agent.config import (
     RECURSION_LIMIT,
     RUN_TIMEOUT_SECONDS,
@@ -567,6 +567,9 @@ class KnowledgeAgentService:
     ) -> "KnowledgeAgentService":
         """Agent with the knowledge base's prompt over its (already open) store."""
 
+        if spec.answer_pipeline is AnswerPipeline.INDUSTRIAL_QA:
+            from backend.knowledge_bases.industrial_qa.service import IndustrialQaService
+            return IndustrialQaService(spec, store)
         knowledge = spec.retrieval is Retrieval.KNOWLEDGE
         return cls(
             store=store,
@@ -886,3 +889,6 @@ class KnowledgeAgentService:
 
     async def delete_thread(self, thread_id: str) -> None:
         await self._checkpointer.adelete_thread(thread_id)
+
+    async def aclose(self) -> None:
+        """Release service-owned resources; the caller owns its primary store."""

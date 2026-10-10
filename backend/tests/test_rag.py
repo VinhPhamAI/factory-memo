@@ -231,6 +231,26 @@ class DocumentStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
             await conn.execute(text(f"DROP SCHEMA {self.schema} CASCADE"))
         await self.store.aclose()
 
+    async def test_adjacent_passages_and_search_preserve_manual_metadata(self) -> None:
+        documents = [
+            Document("manual_p0021_c01", "Connector connection procedure.", title="Connectors",
+                     metadata={"reference_doc_id": "manual", "page_start": 21, "page_end": 22}),
+            Document("manual_p0022_c01", "Inspect the connector latch.", title="Connectors",
+                     metadata={"reference_doc_id": "manual", "page_start": 22, "page_end": 23}),
+            # Legacy indexed passages have only their stable document IDs.
+            Document("manual_p0023_c01", "Replace the connector only if damaged.", title="Connectors"),
+            Document("other_p0022_c01", "Another manual.", title="Other"),
+        ]
+        await self.store.add_chunks(chunk_documents(documents, ChunkingConfig()))
+        neighbors = await self.store.adjacent_chunks(["manual_p0022_c01#0"])
+        self.assertEqual({hit.doc_id for hit in neighbors}, {"manual_p0021_c01", "manual_p0023_c01"})
+        self.assertEqual(next(hit for hit in neighbors if hit.doc_id == "manual_p0021_c01").metadata["page_end"], 22)
+        self.assertEqual(await self.store.adjacent_chunks([]), [])
+        read = await self.store.get_document("manual_p0022_c01")
+        self.assertEqual(read[0].metadata["page_end"], 23)
+        searched = await self.store.search("connector", k=10)
+        self.assertEqual(next(hit for hit in searched if hit.doc_id == "manual_p0021_c01").metadata["reference_doc_id"], "manual")
+
     async def test_keyword_search_matches_stemmed_terms(self) -> None:
         hits = await self.store.keyword_search("statin inflammation", k=5)
         self.assertEqual(hits[0].chunk_id, "d3#1")

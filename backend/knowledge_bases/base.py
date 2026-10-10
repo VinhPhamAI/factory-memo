@@ -52,6 +52,11 @@ class Retrieval(str, Enum):
     DOCUMENTS = "documents"
 
 
+class AnswerPipeline(str, Enum):
+    AGENT = "agent"
+    INDUSTRIAL_QA = "industrial_qa"
+
+
 @dataclass(frozen=True)
 class DatasetSpec:
     """Default ingestion input: a .csv (one transcript per row), .txt, or .md file."""
@@ -121,6 +126,7 @@ class KnowledgeBaseSpec:
     min_vector_similarity: float | None = None
     # What the agent searches; DOCUMENTS needs no extraction prompt.
     retrieval: Retrieval = Retrieval.KNOWLEDGE
+    answer_pipeline: AnswerPipeline = AnswerPipeline.AGENT
     # Document retrieval: how sources are split before embedding.
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     # Gold-labelled questions for `kb evaluate` (document retrieval).
@@ -165,6 +171,9 @@ class KnowledgeBaseSpec:
                 "letters, digits, and underscores, starting with a letter"
             )
         object.__setattr__(self, "retrieval", Retrieval(self.retrieval))
+        object.__setattr__(self, "answer_pipeline", AnswerPipeline(self.answer_pipeline))
+        if self.answer_pipeline is AnswerPipeline.INDUSTRIAL_QA and self.retrieval is not Retrieval.KNOWLEDGE:
+            raise ValueError("Industrial QA pipeline requires a knowledge store")
         if (
             self.retrieval is Retrieval.KNOWLEDGE
             and RAW_CONVERSATION_PLACEHOLDER not in self.extract_prompt

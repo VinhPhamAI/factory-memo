@@ -59,11 +59,20 @@ class KnowledgeAgentPool:
         async with self._lock:
             if name not in self._agents:
                 store = await open_store(spec)
+                try:
+                    agent = KnowledgeAgentService.from_kb(spec, store)
+                except Exception:
+                    await store.aclose()
+                    raise
                 self._stores.append(store)
-                self._agents[name] = KnowledgeAgentService.from_kb(spec, store)
+                self._agents[name] = agent
         return self._agents[name]
 
     async def aclose(self) -> None:
+        for agent in self._agents.values():
+            if close := getattr(agent, "aclose", None):
+                await close()
+        self._agents.clear()
         for store in self._stores:
             await store.aclose()
         self._stores.clear()
