@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -37,6 +36,9 @@ class FrozenRetrieval:
         labels = previous["sources"]
         records = {str(r.id): r for r in await store.get_knowledge(
             [UUID(s["knowledge_id"]) for label, s in labels.items() if label.startswith("K")])}
+        expected = {s["knowledge_id"] for label, s in labels.items() if label.startswith("K")}
+        if expected - records.keys():
+            raise ValueError("Frozen records have been overwritten in kb_industrial_qa; restore the source snapshot first")
         sources = {}
         for label, details in labels.items():
             if label.startswith("K"):
@@ -57,10 +59,8 @@ class FrozenRetrieval:
 def prepare(args):
     source = args.from_run_dir
     manifest = json.loads((source / "manifest.json").read_text())
-    database = manifest["database"]
-    if not database.startswith("kb_"):
-        raise ValueError("Invalid source database")
-    pilot.SPEC = replace(SPEC, name=database.removeprefix("kb_"))
+    database = SPEC.database
+    pilot.SPEC = SPEC
     args.run_dir.mkdir(parents=True, exist_ok=True)
     for name in ("run.json", "question_ids.txt"):
         if not (args.run_dir / name).exists():
@@ -69,7 +69,7 @@ def prepare(args):
     files = [here / name for name in ("answer.md", "answering.py", "benchmark_adapter.py", "retrieval.py", "rewrite.py")]
     record = {
         "policy": "frozen H1 sources + current H3 writer", "from_run_dir": str(source.resolve()),
-        "database": database, "run_id": manifest["run_id"],
+        "database": database, "source_database": manifest.get("database"), "run_id": manifest["run_id"],
         "models": {key: os.getenv(key) for key in ("OPENROUTER_MODEL", "ANSWER_MODEL", "ANSWER_THINKING",
                                                    "EXTRACTION_MODEL", "MODELARK_MODELNAME")},
         "source_sha256": {str(path.relative_to(pilot.PROJECT_ROOT)): sha(path.read_text()) for path in files},

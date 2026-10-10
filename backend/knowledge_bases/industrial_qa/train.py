@@ -1,15 +1,15 @@
 """Ingest all train conversations and evaluate H1+H3 on every train question.
 
+All runs write to kb_industrial_qa, replacing unrelated older runs.
 Reuse baseline records and already indexed manuals; only missing conversations
 are extracted. New records use a separate run ID. Retrieval reads their union
 with baseline, while consolidation may only change the new run's records.
 
-python -m backend.knowledge_bases.industrial_qa.train all --run-dir PATH
+python -m backend.knowledge_bases.industrial_qa.train all --run-dir PATH --from-run-dir SOURCE
 """
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
 from datetime import datetime, timezone
 import asyncio
 import json
@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 from backend.knowledge_bases.industrial_qa import SPEC, pilot
+from backend.knowledge_bases.industrial_qa.runs import overwrite_run
 from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, ScopedRetrieval, benchmark_scope, sha
 
 
@@ -40,7 +41,7 @@ def make_run(questions, baseline, directory):
         "created_at": datetime.now(timezone.utc).isoformat(), "split": "train", "seed": 42,
         "source": None, "question_ids": question_ids, "conversation_ids": conversation_ids,
         "distractor_conversation_ids": [], "consolidate": True,
-        "reused_run_ids": [baseline["run_id"]], "reused_conversation_ids": sorted(reused),
+        "reused_run_ids": list(dict.fromkeys([baseline["run_id"], *baseline.get("reused_run_ids", [])])), "reused_conversation_ids": sorted(reused),
         "new_conversation_ids": sorted(set(conversation_ids) - reused.keys()),
         "conversations": json.loads(json.dumps(reused)), "extraction": baseline["extraction"],
     }
@@ -48,6 +49,32 @@ def make_run(questions, baseline, directory):
 
 def search_scope(run):
     return benchmark_scope(run)
+
+
+def source_hashes(directory, manifest):
+    """Repairs may inherit the unchanged extraction contract from a parent run."""
+    result, visited = {}, set()
+    while True:
+        directory = directory.resolve()
+        if directory in visited:
+            raise ValueError("Source manifest ancestry contains a cycle")
+        visited.add(directory)
+        for path, digest in manifest.get("source_sha256", {}).items():
+            result.setdefault(path, digest)  # the newest declared version wins
+        parent = manifest.get("from_run_dir")
+        if not parent:
+            return result
+        parent_directory = Path(parent)
+        if not parent_directory.is_absolute():
+            parent_directory = directory / parent_directory
+        parent_file = parent_directory / "manifest.json"
+        if not parent_file.is_file():
+            return result
+        contents = parent_file.read_text()
+        if expected := manifest.get("source_manifest_sha256"):
+            if sha(contents) != expected:
+                raise ValueError("Source parent manifest changed since this snapshot")
+        directory, manifest = parent_directory, json.loads(contents)
 
 
 def prepare(args):
@@ -63,30 +90,33 @@ def prepare(args):
     for path, expected in previous["input_sha256"].items():
         if path.startswith("benchmark/public/") and sha((pilot.PROJECT_ROOT / path).read_text()) != expected:
             raise ValueError(f"Reuse inputs changed: {path}")
+    hashes = source_hashes(args.from_run_dir, previous)
     for filename in ("schema.py", "extract.md", "catalog_types.yaml", "catalog_assets.yaml", "ontology.yaml"):
         path = Path(__file__).with_name(filename)
-        if sha(path.read_text()) != previous["source_sha256"][str(path.relative_to(pilot.PROJECT_ROOT))]:
+        expected = hashes.get(str(path.relative_to(pilot.PROJECT_ROOT)))
+        if expected is None:
+            raise ValueError(f"Source snapshot has no extraction contract hash: {filename}")
+        if sha(path.read_text()) != expected:
             raise ValueError(f"Reuse extraction contract changed: {filename}")
-    database = previous["database"]
-    if not database.startswith("kb_"):
-        raise ValueError("Invalid baseline database")
-    pilot.SPEC = replace(SPEC, name=database.removeprefix("kb_"))
+    # Artifacts describe the source dataset, never a target database.
+    database = SPEC.database
     args.run_dir.mkdir(parents=True, exist_ok=True)
     path = args.run_dir / "run.json"
     run = json.loads(path.read_text()) if path.exists() else make_run(questions, baseline, args.run_dir)
     if (run["question_ids"] != sorted(public)
             or run["conversation_ids"] != sorted({q["conversation_id"] for q in questions})
-            or run["reused_run_ids"] != [baseline["run_id"]]):
+            or run["reused_run_ids"] != list(dict.fromkeys([baseline["run_id"], *baseline.get("reused_run_ids", [])]))):
         raise ValueError("Checkpoint does not cover the complete train split")
     pilot.save(path, run)
     args.question_ids = args.run_dir / "question_ids.txt"
     args.question_ids.write_text("\n".join(run["question_ids"]) + "\n")
-    sources = [Path(__file__), Path(pilot.__file__), Path(__file__).with_name("experiment.py"),
+    sources = [Path(__file__), Path(pilot.__file__), Path(__file__).with_name("runs.py"),
                *(Path(__file__).with_name(name) for name in
                  ("schema.py", "extract.md", "catalog_types.yaml", "catalog_assets.yaml", "ontology.yaml")),
                *(Path(__file__).with_name(n) for n in ("benchmark_adapter.py", "retrieval.py", "answering.py", "pipeline.py", "rerank.md", "answer.md"))]
     manifest = {
-        "policy": "H1+H3", "database": database, "run_id": run["run_id"], "split": "train",
+        "policy": "H1+H3", "database": database, "source_database": previous.get("database"),
+        "corpus_policy": "replace previous runs in the official database", "run_id": run["run_id"], "split": "train",
         "question_ids": run["question_ids"], "conversation_ids": run["conversation_ids"],
         "reused_run_ids": run["reused_run_ids"], "from_run_dir": str(args.from_run_dir.resolve()),
         "reused_conversations": len(run["reused_conversation_ids"]),
@@ -133,6 +163,16 @@ async def inventory(store, baseline_id):
 
 
 async def ingest_missing(args, run):
+    store = await pilot.KnowledgeStore.for_kb(SPEC, init_schema=False)
+    try:
+        async with overwrite_run(store, run) as report:
+            pilot.save(args.run_dir / "corpus_replacement.json", report)
+            return await _ingest_missing(args, run)
+    finally:
+        await store.aclose()
+
+
+async def _ingest_missing(args, run):
     remaining = [cid for cid in run["conversation_ids"]
                  if run["conversations"].get(cid, {}).get("status") != "processed"]
     if not remaining:
@@ -140,17 +180,17 @@ async def ingest_missing(args, run):
         return 0
     conversations = pilot.public_conversations()
     extractor = pilot.KnowledgeExtractionService.from_env(
-        pilot.SPEC.extract_prompt, max_tokens=pilot.EXTRACTION_MAX_TOKENS, json_schema=True,
-        output_model=pilot.SPEC.extraction_output_model, ontology=pilot.SPEC.ontology,
+        SPEC.extract_prompt, max_tokens=pilot.EXTRACTION_MAX_TOKENS, json_schema=True,
+        output_model=SPEC.extraction_output_model, ontology=SPEC.ontology,
     )
     run["extraction"] = extractor.provenance
-    store = await pilot.KnowledgeStore.for_kb(pilot.SPEC, init_schema=False)
+    store = await pilot.KnowledgeStore.for_kb(SPEC, init_schema=False)
     try:
         # Only the new namespace is writable by consolidation. Reused records
         # are searched later via union, but cannot be changed by ingestion.
         service = pilot.KnowledgeIngestionService(
-            extractor, store, extraction_metadata={"version": pilot.SPEC.extraction_version, **extractor.provenance},
-            ontology=pilot.SPEC.ontology, normalizer=pilot.SPEC.record_normalizer,
+            extractor, store, extraction_metadata={"version": SPEC.extraction_version, **extractor.provenance},
+            ontology=SPEC.ontology, normalizer=SPEC.record_normalizer,
             verifier=pilot.KnowledgeVerifier.from_env(args.verify),
             consolidator=pilot.KnowledgeConsolidator.from_env(store, scope=pilot.run_filter(run)),
         )
@@ -158,7 +198,7 @@ async def ingest_missing(args, run):
             batch = remaining[start:start + args.batch_size]
             outcomes = await service.ingest_batch([
                 pilot.IngestionInput(pilot.render_transcript(conversations[cid]),
-                    metadata={"kb": pilot.SPEC.name, "conversation_id": cid, "benchmark_run_id": run["run_id"]},
+                    metadata={"kb": SPEC.name, "conversation_id": cid, "benchmark_run_id": run["run_id"]},
                     context={"benchmark_run_id": run["run_id"]}) for cid in batch
             ], concurrency=args.concurrency)
             for cid, result in zip(batch, outcomes, strict=True):
@@ -187,7 +227,7 @@ async def execute(args):
     run = prepare(args)
     if args.command == "select":
         return 0
-    store = await pilot.KnowledgeStore.for_kb(pilot.SPEC, init_schema=False)
+    store = await pilot.KnowledgeStore.for_kb(SPEC, init_schema=False)
     try:
         before = await inventory(store, run["reused_run_ids"][0])
         if before["manual_chunks"]["rows"] != len(pilot.corpus_chunks()):
@@ -226,7 +266,7 @@ async def execute(args):
     if args.command in ("evaluate", "all"):
         if code := pilot.evaluate(args, run):
             return code
-    store = await pilot.KnowledgeStore.for_kb(pilot.SPEC, init_schema=False)
+    store = await pilot.KnowledgeStore.for_kb(SPEC, init_schema=False)
     try:
         after = await inventory(store, run["reused_run_ids"][0])
         if after != before:

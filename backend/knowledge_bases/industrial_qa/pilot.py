@@ -60,6 +60,7 @@ from pydantic import BaseModel, Field
 
 from backend.knowledge_bases.base import PROJECT_ROOT
 from backend.knowledge_bases.industrial_qa import CATALOG, SPEC
+from backend.knowledge_bases.industrial_qa.runs import overwrite_run, require_official_database
 from backend.knowledge_bases.stores import open_document_store
 from backend.scripts.kb import EXTRACTION_MAX_TOKENS, review_notes
 from backend.src.agents.rag.chunking import Document
@@ -282,6 +283,16 @@ def chunk_document(chunk: dict[str, Any]) -> Document:
 
 
 async def ingest(args: argparse.Namespace, run: dict[str, Any], *, extractor=None) -> int:
+    store = await KnowledgeStore.for_kb(require_official_database(SPEC))
+    try:
+        async with overwrite_run(store, run) as report:
+            save(args.run_dir / "corpus_replacement.json", report)
+            return await _ingest(args, run, extractor=extractor)
+    finally:
+        await store.aclose()
+
+
+async def _ingest(args: argparse.Namespace, run: dict[str, Any], *, extractor=None) -> int:
     chunks = corpus_chunks()
     documents = await open_document_store(SPEC, query_instruction=DOCUMENT_QUERY_INSTRUCTION)
     try:
@@ -305,7 +316,7 @@ async def ingest(args: argparse.Namespace, run: dict[str, Any], *, extractor=Non
         ontology=SPEC.ontology,
     )
     run["extraction"] = extractor.provenance
-    store = await KnowledgeStore.for_kb(SPEC)
+    store = await KnowledgeStore.for_kb(require_official_database(SPEC))
     try:
         # Scoped: a run must not merge into, or link, other runs' records.
         consolidator = (
@@ -419,7 +430,7 @@ async def renormalize(args: argparse.Namespace, run: dict[str, Any]) -> int:
     conversations = public_conversations()
     keys = SPEC.embedding_context_keys
     totals: dict[str, int] = defaultdict(int)
-    store = await KnowledgeStore.for_kb(SPEC)
+    store = await KnowledgeStore.for_kb(require_official_database(SPEC))
     try:
         for cid, conversation in run["conversations"].items():
             if conversation.get("status") != "processed":
@@ -645,7 +656,7 @@ async def answer(
         max_tokens=ANSWER_MAX_TOKENS,
         response_format=llm.json_schema_format("benchmark_answer", AnswerOutput),
     )
-    store = await KnowledgeStore.for_kb(SPEC, init_schema=init_schema)
+    store = await KnowledgeStore.for_kb(require_official_database(SPEC), init_schema=init_schema)
     documents = await open_document_store(
         SPEC, query_instruction=DOCUMENT_QUERY_INSTRUCTION, init_schema=init_schema
     )
