@@ -15,9 +15,11 @@ class ChecklistPoint(BaseModel):
 
 
 class WrittenAnswer(BaseModel):
+    # Field order is generation order: the checklist plans the answer, so
+    # the answer is written against points already listed.
+    checklist: list[ChecklistPoint]
     answer: str = Field(min_length=1)
     sources: list[str]
-    checklist: list[ChecklistPoint]
 
     @field_validator("answer")
     @classmethod

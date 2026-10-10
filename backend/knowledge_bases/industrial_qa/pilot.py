@@ -781,7 +781,7 @@ def judge_env() -> dict[str, str] | None:
 
 def run_evaluator(
     args: argparse.Namespace, run: dict[str, Any], predictions: str, out: Path,
-    env: dict[str, str] | None,
+    env: dict[str, str] | None, *, facts: bool = True,
 ) -> int:
     command = [
         sys.executable, str(BENCHMARK_DIR / "evaluate.py"),
@@ -791,18 +791,22 @@ def run_evaluator(
         "--k", "1,3,5,10",
         "--out", str(out),
     ]
-    command += ["--facts"] if env else ["--skip-llm"]
+    if env is None:
+        command.append("--skip-llm")
+    elif facts:
+        command.append("--facts")
     return subprocess.run(command, cwd=PROJECT_ROOT, check=False, env=env).returncode
 
 
-def evaluate(args: argparse.Namespace, run: dict[str, Any]) -> int:
+def evaluate(args: argparse.Namespace, run: dict[str, Any], *, facts: bool = True) -> int:
+    """facts=False judges answers only, for runs whose extraction did not change."""
     results = args.run_dir / "results.json"
     env = None if args.skip_llm else judge_env()
     if env is None and not args.skip_llm:
         print("No judge model is configured: scoring retrieval and MC only")
     elif env is not None:
         print(f"Judge: {env['MODELARK_MODELNAME']}")
-    if code := run_evaluator(args, run, "predictions.jsonl", results, env):
+    if code := run_evaluator(args, run, "predictions.jsonl", results, env, facts=facts):
         return code
     scores = json.loads(results.read_text(encoding="utf-8"))
     uncited = args.run_dir / "results_uncited.json"
