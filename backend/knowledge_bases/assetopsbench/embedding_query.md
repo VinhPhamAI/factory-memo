@@ -1,1 +1,0 @@
-Given an industrial asset operations question, retrieve reference records about equipment profiles, installed sensors, failure modes, maintenance work orders and time-series model catalogs that support the answer.
