@@ -542,6 +542,7 @@ class KnowledgeAgentService:
         context_filters: Sequence[ContextFilter] = (),
         trace_context_keys: Collection[str] = (),
         retrieval: Retrieval = Retrieval.KNOWLEDGE,
+        knowledge_filter_builder=None,
     ) -> None:
         self._store = store
         self._model = model
@@ -557,6 +558,7 @@ class KnowledgeAgentService:
             context_filters=context_filters,
             retrieval=retrieval,
             checkpointer=self._checkpointer,
+            **({"filter_builder": knowledge_filter_builder} if knowledge_filter_builder else {}),
         )
 
     @classmethod
@@ -573,6 +575,8 @@ class KnowledgeAgentService:
             context_filters=spec.context_filters if knowledge else (),
             trace_context_keys=spec.trace_context_keys if knowledge else (),
             retrieval=spec.retrieval,
+            **({"knowledge_filter_builder": spec.knowledge_filter_builder}
+               if knowledge and spec.knowledge_filter_builder else {}),
         )
 
     def start_stream(self, query: str, *, thread_id: str) -> AgentStreamSession:

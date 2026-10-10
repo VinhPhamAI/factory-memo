@@ -18,10 +18,11 @@ from backend.src.agents.agent.tools import (
 def build_tools(
     context_filters: Sequence[ContextFilter] = (),
     retrieval: Retrieval = Retrieval.KNOWLEDGE,
+    *, filter_builder=None,
 ) -> list:
     if Retrieval(retrieval) is Retrieval.DOCUMENTS:
         return [search_documents, get_document]
-    return [build_search_tool(context_filters), get_knowledge, get_evidence]
+    return [build_search_tool(context_filters, filter_builder=filter_builder), get_knowledge, get_evidence]
 
 
 def build_graph(
@@ -31,6 +32,7 @@ def build_graph(
     context_filters: Sequence[ContextFilter] = (),
     retrieval: Retrieval = Retrieval.KNOWLEDGE,
     checkpointer=None,
+    filter_builder=None,
 ):
     """Build an agent graph around an injectable model, prompt, and checkpointer.
 
@@ -41,7 +43,7 @@ def build_graph(
 
     return create_agent(
         model=model,
-        tools=build_tools(context_filters, retrieval),
+        tools=build_tools(context_filters, retrieval, filter_builder=filter_builder),
         system_prompt=system_prompt,
         state_schema=KnowledgeAgentState,
         context_schema=KnowledgeAgentContext,

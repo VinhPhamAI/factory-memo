@@ -55,7 +55,11 @@ recommendation as a completed action.
 
 ## Scope
 
-`scope` locates every lesson and case: machine_id, machine_model,
+`machine_model` is the canonical equipment family (`MR-JE`, `FX5`, `i4L`).
+Keep a specific manufacturer model such as `MR-JE-70A` in
+`machine_model_specific`; do not use it as the family or as an asset ID.
+
+`scope` locates every lesson and case: machine_id, machine_model, machine_model_specific,
 component_id, component_model, line_id, station, product_model,
 configuration, serial_range, condition and failure_mode. Fill every key the
 transcript supports for that record and set the others to null. A lesson tied

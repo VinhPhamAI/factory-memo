@@ -35,7 +35,7 @@ class IndustrialQaSpecTests(unittest.TestCase):
     def test_spec_owns_its_extraction_contract(self):
         self.assertEqual(SPEC.database, "kb_industrial_qa")
         self.assertIs(SPEC.extraction_output_model, IndustrialQaExtraction)
-        self.assertEqual(SPEC.extraction_version, "industrial-qa-case-lesson-v2")
+        self.assertEqual(SPEC.extraction_version, "industrial-qa-case-lesson-v3")
         self.assertIn("{RAW_CONVERSATION}", SPEC.extract_prompt)
         self.assertIn("industrial maintenance knowledge assistant", SPEC.agent_prompt)
 
@@ -150,6 +150,30 @@ class CatalogNormalizeTests(unittest.TestCase):
             (rule.context["machine_model"], rule.context["component_model"]), ("MR-JE", "HG-KN")
         )
 
+    def test_specific_model_is_preserved_separately_from_family(self):
+        item, = self.normalize(record(machine_id="MR-JE-AX549", machine_model="MR-JE-70A"))
+        self.assertEqual(item.context["machine_model"], "MR-JE")
+        self.assertEqual(item.context["machine_model_specific"], "MR-JE-70A")
+        self.assertEqual(item.revision["catalog"]["changed"]["machine_model"], "MR-JE-70A")
+        before = dict(item.context)
+        self.normalize(item)
+        self.assertEqual(item.context, before)
+
+    def test_specific_model_can_determine_family_without_an_asset(self):
+        item, = self.normalize(record(machine_model="MR-JE-70A"), transcript="")
+        self.assertEqual(item.context, {"machine_model": "MR-JE", "machine_model_specific": "MR-JE-70A"})
+
+    def test_catalog_asset_corrects_an_inconsistent_known_family(self):
+        item, = self.normalize(record(machine_id="MR-JE-AX549", machine_model="FX5"))
+        self.assertEqual(item.context["machine_model"], "MR-JE")
+        self.assertNotIn("machine_model_specific", item.context)
+
+    def test_new_specific_field_does_not_overwrite_a_source_model(self):
+        item, = self.normalize(record(machine_id="MR-JE-AX549", machine_model="MR-JE",
+                                     machine_model_specific="MR-JE-70A"))
+        self.assertEqual(item.context["machine_model_specific"], "MR-JE-70A")
+
+
     def test_locations_are_split_and_moved_to_their_keys(self):
         rule, = self.normalize(record(line_id="Dong Nai Line 1", station="LINE11"), transcript="")
         self.assertEqual(rule.context, {"site": "Dong Nai", "line_id": "Line 1"})
@@ -185,6 +209,70 @@ class CatalogNormalizeTests(unittest.TestCase):
     def test_record_of_another_location_is_not_given_the_asset(self):
         rule, = self.normalize(record(line_id="Line 9"))
         self.assertNotIn("machine_id", rule.context)
+
+
+class IndustrialLookupPolicyTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.catalog = catalog(Asset("MR-JE-AX549", "MR-JE"))
+
+    @staticmethod
+    def matches(filters, context):
+        if not filters:
+            return True
+        key, value = next(iter(filters.items()))
+        if key == "$and":
+            return all(IndustrialLookupPolicyTests.matches(part, context) for part in value)
+        if key == "$or":
+            return any(IndustrialLookupPolicyTests.matches(part, context) for part in value)
+        field = key.removeprefix("context.")
+        if "$eq" in value:
+            return context.get(field) == value["$eq"]
+        if "$exists" in value:
+            return (context.get(field) is not None) == value["$exists"]
+        raise AssertionError(f"Unsupported test filter: {filters}")
+
+    def test_known_asset_survives_wrong_family_without_matching_other_assets(self):
+        filters = self.catalog.lookup_scope(["MR-JE-AX549"], "FX5")
+        self.assertTrue(self.matches(filters, {"machine_id": "MR-JE-AX549", "machine_model": "MR-JE-70A"}))
+        self.assertTrue(self.matches(filters, {"machine_id": "MR-JE-AX549", "machine_model": "FX5"}))
+        self.assertTrue(self.matches(filters, {"machine_model": "MR-JE"}))
+        self.assertFalse(self.matches(filters, {"machine_id": "MR-JE-AX550", "machine_model": "MR-JE"}))
+        self.assertFalse(self.matches(filters, {"machine_model": "FX5"}))
+
+    def test_variant_query_uses_family_and_keeps_specific_model_filter(self):
+        filters = self.catalog.knowledge_filter(context={"machine_model": "MR-JE-70A"})
+        self.assertTrue(self.matches(filters, {"machine_model": "MR-JE"}))
+        self.assertFalse(self.matches(filters, {"machine_model": "FX5"}))
+        filters = self.catalog.knowledge_filter(context={"machine_id": "MR-JE-AX549",
+                                                         "machine_model_specific": "MR-JE-70A"},
+                                                exact_context_keys=("machine_model_specific",))
+        self.assertTrue(self.matches(filters, {"machine_id": "MR-JE-AX549", "machine_model": "bad",
+                                              "machine_model_specific": "MR-JE-70A"}))
+        self.assertFalse(self.matches(filters, {"machine_id": "MR-JE-AX549", "machine_model": "MR-JE"}))
+
+    def test_family_only_queries_still_exclude_other_families(self):
+        filters = self.catalog.lookup_scope([], "MR-JE")
+        self.assertTrue(self.matches(filters, {"machine_model": "MR-JE"}))
+        self.assertFalse(self.matches(filters, {"machine_model": "FX5"}))
+
+    async def test_online_agent_uses_the_same_asset_policy(self):
+        from langchain.messages import AIMessage
+        from backend.src.agents.agent.service import KnowledgeAgentService
+        from backend.tests.test_knowledge_agent import FakeStore, ScriptedChatModel, _search_call
+
+        store = FakeStore(hits=[])
+        model = ScriptedChatModel(responses=[
+            _search_call(query="Check the encoder", machine_id="MR-JE-AX549", machine_model="FX5"),
+            AIMessage(content="No evidence."),
+        ])
+        with mock.patch("backend.src.agents.agent.service.build_chat_model_from_env", return_value=model):
+            service = KnowledgeAgentService.from_kb(SPEC, store)
+            [event async for event in service.start_stream("Check the encoder", thread_id="family").events]
+        self.assertEqual(len(store.searches), 1)
+        filters = store.searches[0][1]
+        self.assertTrue(self.matches(filters, {"machine_id": "MR-JE-AX549", "machine_model": "MR-JE-70A"}))
+        self.assertFalse(self.matches(filters, {"machine_id": "MR-JE-AX550", "machine_model": "MR-JE"}))
+
 
 
 class IndustrialQaSchemaTests(unittest.TestCase):

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from backend.src.agents.rag.chunking import ChunkingConfig
 from backend.src.services.knowledge_extraction import (
@@ -128,6 +128,8 @@ class KnowledgeBaseSpec:
     # Extra search_knowledge arguments; each filters on one context key.
     # Knowledge retrieval only: document chunks carry no extracted context.
     context_filters: tuple[ContextFilter, ...] = ()
+    # Optional KB policy for combining filters (e.g. exact asset OR generic family).
+    knowledge_filter_builder: Callable[..., dict[str, Any] | None] | None = None
     # Context keys that lead the embedded text of a record (the rest follow
     # alphabetically) because they most change what a claim means.
     embedding_context_keys: tuple[str, ...] = ()

@@ -279,7 +279,7 @@ def search_input_model(
     )
 
 
-def build_search_tool(context_filters: Sequence[ContextFilter] = ()) -> BaseTool:
+def build_search_tool(context_filters: Sequence[ContextFilter] = (), *, filter_builder=None) -> BaseTool:
     """search_knowledge with the knowledge base's context filter arguments."""
 
     context_filters = tuple(context_filters)
@@ -302,7 +302,7 @@ def build_search_tool(context_filters: Sequence[ContextFilter] = ()) -> BaseTool
                 },
                 [],
             )
-        filters = build_knowledge_filter(
+        filters = (filter_builder or build_knowledge_filter)(
             subject=arguments.get("subject"),
             knowledge_type=arguments.get("knowledge_type"),
             context={key: arguments.get(key) for key in filter_keys},

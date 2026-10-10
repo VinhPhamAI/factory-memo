@@ -280,7 +280,7 @@ def chunk_document(chunk: dict[str, Any]) -> Document:
     return Document(id=chunk["chunk_id"], title=" > ".join(chunk["section_path"]), text=chunk["text"])
 
 
-async def ingest(args: argparse.Namespace, run: dict[str, Any]) -> int:
+async def ingest(args: argparse.Namespace, run: dict[str, Any], *, extractor=None) -> int:
     chunks = corpus_chunks()
     documents = await open_document_store(SPEC, query_instruction=DOCUMENT_QUERY_INSTRUCTION)
     try:
@@ -296,7 +296,7 @@ async def ingest(args: argparse.Namespace, run: dict[str, Any]) -> int:
     if not remaining:
         print("All sampled conversations already extracted")
         return 0
-    extractor = KnowledgeExtractionService.from_env(
+    extractor = extractor or KnowledgeExtractionService.from_env(
         SPEC.extract_prompt,
         max_tokens=EXTRACTION_MAX_TOKENS,
         json_schema=True,
@@ -620,7 +620,10 @@ def answer_prompt(question: dict[str, Any], sources: list[str]) -> str:
     )
 
 
-async def answer(args: argparse.Namespace, run: dict[str, Any]) -> int:
+async def answer(
+    args: argparse.Namespace, run: dict[str, Any], *, retrieve=None, generate=None, init_schema=True,
+    checkpoint_every=0,
+) -> int:
     processed = {cid: c for cid, c in run["conversations"].items() if c["status"] == "processed"}
     if missing := [cid for cid in run["conversation_ids"] if cid not in processed]:
         print(f"Warning: {len(missing)} conversations not extracted: {', '.join(missing)}",
@@ -634,11 +637,17 @@ async def answer(args: argparse.Namespace, run: dict[str, Any]) -> int:
         max_tokens=ANSWER_MAX_TOKENS,
         response_format=llm.json_schema_format("benchmark_answer", AnswerOutput),
     )
-    store = await KnowledgeStore.for_kb(SPEC)
-    documents = await open_document_store(SPEC, query_instruction=DOCUMENT_QUERY_INSTRUCTION)
+    store = await KnowledgeStore.for_kb(SPEC, init_schema=init_schema)
+    documents = await open_document_store(
+        SPEC, query_instruction=DOCUMENT_QUERY_INSTRUCTION, init_schema=init_schema
+    )
     semaphore = asyncio.Semaphore(args.concurrency)
 
     async def search(question: str) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+        if retrieve is not None:
+            return await retrieve(
+                question, store, documents, run, args, by_evidence, conversations, chunks
+            )
         knowledge_hits, chunk_hits = await asyncio.gather(
             store.search_knowledge(
                 question, k=args.k * (OVERFETCH if args.per_conversation else 1),
@@ -673,16 +682,20 @@ async def answer(args: argparse.Namespace, run: dict[str, Any]) -> int:
         question = questions[qid]
         async with semaphore:
             sources, retrieved = await search(question["question"])
-            prompt = answer_prompt(question, [s["text"] for s in sources.values()])
-            response = await llm.ainvoke(client, prompt)
-        output = llm.validated(
-            AnswerOutput,
-            llm.response_json(response, task="answer", env_prefix="ANSWER"),
-            task="answer",
-        )
+            if generate is None:
+                prompt = answer_prompt(question, [s["text"] for s in sources.values()])
+                response = await llm.ainvoke(client, prompt)
+                output = llm.validated(
+                    AnswerOutput,
+                    llm.response_json(response, task="answer", env_prefix="ANSWER"),
+                    task="answer",
+                )
+                trace = {"usage": getattr(response, "usage_metadata", None)}
+            else:
+                output, trace = await generate(question, sources, client)
         print(f"{qid}: {output.choice} ({len(sources)} sources)")
         cited = list(dict.fromkeys(label for label in output.sources if label in sources))
-        return {
+        outcome = {
             "question_id": qid,
             "question": question["question"],
             "answer": output.answer,
@@ -692,7 +705,14 @@ async def answer(args: argparse.Namespace, run: dict[str, Any]) -> int:
             "retrieved_uncited": retrieved,
             "sources": {label: {k: v for k, v in s.items() if k != "text"}
                         for label, s in sources.items()},
+            "context_characters": sum(len(s["text"]) for s in sources.values()),
+            "answer_trace": trace,
         }
+        if checkpoint_every:
+            done[qid] = outcome
+            if len(done) % checkpoint_every == 0:
+                save(path, [done[q] for q in run["question_ids"] if q in done])
+        return outcome
 
     # Answers of an earlier attempt are kept; only missing questions are asked.
     path = args.run_dir / "answers.json"

@@ -28,6 +28,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ from backend.knowledge_bases.base import PROJECT_ROOT
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.services.ontology import Ontology
 from backend.src.storage import KnowledgeRecord
+from backend.src.storage.knowledge_store import build_knowledge_filter
 
 
 DIRECTORY = Path(__file__).parent
@@ -46,7 +48,7 @@ PUBLIC_DIR = PROJECT_ROOT / "benchmark" / "public"
 
 LOCATION_KEYS = ("site", "line_id", "station")
 # Keys an asset ID or a model name may be written under.
-NAME_KEYS = ("machine_id", "machine_model", "component_id", "component_model")
+NAME_KEYS = ("machine_id", "machine_model", "machine_model_specific", "component_id", "component_model")
 _LINE_RE = re.compile(r"\bline\s*[-#]?\s*0*(\d+)\b", re.I)
 _STATION_RE = re.compile(r"\bstation\s*[-#]?\s*0*(\d+)\b", re.I)
 # Model-like names worth curating, for the build report.
@@ -274,6 +276,57 @@ class Catalog:
             None,
         )
 
+    def machine_variant(self, value: str) -> tuple[str, str] | None:
+        """(family, specific model) for a manufacturer suffix, never an asset ID."""
+        for family in self.families.values():
+            match = _spelling_re(family.name, suffix=r"-[A-Z0-9][A-Z0-9./_-]*").search(value)
+            if not match:
+                continue
+            model = match.group(0)
+            if not (self.asset_ids(model) or self.family(model) or self.component(model)):
+                return family.name, model
+        return None
+
+    def lookup_scope(self, assets: Sequence[str], family: str | None = None) -> dict[str, Any] | None:
+        """Known asset IDs outrank family metadata; other assets never join the fallback."""
+        def any_of(conditions):
+            return conditions[0] if len(conditions) == 1 else {"$or": conditions}
+
+        assets = list(dict.fromkeys(assets))
+        if assets and all(asset in self.assets for asset in assets):
+            exact = any_of([{"context.machine_id": {"$eq": asset}} for asset in assets])
+            # Derive compatible families from the trusted catalog, even when
+            # the caller or an old record carries an inconsistent family.
+            families = sorted({self.assets[asset].machine_model for asset in assets})
+            compatible = any_of([build_knowledge_filter(context={"machine_model": model}) for model in families])
+            general = {"$and": [{"context.machine_id": {"$exists": False}}, compatible]}
+            return {"$or": [exact, general]}
+        scope = build_knowledge_filter(context={"machine_model": family})
+        if assets:
+            matches = any_of([build_knowledge_filter(context={"machine_id": asset}) for asset in assets])
+            scope = {"$and": [matches, scope]} if scope else matches
+        return scope
+
+    def knowledge_filter(
+        self, *, subject=None, knowledge_type=None, context=None, exact_context_keys=(), valid_on: date | None = None
+    ) -> dict[str, Any] | None:
+        """Shared industrial QA policy for benchmark and online agent retrieval."""
+        values = dict(context or {})
+        asset_value = str(values.pop("machine_id", None) or "").strip()
+        model_value = str(values.pop("machine_model", None) or "").strip()
+        assets = self.asset_ids(asset_value) or ([asset_value] if asset_value else [])
+        family = self.family(model_value) if model_value else None
+        if model_value and family is None:
+            variant = self.machine_variant(model_value)
+            component = self.component(model_value)
+            family = variant[0] if variant else self.components[component].family if component else model_value
+        scope = self.lookup_scope(assets, family)
+        other = build_knowledge_filter(
+            subject=subject, knowledge_type=knowledge_type, context=values,
+            exact_context_keys=exact_context_keys, valid_on=valid_on,
+        )
+        return {"$and": [scope, other]} if scope and other else scope or other
+
     def site(self, value: str) -> str | None:
         return next(
             (site for pattern, site, _ in self._site_spellings if pattern.search(value)), None
@@ -466,6 +519,9 @@ class Catalog:
             machine_id = record.context.get("machine_id")
             asset = named.get(machine_id) or self.assets.get(machine_id)
             if asset is not None:
+                # Asset identity is authoritative for family. A specific model
+                # is carried separately and cannot block the family lookup.
+                record.context["machine_model"] = asset.machine_model
                 for key, value in asset.scope().items():
                     if not record.context.get(key):
                         record.context[key] = value
@@ -548,6 +604,12 @@ class Catalog:
             elif component := self.component(value):
                 context.setdefault("component_model", component)
                 context["machine_model"] = self.components[component].family
+            elif variant := self.machine_variant(value):
+                context.setdefault("machine_model_specific", variant[1])
+                context["machine_model"] = variant[0]
+        if not context.get("machine_model") and (value := text("machine_model_specific")):
+            if variant := self.machine_variant(value):
+                context["machine_model"] = variant[0]
         if (value := text("component_model")) is not None:
             if component := self.component(value):
                 context["component_model"] = component

@@ -71,7 +71,10 @@ class IndustrialScope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     machine_id: str | None
-    machine_model: str | None
+    machine_model: str | None = Field(description="Canonical equipment family: MR-JE, FX5 or i4L.")
+    machine_model_specific: str | None = Field(
+        default=None, description="Specific manufacturer model or order code, e.g. MR-JE-70A; not a family or asset ID."
+    )
     component_id: str | None
     component_model: str | None
     line_id: str | None

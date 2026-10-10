@@ -28,12 +28,14 @@ SPEC = KnowledgeBaseSpec.from_directory(
         ),
         ContextFilter(
             "machine_model",
-            "Machine or equipment model named in the question. Unscoped records still match.",
+            "Canonical equipment family: MR-JE, FX5 or i4L. Known asset IDs remain eligible even if family metadata disagrees.",
         ),
+        ContextFilter("machine_model_specific", "Exact manufacturer model, e.g. MR-JE-70A.", include_unscoped=False),
     ),
-    embedding_context_keys=("machine_id", "machine_model", "component_model", "condition"),
-    extraction_version="industrial-qa-case-lesson-v2",
+    embedding_context_keys=("machine_id", "machine_model", "machine_model_specific", "component_model", "condition"),
+    extraction_version="industrial-qa-case-lesson-v3",
     extraction_output_model=IndustrialQaExtraction,
     ontology=CATALOG.ontology(DIRECTORY / ONTOLOGY_FILE),
     record_normalizer=CATALOG.normalize_records,
+    knowledge_filter_builder=CATALOG.knowledge_filter,
 )
