@@ -1,124 +1,161 @@
-# Tasks
+# FACTORY MEMO
 
-### Turn Detection
+**A solution for capturing expert manufacturing know-how and turning it into traceable, reusable knowledge for engineers and AI.**
 
-- [x] Write main class.
-- [ ] Implement Voice Activity Detection
-- [ ] Implement Semantic turn detection
-- [ ] Integrate the full pipeline of Semantic Turn Detection and Voice Activity Detection into the main class.
-- [ ] Set up logging.
-- [ ] Log latency.
-- [ ] Run test for this pipeline.
+This repository implements text-based knowledge extraction, storage, retrieval
+and evidence-grounded answers, with a synthetic benchmark and a Streamlit UI.
+Voice, multimodal capture, location awareness and QR identification are planned
+capabilities.
 
-### Voice Activity Detection 
-- [ ] Write main class
-- [ ] Set up logging.
-- [ ] Log latency.
-- [ ] Run test for this feature.
+## 1. Environment setup
 
-### Text to speech
-- [ ] Write main class
-- [ ] Set up logging.
-- [ ] Log latency.
-- [ ] Run test for this feature.
+Requirements: **Python 3.12+**, **uv**, and **Docker with Docker Compose**.
+Run all commands from the repository root.
 
-### Speech to text
-- [ ] Write main class
-- [ ] Set up logging.
-- [ ] Log latency.
-- [ ] Run test for this feature.
-
-# Project Structure
-
-backend/app.py: Run backend api (not done yet)
-backend/src/*: Contain main logic of seperate voice and llm service.
-backend/utils/*: Contain some helper function, schema, and other thing stuff.
-backend/router/*: Router for api
-backend/api/*: API
-
-
-# Installation & Usage
-Install dependencies from the project root:
-```
+```bash
+uv python install 3.12
+uv venv --python 3.12
 uv sync
+cp .env.example .env
 ```
 
-Start PostgreSQL + pgvector:
+`uv run` automatically uses `.venv`. To activate it manually on macOS/Linux:
+`source .venv/bin/activate`.
+
+Edit `.env` with your provider's settings. Add the shared `OPENROUTER_*` values
+below; they are supported by the code but absent from `.env.example`.
+Replace every placeholder.
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://voice_agent:voice_agent@localhost:5434/voice_agent
+
+# Shared OpenAI-compatible chat endpoint
+OPENROUTER_API_KEY=<your-api-key>
+OPENROUTER_MODEL=<your-chat-model>
+OPENROUTER_BASE_URL=<your-chat-api-base-url>
+
+# OpenAI-compatible embedding endpoint
+EMBEDDING_API_KEY=<your-api-key>
+EMBEDDING_MODEL=<your-embedding-model>
+EMBEDDING_BASE_URL=<your-embedding-api-base-url>
+EMBEDDING_DIM=<model-output-size>
 ```
+
+`EMBEDDING_DIM` must match the model's vector size. A local embedding server can
+omit its API key when `EMBEDDING_BASE_URL` is set. Keep populated `.env` files out
+of Git.
+
+| Optional settings | Purpose |
+| --- | --- |
+| `EXTRACTION_*`, `VERIFY_*`, `CONSOLIDATION_*`, `ANSWER_*` | Override shared chat settings for each step. |
+| `MODELARK_BASEURL`, `MODELARK_APIKEY`, `MODELARK_MODELNAME` | Benchmark generation and LLM judging. Runners fall back to extraction/shared chat settings for judging. |
+| `HF_TOKEN` | Access private snapshots; public pulls need no token. |
+
+## 2. Database initialization
+
+Start PostgreSQL + pgvector and check readiness:
+
+```bash
 docker compose -f deployments/docker-compose.yml up -d
+docker compose -f deployments/docker-compose.yml exec postgres pg_isready -U voice_agent -d voice_agent
 ```
 
-Start the Knowledge Agent API:
+PostgreSQL is exposed on **localhost:5434**. The application creates each
+`kb_<name>` database, tables and vector extension on first use. The current
+registry contains `industrial_qa` and `maintenance`.
+
+For the Industrial QA demo, restore the published knowledge snapshot:
+
+```bash
+uv run python -m backend.knowledge_bases.industrial_qa.snapshot pull \
+  --repo-id duonganh2973/industrial_qa \
+  --run-dir data/industrial_qa_runs/restored-test \
+  --run-id industrial-qa-test-full-20261010T164959Z
 ```
+
+This populates `kb_industrial_qa`, rebuilds knowledge/manual embeddings and
+restores the selected benchmark artifacts when bundled. It requires a compatible
+snapshot and matching local `benchmark/public/` files. Use a fresh database or
+one containing the same snapshot; unrelated records cause the import to stop.
+
+To build knowledge from scratch instead, use the fresh benchmark workflow below.
+See the [snapshot guide](backend/knowledge_bases/industrial_qa/SNAPSHOT.md) for
+local imports and other restore options.
+
+## 3. API and Streamlit UI
+
+**Terminal 1 — API:**
+
+```bash
 uv run uvicorn backend.app:app --host 0.0.0.0 --port 8005
 ```
 
-Start the Streamlit trace UI in another terminal:
-```
+**Terminal 2 — UI:**
+
+```bash
 uv run streamlit run streamlit_app.py
 ```
 
-The UI selects `enterprise_rag` by default and calls
-`POST /v1/knowledge-agent/enterprise_rag/stream`. Selecting another KB changes
-the URL to `/v1/knowledge-agent/<kb>/stream` and starts a new conversation.
-It renders the normalized SSE
-events `run.started`, `tool.started`, `tool.completed`, `answer.delta`,
-`answer.reset`, `answer.citations`, `run.completed`, and `run.failed`. Tool traces expose only
-allowlisted inputs and summaries; raw evidence transcripts and model reasoning
-are not sent to the UI.
+Open **http://localhost:8501**, select **industrial_qa**, and ask a question.
+The UI connects to the API on port **8005** and displays answers, citations and
+tool traces. Check API health at **http://localhost:8005/healthz**.
+Conversation history is cleared when the API restarts.
 
-Call the EnterpriseRAG agent directly after ingesting its documents:
+## 4. Factory benchmark
+
+The [dataset manifest](benchmark/benchmark/manifest.json) records **3 manuals,
+1,067 chunks, 195 synthetic conversations and 500 questions**: **100 train /
+400 test**. All benchmark content is in English.
+
+### Score restored predictions
+
+After restoring the snapshot, recompute retrieval and multiple-choice metrics
+without LLM calls:
+
 ```bash
-curl -N http://localhost:8005/v1/knowledge-agent/enterprise_rag/stream \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: text/event-stream' \
-  -d '{"query":"What are the multipart upload limits?","thread_id":"enterprise-demo"}'
+uv run python benchmark/evaluate.py \
+  --predictions data/industrial_qa_runs/restored-test/predictions.jsonl \
+  --split test \
+  --question-ids data/industrial_qa_runs/restored-test/question_ids.txt \
+  --skip-llm \
+  --out data/industrial_qa_runs/restored-test/results_recomputed.json
 ```
 
-Reuse `thread_id` for follow-up questions. History is stored in memory per KB
-and is cleared when the API restarts. The original
-`POST /v1/knowledge-agent/stream` remains available with `kb` in the JSON body.
-The scoped route takes only `query` and `thread_id`. Unknown KBs return 404,
-invalid requests return 422, and failures after streaming starts arrive as
-`run.failed` SSE events. The Streamlit connection field (or the
-`KNOWLEDGE_AGENT_API_URL` environment variable) accepts the API root, the
-original stream URL, or a KB-specific stream URL.
+This scores saved predictions; it does not generate new answers. Remove
+`--skip-llm` to judge answers with the configured `MODELARK_*` endpoint.
 
-The API and the `kb` CLI use the settings documented in `.env.example`.
+### Run fresh extraction, answers and evaluation
 
-### Knowledge bases
+These runs call LLM/embedding endpoints and incur usage costs. **Ingestion
+replaces unrelated records in `kb_industrial_qa`**, retaining the current and
+explicitly reused runs. Stop API/UI use of this KB while rebuilding it.
 
-See the [knowledge base guide](backend/knowledge_bases/README.md) for
-creating a KB, configuring extraction and retrieval, preparing datasets,
-ingesting/resuming data, and running EnterpriseRAG or AssetOpsBench.
+Run a **10-question train pilot**, then expand to **all 100 train questions**:
 
-Start the legacy Next.js frontend (not connected to the Knowledge Agent API):
-```
-cd frontend && npm install && npm run dev
-```
+```bash
+uv run python -m backend.knowledge_bases.industrial_qa.pilot all \
+  --run-dir data/industrial_qa_runs/pilot-local \
+  --split train --sample 10
 
-### Git Command
-
-Create a new branch
-```
-git checkout -b <branch-name>
+uv run python -m backend.knowledge_bases.industrial_qa.train all \
+  --run-dir data/industrial_qa_runs/train-local \
+  --from-run-dir data/industrial_qa_runs/pilot-local
 ```
 
-Push to branch
+Freeze model, prompt and retrieval settings before running **all 400 test
+questions**:
+
+```bash
+uv run python -m backend.knowledge_bases.industrial_qa.holdout all \
+  --run-dir data/industrial_qa_runs/test-local \
+  --reuse-run-dir data/industrial_qa_runs/train-local
 ```
-git add .
-git commit -m "feat: add feature"
-git push origin <branch-name>
-```
 
-# References
+Each run saves checkpoints/configuration, `answers.json`, `predictions.jsonl`
+and `results.json`. Repeat the same command to resume; use new run directories
+for new experiments. Adding `--skip-llm` skips judges only: extraction and answer
+generation still call models.
 
-https://voiceaiandvoiceagents.com/
-
-https://arxiv.org/pdf/2501.06282
-
-https://theneuralmaze.substack.com/p/a-hands-on-project-to-master-multimodal
-
-https://www.youtube.com/watch?v=c19PrP3bd6Y
-
-https://www.deeplearning.ai/short-courses/building-ai-voice-agents-for-production/
+Use only `benchmark/public/` as inference data. Hidden labels in
+`benchmark/generation/` and `benchmark/benchmark/` are for construction and
+evaluation. Tune on train and report pilot coverage separately from full scores.
