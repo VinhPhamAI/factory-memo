@@ -20,6 +20,7 @@ backend/knowledge_bases/
     agent.md           # agent prompt for knowledge retrieval
     agent_documents.md # agent prompt for document retrieval
     embedding_query.md # optional query-side embedding instruction
+  general/             # general-purpose conversations (see general/README.md)
   enterprise_rag/      # EnterpriseRAG-Bench (see below)
     prepare.py         # downloads the questions and their gold documents
     bench.py           # retrieval recall and ERB-format answers
@@ -27,6 +28,8 @@ backend/knowledge_bases/
 
 To add a KB, copy `maintenance/` to a new name, edit its prompts and the
 `DatasetSpec`, then add its `SPEC` to `KNOWLEDGE_BASES` in `__init__.py`.
+`general/` is the simplest starting point for knowledge retrieval: a typed
+extraction schema, prompts, and a `SPEC` without dataset, filters or ontology.
 
 ## Retrieval modes
 
@@ -140,7 +143,9 @@ support this field, or use `enabled` to restore reasoning. See
 An error with `finish_reason=length` and `reasoning_tokens=8192` means the
 model used the entire CLI output budget before producing JSON. Shortening
 the prompt reduces input tokens; disabling reasoning addresses this output
-budget problem. Raising the budget permits more token use rather than saving it.
+budget problem. Set `EXTRACTION_MAX_TOKENS` to a positive integer to override
+the default output budget of 20,000 tokens. Raising the budget permits more
+token use rather than saving it.
 Batch size controls parallel requests, not tokens per document. Consolidation
 has its own switch, `CONSOLIDATION_THINKING=disabled`; when its JSON is cut
 off, every lesson of the conversation is added as new and the error is kept in

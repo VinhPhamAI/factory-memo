@@ -55,6 +55,11 @@ Available domain packages in this checkout:
   answers. API, CLI and benchmark adapters must use the shared retrieval/answer
   implementation in `backend/knowledge_bases/industrial_qa/pipeline.py`; do not
   introduce a benchmark-only version of the answer policy.
+- **General:** a general-purpose ReAct knowledge agent over conversations on any
+  topic: a flat typed item schema (type, certainty, scope, speaker, verbatim
+  quotes) on the shared tables, with no catalog, ontology or fixed answer
+  workflow. It has no dataset or benchmark yet. See the
+  [general guide](backend/knowledge_bases/general/README.md).
 - **EnterpriseRAG and AssetOpsBench:** the registry and documentation reference
   `enterprise_rag` and `assetopsbench`, but their packages are absent in this
   checkout. Registry imports currently fail, affecting dependent API, CLI and

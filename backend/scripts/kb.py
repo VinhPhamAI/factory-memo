@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import csv
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -71,10 +72,25 @@ from backend.src.storage.databases import (
 DEFAULT_TRANSCRIPT_COLUMN = "raw_conversation"
 DEFAULT_STATED_BY_COLUMN = "stated_by"
 # Headroom for reasoning models, whose thinking tokens count against max_tokens.
-EXTRACTION_MAX_TOKENS = 8192
+DEFAULT_EXTRACTION_MAX_TOKENS = 20_000
 TEXT_SUFFIXES = {".txt", ".md"}
 EVAL_RUNS_DIR = DATA_DIR / "kb_eval"
 EVAL_K_VALUES = (1, 3, 5, 10)
+
+
+def extraction_max_tokens_from_env() -> int:
+    """Return the extraction output budget, falling back to the CLI default."""
+
+    raw = os.getenv("EXTRACTION_MAX_TOKENS", "").strip()
+    if not raw:
+        return DEFAULT_EXTRACTION_MAX_TOKENS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("EXTRACTION_MAX_TOKENS must be a positive integer") from exc
+    if value <= 0:
+        raise ValueError("EXTRACTION_MAX_TOKENS must be a positive integer")
+    return value
 
 
 @dataclass(frozen=True)
@@ -354,7 +370,7 @@ async def ingest(spec: KnowledgeBaseSpec, args: argparse.Namespace) -> int:
 
     extractor = KnowledgeExtractionService.from_env(
         spec.extract_prompt,
-        max_tokens=EXTRACTION_MAX_TOKENS,
+        max_tokens=extraction_max_tokens_from_env(),
         # A typed output schema is also sent as the response format.
         json_schema=spec.extraction_output_model is not None,
         output_model=spec.extraction_output_model,

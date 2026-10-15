@@ -134,8 +134,9 @@ def _validity(record: KnowledgeRecord, today: date) -> str:
     return "current"
 
 
-# Structured context that the claim already renders as text.
-_RENDERED_CONTEXT_KEYS = frozenset({"case_card", "steps"})
+# Structured context that the claim already renders as text, and evidence
+# quotes; get_knowledge returns them.
+_RENDERED_CONTEXT_KEYS = frozenset({"case_card", "quotes", "steps"})
 
 
 def _record_payload(

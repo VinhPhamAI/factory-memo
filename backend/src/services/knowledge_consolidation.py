@@ -342,7 +342,7 @@ def _annotate(record: KnowledgeRecord, note: dict[str, Any]) -> None:
 def _describe(label: str, record: KnowledgeRecord) -> str:
     scope = {
         key: value for key, value in record.context.items()
-        if key not in {"case_card", "steps", "source_turns", DEFAULT_ISOLATION_KEY}
+        if key not in {"case_card", "quotes", "steps", "source_turns", DEFAULT_ISOLATION_KEY}
     }
     header = f"{label} [{record.type.value}, {record.status.value}] {record.subject}"
     validity = ", ".join(

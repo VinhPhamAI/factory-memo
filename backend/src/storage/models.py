@@ -115,7 +115,8 @@ class KnowledgeRecord(BaseModel):
         # Benchmark run IDs are provenance, not semantic scope. Structured
         # content (a Case Card, procedure steps) is already rendered into the
         # claim, so it is not indexed twice; Case Card evidence quotes are never
-        # indexed, as they could hide omissions from the extracted knowledge.
+        # indexed, nor are evidence quotes, as they could hide omissions from
+        # the extracted knowledge.
         scope_context = {
             key: value for key, value in self.context.items() if key not in _UNINDEXED_CONTEXT
         }
@@ -227,7 +228,7 @@ class KnowledgeSearchHit:
 
 
 # Context keys left out of the embedded and full-text indexed text.
-_UNINDEXED_CONTEXT = frozenset({"benchmark_run_id", "case_card", "source_turns", "steps"})
+_UNINDEXED_CONTEXT = frozenset({"benchmark_run_id", "case_card", "quotes", "source_turns", "steps"})
 
 
 def _uuid_array(ids: Sequence[UUID]) -> str:

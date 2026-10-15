@@ -1,8 +1,8 @@
 """Check extracted knowledge against the transcript it was extracted from.
 
-Deterministic checks always run: Case Card evidence quotes must occur in the
-transcript (in the cited turn when there is one), and every number a record
-states must occur in it. An optional LLM judge, ideally from another model
+Deterministic checks always run: evidence quotes (of a Case Card, or a
+record's context.quotes) must occur in the transcript (in the cited turn when
+there is one), and every number a record states must occur in it. An optional LLM judge, ideally from another model
 family than the extractor, rates whether each record is faithful to the
 transcript. Results are advisory: they are stored on the record for review
 and never approve or drop it.
@@ -168,7 +168,7 @@ def _describe(index: int, record: KnowledgeRecord) -> str:
 
 
 # Rendered into the claim already, or provenance rather than content.
-_UNJUDGED_CONTEXT = frozenset({"case_card", "steps", "source_turns", "benchmark_run_id"})
+_UNJUDGED_CONTEXT = frozenset({"case_card", "quotes", "steps", "source_turns", "benchmark_run_id"})
 
 
 # ------------------------------------------------------------ deterministic
@@ -249,11 +249,15 @@ def _contains(haystack: str, quote: str) -> bool:
 
 
 def _quote_issues(record: KnowledgeRecord, source: _SourceText) -> list[str]:
+    # Case Cards keep their quotes in the card, other records in context.quotes.
     card = record.context.get("case_card")
-    if not isinstance(card, dict):
+    quotes = card.get("evidence") if isinstance(card, dict) else record.context.get("quotes")
+    if not isinstance(quotes, list):
         return []
     issues = []
-    for number, evidence in enumerate(card.get("evidence") or [], 1):
+    for number, evidence in enumerate(quotes, 1):
+        if not isinstance(evidence, dict):
+            continue
         quote = str(evidence.get("quote") or "")
         turn_id = evidence.get("turn_id")
         if turn_id and source.turns:

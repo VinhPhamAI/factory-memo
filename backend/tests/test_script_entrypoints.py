@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import io
+import os
 import tempfile
 import unittest
-import io
 from pathlib import Path
 from unittest import mock
 
@@ -13,6 +14,7 @@ from backend.scripts.kb import (
     TranscriptInput,
     build_parser,
     evaluate,
+    extraction_max_tokens_from_env,
     ingest,
     load_retrieval_questions,
     read_transcripts,
@@ -26,6 +28,20 @@ from backend.tests.test_knowledge_ingestion_service import FakeStore
 
 
 class IngestEntrypointTest(unittest.TestCase):
+    def test_extraction_max_tokens_uses_environment_or_default(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(extraction_max_tokens_from_env(), 20_000)
+        with mock.patch.dict(os.environ, {"EXTRACTION_MAX_TOKENS": "32768"}, clear=True):
+            self.assertEqual(extraction_max_tokens_from_env(), 32_768)
+
+    def test_extraction_max_tokens_rejects_invalid_values(self) -> None:
+        for value in ("invalid", "0", "-1"):
+            with self.subTest(value=value), mock.patch.dict(
+                os.environ, {"EXTRACTION_MAX_TOKENS": value}, clear=True
+            ):
+                with self.assertRaisesRegex(ValueError, "positive integer"):
+                    extraction_max_tokens_from_env()
+
     def test_reads_one_text_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "conversation.txt"

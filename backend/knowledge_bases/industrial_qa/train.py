@@ -180,8 +180,11 @@ async def _ingest_missing(args, run):
         return 0
     conversations = pilot.public_conversations()
     extractor = pilot.KnowledgeExtractionService.from_env(
-        SPEC.extract_prompt, max_tokens=pilot.EXTRACTION_MAX_TOKENS, json_schema=True,
-        output_model=SPEC.extraction_output_model, ontology=SPEC.ontology,
+        SPEC.extract_prompt,
+        max_tokens=pilot.extraction_max_tokens_from_env(),
+        json_schema=True,
+        output_model=SPEC.extraction_output_model,
+        ontology=SPEC.ontology,
     )
     run["extraction"] = extractor.provenance
     store = await pilot.KnowledgeStore.for_kb(SPEC, init_schema=False)

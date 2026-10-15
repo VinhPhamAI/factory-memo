@@ -1,0 +1,231 @@
+A: Sau đây em xin phép trình bày giải pháp của đội Double Date trong DENSO Factory Hacks. Chủ đề của đội là **Factory Memo**, thuộc nhóm AI – Dự báo và Tri thức.
+
+A: Trước khi đi vào giải pháp, em xin nói ngắn gọn về bài toán mà đội đang giải quyết. Factory Memo hướng tới việc ghi lại bí quyết và kinh nghiệm của chuyên gia trong quá trình làm việc, sau đó biến những thông tin này thành tri thức có cấu trúc để kỹ sư khác có thể tìm kiếm, kiểm chứng và tái sử dụng khi cần.
+
+A: Điểm khác biệt so với cách lưu tài liệu truyền thống là hệ thống không chỉ lưu transcript, ảnh hay ghi chú thô. Hệ thống sẽ tự động xác định ngữ cảnh, trích xuất know-how, lưu evidence và cả lịch sử chỉnh sửa của tri thức.
+
+A: Như vậy mục tiêu của bọn em có hai phần. Một là giảm tối đa công việc ghi chép thủ công cho chuyên gia. Hai là làm cho những kiến thức đã thu được thực sự có thể sử dụng lại thông qua search, hỏi đáp hoặc báo cáo.
+
+A: Về cách triển khai, bọn em xây dựng một pipeline end-to-end từ Speech-to-Text, OCR, LLM knowledge extraction, human-in-the-loop, Knowledge Base cho tới RAG và Q&A. Đồng thời đội cũng xây dựng synthetic benchmark để có thể đo được chất lượng extraction, retrieval và answer chứ không chỉ đánh giá bằng cảm giác khi demo.
+
+A: Kiến trúc dự kiến chạy theo hướng cloud-hosted và Docker-based nên khi tăng số lượng người dùng, tài liệu, workload hoặc triển khai sang nhà máy khác thì vẫn có thể scale mà không cần thay đổi kiến trúc lõi.
+
+A: Về đội ngũ, team Double Date của bọn em có bốn thành viên.
+
+A: Đầu tiên là anh Vũ Minh Tiến, team lead. Anh Tiến có khoảng hai năm kinh nghiệm xây dựng trợ lý AI và hệ thống hỏi đáp trên tài liệu, phụ trách phần chatbot engineering, agent workflow, RAG và tool integration.
+
+A: Thành viên thứ hai là Phạm Quang Vinh, Applied AI Engineer, có khoảng hai năm kinh nghiệm về Agentic AI, tối ưu LLM workflow và thiết kế MLOps infrastructure. Phần chính phụ trách là AI infrastructure, benchmarking và evaluation.
+
+A: Thành viên thứ ba là Phạm Chiến, AI Engineer, có khoảng một năm rưỡi phát triển ứng dụng LLM và Speech-to-Text. Bạn Chiến tập trung vào pipeline transcription thời gian thực và phần tích hợp LLM.
+
+A: Và cuối cùng là Nguyễn Dương Ánh, Backend Engineer, có khoảng một năm rưỡi kinh nghiệm backend engineering, phụ trách backend infrastructure và các thành phần liên quan tới agentic AI.
+
+B: Vâng, bạn tiếp tục.
+
+A: Tiếp theo em xin đi vào vấn đề mà đội quan sát được.
+
+A: Theo khảo sát năm 2026 của Viện Chính sách và Đào tạo Lao động Nhật Bản, có 91,1% doanh nghiệp sản xuất đánh giá việc kế thừa kỹ năng nghề là quan trọng. Tuy nhiên chỉ 33,3% cho rằng quá trình kế thừa hiện tại đang diễn ra hiệu quả, và 50% cho biết một nguyên nhân chính gây khó khăn là thiếu thời gian.
+
+A: Điều này khá sát với bài toán thực tế. Chuyên gia thường rất bận, nên họ không có nhiều thời gian để ngồi viết lại toàn bộ kinh nghiệm của mình.
+
+A: Phần lớn know-how hiện nay được trao đổi qua cuộc họp, nói chuyện trực tiếp hoặc chỉ được ghi nhanh vào một vài dòng note. Vì thế có rất nhiều kiến thức quan trọng chỉ nằm trong đầu một số người.
+
+A: Khi chuyên gia không có mặt, những kiến thức này trở nên khó tiếp cận. Xa hơn nữa, khi chuyên gia chuyển vị trí hoặc nghỉ hưu thì tri thức đó có thể mất đi hoàn toàn.
+
+A: Đây cũng chính là thực trạng của bài toán DENSO đặt ra: kinh nghiệm chuyên gia không được lưu lại một cách có hệ thống, kỹ sư mới mất nhiều thời gian học, các lỗi cũ có thể lặp lại và nhà máy phụ thuộc quá nhiều vào một số cá nhân. description
+
+A: Nhưng bọn em cho rằng chỉ lưu lại nội dung thôi vẫn chưa đủ.
+
+A: Ví dụ một chuyên gia nói rằng “trường hợp này nên lau thấu kính trước khi thay sensor”. Nếu chỉ lưu câu đó, người khác sẽ không biết nó áp dụng cho máy nào, linh kiện nào, trong điều kiện gì, tại sao chuyên gia kết luận như vậy và sau khi xử lý thì kết quả ra sao.
+
+A: Vì vậy DENSO cần một hệ thống hiểu được ngữ cảnh xung quanh tri thức. Hệ thống phải trả lời được ít nhất ba câu hỏi: kiến thức này nói về máy hoặc bộ phận nào, chuyên gia đã suy luận như thế nào, và cách xử lý đó đã tạo ra kết quả gì.
+
+A: Khi có đầy đủ context như vậy thì know-how mới có thể được khái quát hóa thành tri thức thực sự hữu ích cho những lần sau.
+
+A: Từ vấn đề đó, đội bọn em đề xuất giải pháp mang tên **Factory Memo**.
+
+A: Có thể hiểu đơn giản Factory Memo là một hệ thống giúp ghi lại bí quyết chuyên gia ngay trong lúc họ đang làm việc, rồi chuyển nội dung đó thành tri thức có cấu trúc để những kỹ sư khác có thể tìm lại, kiểm chứng và tái sử dụng.
+
+A: Giải pháp có bốn ý chính.
+
+A: Ý đầu tiên là làm cho việc lưu know-how trở nên thật dễ. Chuyên gia không cần dừng công việc để ngồi viết một tài liệu hoàn chỉnh. Họ có thể nói chuyện như bình thường, ghi chú tay hoặc chụp ảnh.
+
+A: Ý thứ hai là hệ thống phải hiểu đúng ngữ cảnh. Vì vậy Factory Memo kết hợp thông tin về chuyên gia, máy móc, linh kiện, công việc đang diễn ra và các bằng chứng đi kèm.
+
+A: Ý thứ ba là biến kinh nghiệm thô thành tri thức có cấu trúc. AI sẽ cố gắng tách ra triệu chứng, ngữ cảnh, nguyên nhân gốc, lập luận của chuyên gia, cách xử lý, kết quả và điều kiện áp dụng.
+
+A: Mỗi tri thức cũng phải có nguồn gốc rõ ràng và có revision history. Nếu hệ thống phát hiện thông tin mâu thuẫn hoặc không đủ chắc chắn thì sẽ đưa lại cho chuyên gia review.
+
+A: Và ý cuối cùng là tri thức sau khi được xác nhận phải luôn sẵn sàng để sử dụng lại. Kỹ sư có thể hỏi bằng text hoặc voice, dùng để xử lý sự cố, đào tạo nhân sự hoặc tự động tạo báo cáo, kể cả khi chuyên gia không có mặt.
+
+A: Em xin mô tả một flow cụ thể hơn.
+
+A: Bước đầu tiên là thu nhận kiến thức tại chỗ. Input có thể là một cuộc hội thoại nhiều người, một ghi chú viết tay, một tài liệu hoặc một hình ảnh tại hiện trường.
+
+A: Sau đó AI không chỉ transcript lại nguyên văn, mà sẽ rút ra hiện tượng và ngữ cảnh, reasoning của chuyên gia, root cause, cách xử lý, kết quả sau xử lý và điều kiện áp dụng.
+
+A: Cuối cùng mỗi case được chuẩn hóa thành một knowledge card.
+
+A: Ví dụ ở slide này, vấn đề là tín hiệu cảm biến chập chờn. Nguyên nhân được xác định là dầu bám trên thấu kính. Cách xử lý là lau thấu kính trước khi quyết định thay cảm biến.
+
+A: Khi case này đã trở thành một thẻ tri thức thì nó có thể được dùng cho search, Q&A, đào tạo, viết báo cáo hoặc cập nhật quy trình chuẩn.
+
+A: … Em xin chuyển sang kiến trúc tổng thể.
+
+A: Kiến trúc của Factory Memo được chia thành ba luồng lớn: thu nhận và chuẩn hóa dữ liệu đầu vào, trích xuất và xác thực tri thức, sau đó là truy vấn và tái sử dụng tri thức.
+
+A: Ở bước khởi tạo, hệ thống có SOP Ingestor để parse thông tin về machine, job và step. Seed Document Processor dùng để lấy các subject và procedure ban đầu. Catalog Registry lưu danh mục máy móc và linh kiện.
+
+A: Đối với dữ liệu thực tế, voice của chuyên gia sẽ đi qua Speech-to-Text. Ghi chú, tài liệu và hình ảnh sẽ đi qua OCR hoặc Document Processor.
+
+A: Song song với raw content, Metadata Extractor thu các thông tin context như machine ID, machine model, line, timestamp hoặc expert ID. components
+
+A: Dữ liệu thô như audio, image và document được giữ lại trong Object Storage. Metadata, trạng thái xử lý và reference tới object được lưu trong PostgreSQL.
+
+A: Sau bước ingestion, Knowledge Extractor sử dụng LLM để chuyển raw text thành structured knowledge.
+
+A: Sau đó Subject Resolution xác định đối tượng mà tri thức đang nói tới. Candidate Matching tìm những knowledge record hiện có có khả năng liên quan, dựa trên field filtering và semantic similarity.
+
+A: Semantic search ở đây chủ yếu dùng để thu hẹp candidate, chứ không tự quyết định rằng hai knowledge item có giống nhau hay không. components
+
+A: Tiếp theo hệ thống thực hiện Knowledge Comparison.
+
+A: Quan hệ giữa knowledge mới và knowledge cũ có thể là Same, nghĩa là nội dung tương đương; Compatible, nghĩa là cùng chủ đề nhưng bổ sung thêm thông tin hoặc áp dụng ở context khác; hoặc Conflict, nghĩa là cùng context nhưng claim lại mâu thuẫn.
+
+A: Với các trường hợp conflict hoặc confidence thấp, hệ thống đưa sang Expert Review thay vì tự động quyết định.
+
+A: Chuyên gia có thể xác nhận knowledge mới, giữ cả hai phiên bản, chỉnh nội dung, reject hoặc xác nhận rằng hai case thực ra thuộc context khác nhau.
+
+A: Sau khi review, Knowledge Writer ghi record vào Knowledge Base cùng revision, evidence, source reference và review metadata. Hệ thống không overwrite thẳng knowledge cũ mà vẫn giữ lịch sử thay đổi để có thể truy vết. components
+
+A: Knowledge Base dự kiến dùng PostgreSQL kết hợp pgvector. PostgreSQL giữ structured knowledge, context metadata, evidence, revision và report metadata. Còn pgvector phục vụ semantic retrieval.
+
+A: Ở nhánh report, Change Detector xác định liệu dữ liệu liên quan đã thay đổi chưa. Nếu có thì hệ thống regenerate report, còn nếu không thì có thể skip để tránh xử lý lại không cần thiết.
+
+A: Subject Report Generator tổng hợp knowledge theo từng machine hoặc subject, tạo report có best practice, heuristic, procedure, known case, conflict, constraint và supporting evidence.
+
+A: Sang luồng query, người dùng có thể hỏi bằng voice hoặc text.
+
+A: Query Orchestrator sẽ quyết định nên dùng semantic search, Text-to-SQL hay RAG.
+
+A: Ví dụ nếu hỏi “có case nào giống sự cố này không?” thì semantic search phù hợp. Nếu hỏi “máy nào đang có nhiều conflict nhất?” thì Text-to-SQL phù hợp hơn. Còn câu hỏi cần tổng hợp nhiều knowledge và evidence thì dùng RAG. components
+
+A: Câu trả lời cuối cùng cũng phải trace được về knowledge record, rồi từ knowledge record truy ngược về evidence, và cuối cùng về transcript hoặc document gốc.
+
+A: Bọn em coi traceability này là khá quan trọng vì người dùng không nên chỉ nhận một câu trả lời từ AI mà không biết nó xuất phát từ đâu. components
+
+B: Phần này cũng là điểm khác biệt chính của giải pháp đúng không?
+
+A: Dạ đúng. Và ở slide tiếp theo bọn em tổng hợp ba điểm khác biệt chính.
+
+A: Điểm thứ nhất là tối ưu sự thuận tiện. Bọn em nhận thấy lý do chuyên gia ngại lưu know-how không phải vì họ không muốn chia sẻ, mà do cách làm hiện tại khá bất tiện: phải tự ghi chép, tự chụp ảnh, tự quay video rồi sau đó lại tổng hợp.
+
+A: Vì vậy Factory Memo cố gắng không bắt chuyên gia thay đổi cách làm việc. Hệ thống capture trực tiếp từ voice, tài liệu và hình ảnh, với mục tiêu biến việc lưu giữ tri thức thành một phần tự nhiên trong công việc hằng ngày.
+
+A: Điểm thứ hai là tận dụng tối đa tri thức thu được.
+
+A: Một đoạn know-how chỉ có giá trị khi đặt đúng context. Vì vậy bọn em đề xuất kết hợp sơ đồ nhà máy, vị trí kỹ sư và QR hoặc NFC trên thiết bị để xác định knowledge đó thuộc máy nào, dây chuyền nào và điều kiện vận hành nào.
+
+A: Mục tiêu là know-how thô sau khi đi qua hệ thống sẽ trở thành tri thức gắn đúng với thiết bị, linh kiện và quy trình liên quan.
+
+A: Điểm thứ ba là khả năng kiểm chứng chất lượng.
+
+A: Nếu không có benchmark thì rất khó biết một thay đổi trong pipeline thực sự tốt hơn hay chỉ nhìn đẹp trong live demo. Vì vậy đội xây synthetic benchmark với gần 200 hội thoại nhà máy ở nhiều context khác nhau để đánh giá baseline của solution.
+
+A: Vậy Factory Memo mang lại thay đổi gì cho vận hành nhà máy?
+
+A: Đầu tiên là giảm gánh nặng ghi chép cho chuyên gia. Trước đây sau một sự cố, chuyên gia phải viết lại báo cáo nên tài liệu thường không được cập nhật đầy đủ. Với Factory Memo, kinh nghiệm được capture ngay trong khi làm việc thông qua voice, note và ảnh.
+
+A: Thứ hai, kinh nghiệm cá nhân trở thành tri thức chung. Thay vì một case chỉ nằm trong đầu một người, case đó được chuẩn hóa thành thẻ tri thức gồm triệu chứng, root cause, cách xử lý và điều kiện áp dụng.
+
+A: Thứ ba là tái sử dụng nhanh hơn. Kỹ sư trẻ không cần chờ chuyên gia hoặc tự giải lại từ đầu một lỗi đã từng xuất hiện. Họ có thể hỏi trực tiếp hệ thống và nhận về các case tương tự cùng cách chuyên gia từng xử lý.
+
+A: Và thứ tư là knowledge đáng tin cậy hơn. Mỗi thẻ tri thức được chuẩn hóa, có expert review, có nguồn gốc từ cuộc họp hay thảo luận cụ thể và có lịch sử phiên bản.
+
+A: Nếu chuyển các lợi ích này thành KPI vận hành, bọn em chia thành bốn nhóm.
+
+A: Nhóm đầu tiên là giải quyết sự cố và ra quyết định nhanh hơn. Các metric có thể dùng gồm thời gian xử lý task, MTTR, expert escalation rate và first-time resolution rate.
+
+A: Kỳ vọng là kỹ sư có thể tái sử dụng các case đã xác thực, giảm thời gian điều tra, giảm MTTR và giảm số lần phải hỏi lại chuyên gia.
+
+A: Nhóm thứ hai là giữ lại kinh nghiệm của chuyên gia. Có thể đo bằng tỷ lệ critical case được capture, knowledge coverage và knowledge reuse rate.
+
+A: Nhóm thứ ba là đào tạo và chuyển giao kỹ năng. Ở đây có thể đo time-to-competency, số giờ training hoặc tỷ lệ câu hỏi mà kỹ sư mới tự giải quyết được mà không cần chuyên gia.
+
+A: Cuối cùng là mức độ chuẩn hóa và khả năng mở rộng tri thức. Có thể theo dõi retrieval success rate, repeated-case resolution rate và cross-team reuse rate.
+
+A: Mục tiêu cuối cùng là knowledge đã xác thực có thể được tái sử dụng giữa nhiều engineer, line và site, đồng thời vẫn đảm bảo consistency và traceability.
+
+A: Tiếp theo là mô hình triển khai và vận hành.
+
+A: Phía nhà máy có ba cách tương tác chính. Mobile hoặc tablet dùng để capture voice, ảnh và input nhanh tại hiện trường. Workstation hoặc laptop dùng để review knowledge, xem dashboard hoặc upload document. QR được dùng để map thông tin về đúng machine hoặc equipment.
+
+A: Phần AI inference được triển khai trên hosted GPU infrastructure.
+
+A: Model stack dự kiến gồm Nemotron 3.5 ASR Streaming 0.6B kết hợp NVIDIA SortFormer cho speech và diarization; PaddleOCR-VL-1.6 cho OCR và document parsing; Qwen3.5-27B chạy FP8 thông qua vLLM cho knowledge extraction và Q&A; và Qwen3-Embedding-0.6B cho semantic retrieval.
+
+A: Về hạ tầng, baseline của bọn em là một GPU node H100 SXM 80GB dùng chung cho các model. Database là PostgreSQL với pgvector, khoảng 4 vCPU và 8GB RAM.
+
+A: Storage dự kiến gồm khoảng 200GB model cache và 1TB object storage. Serving dùng vLLM, worker queue và API. Người dùng truy cập qua web, mobile hoặc tablet, qua HTTPS hoặc private VPN.
+
+A: Về quy mô thử nghiệm, bọn em giả định khoảng 10 đến 20 giờ hội thoại chuyên gia mỗi ngày, 100 đến 300 ảnh hoặc trang tài liệu mỗi ngày.
+
+A: Với Q&A, tải dự kiến khoảng 500 đến 2.000 câu hỏi mỗi ngày, khoảng 10 đến 40 người dùng active, 5 đến 10 cuộc hội thoại live đồng thời và khoảng 50 LLM request mỗi phút.
+
+A: Với cấu hình này, phần chi phí lớn nhất là H100, khoảng 2.913 đô một tháng. PostgreSQL khoảng 122 đô, model và object storage khoảng 40 đô. Tổng base infrastructure khoảng 3.075 đô, và khi cộng operating allowance thì budget dự kiến khoảng 3.100 đến 3.300 đô mỗi tháng.
+
+A: … Sau đây là phần benchmark và initial result.
+
+A: Benchmark được xây dựng dựa trên ba tài liệu kỹ thuật của OMRON và Mitsubishi Electric, gồm tài liệu robot, troubleshooting và truyền thông PLC MELSEC iQ-F FX5.
+
+A: Ba tài liệu này được chia thành tổng cộng 1.067 chunks. Từ đó LLM tạo ra các scenario và 195 cuộc hội thoại tổng hợp mô phỏng trao đổi giữa chuyên gia và kỹ sư trong nhà máy.
+
+A: Bộ benchmark cuối cùng gồm 500 câu hỏi, trong đó 100 câu dùng cho train và 400 câu dùng cho test.
+
+A: Về độ khó, 40% câu hỏi là easy, 40% medium và 20% hard.
+
+A: Về nguồn thông tin cần thiết để trả lời, 40% câu hỏi chỉ cần kinh nghiệm chuyên gia trong hội thoại, 30% chỉ cần manual, và 30% bắt buộc phải kết hợp cả expert knowledge lẫn manual.
+
+A: Cách chia này giúp bọn em đánh giá riêng từng nguồn và cả khả năng tổng hợp hai nguồn.
+
+A: Kết quả hiện tại ở bước extraction là Fact Precision 88,95% và Fact Recall 99,30%.
+
+A: Ở retrieval, Recall@5 đạt 89,12%, còn Context Precision@5 đạt 83,73%.
+
+A: Quan trọng nhất là ở answer, Answer Correctness đạt 88,75%, tương đương 355 trên 400 câu test được trả lời đúng. Answer Score trung bình là 0,9553 trên 1.
+
+B: Benchmark này hiện tại là synthetic hoàn toàn đúng không?
+
+A: Dạ đúng. Đây là synthetic benchmark được dựng từ tài liệu kỹ thuật thật và hội thoại giả lập. Nó chưa thay thế đánh giá pilot trong nhà máy thật, nhưng cho bọn em một baseline có thể đo và so sánh giữa các phiên bản hệ thống.
+
+A: Tiếp theo là timeline triển khai.
+
+A: Giai đoạn một từ ngày 25 tháng 9 đến 12 tháng 10 là giai đoạn đặt nền móng và thử tính khả thi. Bọn em dựng prototype đầu tiên, đo latency, chi phí và độ chính xác, sau đó xác định các AI block cốt lõi.
+
+A: Giai đoạn hai từ 13 tháng 10 đến 26 tháng 10 là xây bản chạy thử end-to-end. Các bước capture dữ liệu, enrich context, extraction, search và Q&A được nối thành một luồng hoàn chỉnh, kèm UI cơ bản và demo scenario đầu tiên.
+
+A: Giai đoạn ba từ 27 tháng 10 đến 10 tháng 11 là hoàn thiện và kiểm định sản phẩm. Ở giai đoạn này bọn em tập trung cải thiện UX, chất lượng AI, thêm expert review và xử lý conflict, đồng thời benchmark toàn bộ flow về latency, scalability và cost.
+
+A: Giai đoạn cuối từ 11 đến 16 tháng 11 là chốt sản phẩm và nộp bài. Bọn em hoàn thiện feature, demo, benchmark cuối, phương án triển khai, chi phí, slide, video và rehearsal.
+
+A: Cuối cùng, em xin tổng kết lại Factory Memo.
+
+A: Factory Memo được đề xuất để biến kinh nghiệm đang nằm rải rác trong các cuộc trao đổi, note và tài liệu hằng ngày thành tri thức có cấu trúc, đúng context và có thể kiểm chứng, nhưng không tạo thêm gánh nặng ghi chép cho chuyên gia.
+
+A: Chuyên gia vẫn làm việc như bình thường. Hệ thống capture voice, document, image và metadata context, sau đó AI tổ chức nội dung thành knowledge card gắn với đúng thiết bị, linh kiện và quy trình.
+
+A: Mỗi knowledge item có source reference, evidence và revision history. Nhờ vậy knowledge không còn nằm ở từng cá nhân mà có thể được tìm lại và kiểm chứng bởi người khác.
+
+A: Prototype hiện tại đã có các thành phần chính gồm knowledge extraction, Knowledge Base, retrieval, Q&A và benchmark end-to-end.
+
+A: Synthetic benchmark hiện có 195 hội thoại và 500 câu hỏi. Trên tập test 400 câu, Answer Correctness đạt 88,75%, cho thấy hướng tiếp cận ban đầu có tính khả thi.
+
+A: Bước tiếp theo của bọn em là pilot Factory Memo trên một line hoặc một nhóm nghiệp vụ cụ thể. Khi đó hệ thống sẽ tiếp tục được điều chỉnh theo workflow và đặc thù vận hành thực tế.
+
+A: Hiệu quả pilot sẽ được đo bằng thời gian xử lý sự cố, mức độ phụ thuộc vào chuyên gia, tỷ lệ knowledge được capture và mức độ knowledge được reuse.
+
+A: KPI mục tiêu hiện tại là giảm khoảng 20 đến 30% thời gian xử lý sự cố, giảm ít nhất 30% số lần escalation tới chuyên gia, giảm khoảng 20% thời gian đào tạo kỹ sư mới và đưa ít nhất 80% các case quan trọng vào Knowledge Base có thể tra cứu lại.
+
+A: Nếu triển khai thành công, mục tiêu cuối cùng của Factory Memo là giúp DENSO biến kinh nghiệm cá nhân của chuyên gia thành tri thức dùng chung của toàn nhà máy, từ đó giảm phụ thuộc vào từng cá nhân, hạn chế lặp lại lỗi cũ và giúp tri thức được kế thừa liên tục.
+
+A: Phần trình bày của em đến đây là hết. Em cảm ơn mọi người đã lắng nghe.

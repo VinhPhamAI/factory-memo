@@ -62,7 +62,7 @@ from backend.knowledge_bases.base import PROJECT_ROOT
 from backend.knowledge_bases.industrial_qa import CATALOG, SPEC
 from backend.knowledge_bases.industrial_qa.runs import overwrite_run, require_official_database
 from backend.knowledge_bases.stores import open_document_store
-from backend.scripts.kb import EXTRACTION_MAX_TOKENS, review_notes
+from backend.scripts.kb import extraction_max_tokens_from_env, review_notes
 from backend.src.agents.rag.chunking import Document
 from backend.src.agents.rag.indexing import index_documents
 from backend.src.services import llm
@@ -310,7 +310,7 @@ async def _ingest(args: argparse.Namespace, run: dict[str, Any], *, extractor=No
         return 0
     extractor = extractor or KnowledgeExtractionService.from_env(
         SPEC.extract_prompt,
-        max_tokens=EXTRACTION_MAX_TOKENS,
+        max_tokens=extraction_max_tokens_from_env(),
         json_schema=True,
         output_model=SPEC.extraction_output_model,
         ontology=SPEC.ontology,
