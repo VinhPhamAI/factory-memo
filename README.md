@@ -5,7 +5,8 @@
 This repository implements text-based knowledge extraction, storage, retrieval
 and evidence-grounded answers, with a synthetic benchmark, a React QA UI and a
 Streamlit trace UI.
-Voice, multimodal capture, location awareness and QR identification are planned
+Voice capture has an optional ASR + diarization service (see below); full voice,
+multimodal capture, location awareness and QR identification are planned
 capabilities.
 
 ## 1. Environment setup
@@ -57,7 +58,7 @@ of Git.
 Start PostgreSQL + pgvector and check readiness:
 
 ```bash
-docker compose -f deployments/docker-compose.yml up -d
+docker compose -f deployments/docker-compose.yml up -d postgres
 docker compose -f deployments/docker-compose.yml exec postgres pg_isready -U voice_agent -d voice_agent
 ```
 
@@ -82,6 +83,19 @@ one containing the same snapshot; unrelated records cause the import to stop.
 To build knowledge from scratch instead, use the fresh benchmark workflow below.
 See the [snapshot guide](backend/knowledge_bases/industrial_qa/SNAPSHOT.md) for
 local imports and other restore options.
+
+### Optional: speech service
+
+`speech-api` (NeMo-Speech.cpp with Nemotron 3.5 streaming ASR and Nemotron 3
+diarization) needs an NVIDIA GPU and the NVIDIA Container Toolkit:
+
+```bash
+bash deployments/speech/setup.sh && bash deployments/speech/up.sh
+bash deployments/speech/smoke_test.sh
+```
+
+See the [speech service guide](deployments/speech/README.md). It transcribes
+audio into speaker turns; it is not yet wired into automatic ingestion.
 
 ## 3. API and QA UI
 

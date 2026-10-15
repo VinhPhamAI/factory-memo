@@ -38,7 +38,7 @@ Install the locked dependencies and start PostgreSQL + pgvector:
 
 ```bash
 uv sync
-docker compose -f deployments/docker-compose.yml up -d
+docker compose -f deployments/docker-compose.yml up -d postgres
 ```
 
 Set these values in `.env`:

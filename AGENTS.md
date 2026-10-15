@@ -180,10 +180,18 @@ Install dependencies and start local services (API and UI in separate terminals)
 
 ```sh
 uv sync
-docker compose -f deployments/docker-compose.yml up -d
+docker compose -f deployments/docker-compose.yml up -d postgres
 uv run uvicorn backend.app:app --host 0.0.0.0 --port 8005
 uv run streamlit run streamlit_app.py
 ```
+
+The optional `speech-api` service (NeMo-Speech.cpp: Nemotron 3.5 streaming ASR +
+Nemotron 3 diarization with server-side endpointing) is built from a pinned
+source checkout; use `deployments/speech/setup.sh`, `up.sh` and `smoke_test.sh`
+(see the [speech guide](deployments/speech/README.md)). The client is
+`backend/src/services/speech_processing.py`.
+It produces speaker-turn transcripts but is not wired into automatic ingestion,
+and its accuracy on Vietnamese factory audio has not been evaluated.
 
 PostgreSQL is exposed on port 5434 by default. Backend clients use step-specific
 `EXTRACTION_*`, `VERIFY_*`, `CONSOLIDATION_*` and `ANSWER_*` settings with
