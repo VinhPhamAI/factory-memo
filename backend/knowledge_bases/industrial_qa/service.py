@@ -40,7 +40,9 @@ def answer_with_citations(written, retrieval):
             record = source.record
             evidence.append({"kind": "knowledge", "knowledge_id": str(record.id),
                 "subject": record.subject, "claim": record.claim, "type": record.type.value,
-                "evidence_id": str(record.evidence_id), "stated_by": record.stated_by})
+                "evidence_id": str(record.evidence_id) if record.evidence_id else None,
+                "stated_by": record.stated_by, "context": record.context,
+                "status": record.status.value})
             markers.append(f"[K:{record.id}]")
         else:
             passage = source.passage
@@ -119,7 +121,9 @@ class IndustrialQaService(KnowledgeAgentService):
                 history = "\n\n".join(f"User: {q}\nAssistant: {a}" for q, a in thread.history)[-6000:]
                 written, _ = await self.pipeline.write(query, retrieved, history=history)
                 answer, citations = answer_with_citations(written, retrieved)
-                thread.history = [*thread.history, (query, written.answer)][-5:]
+                # Labels (K1, D2) only mean something within their own turn.
+                history_answer = re.sub(r"\s*\[[KD]\d+\]", "", written.answer)
+                thread.history = [*thread.history, (query, history_answer)][-5:]
                 yield events.create("answer.delta", {"text": answer})
                 yield events.create("answer.citations", {"citations": [asdict(c) for c in citations]})
                 yield events.create("run.completed", {"duration_ms": int((monotonic()-started)*1000),

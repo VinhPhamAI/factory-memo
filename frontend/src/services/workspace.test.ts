@@ -175,6 +175,14 @@ describe("Evidence-grounded demo answers", () => {
 });
 
 describe("Browser persistence", () => {
+  it("keeps live QA storage free of demo sources and preserves KB ownership", async () => {
+    const store = new WorkspaceStorage(`qa-${crypto.randomUUID()}`, false);
+    expect((await store.load()).sources).toEqual([]);
+    await store.saveThread({ id: "live", kb: "industrial_qa", title: "Question", updatedAt: "2026-10-15", messages: [] });
+    expect((await store.load()).threads[0].kb).toBe("industrial_qa");
+    expect((await store.reset()).sources).toEqual([]);
+    await store.close();
+  });
   it("seeds once, keeps sources, cards and threads across reopen, and resets", async () => {
     const name = `test-${crypto.randomUUID()}`;
     const first = new WorkspaceStorage(name);

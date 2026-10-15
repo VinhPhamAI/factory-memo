@@ -11,6 +11,9 @@ import type { Citation, KnowledgeCard, Source } from "@/types";
 import { Button } from "@/components/ui/button";
 import { SampleBadge, SourceIcon, SourcePreview } from "./source-preview";
 import { CardRows, StatusBadge } from "@/pages/card";
+import { citationTitle } from "@/services/citation-display";
+import { caseCardFor } from "@/services/case-card";
+import { CaseCitationCard } from "./case-citation-card";
 
 function kindLabel(citation: Citation, source?: Source) {
   if (citation.kind === "card") return "Knowledge card";
@@ -28,13 +31,14 @@ export function EvidencePanel({
 }: {
   citations: Citation[];
   sources: Source[];
-  card: KnowledgeCard;
+  card?: KnowledgeCard;
   active?: Citation;
   onSelect(citation: Citation): void;
   onBack(): void;
 }) {
   const selected =
     active && sources.find((source) => source.id === active.sourceId);
+  const caseCard = active && caseCardFor(active);
   return (
     <div className="evidence-panel">
       <div className="evidence-heading">
@@ -47,13 +51,54 @@ export function EvidencePanel({
           <span className="empty-icon">
             <BookOpen size={23} strokeWidth={1.5} />
           </span>
-          <h3>Câu trả lời luôn kèm nguồn</h3>
+          <h3>Nguồn của câu trả lời</h3>
           <p>
-            Knowledge card, manual và bản ghi âm được trích dẫn sẽ hiện ở đây
-            khi bạn đặt câu hỏi.
+            Các nguồn được agent trích dẫn sẽ hiện ở đây khi có câu trả lời.
           </p>
         </div>
-      ) : active?.kind === "card" ? (
+      ) : active?.marker ? (
+        <div className="evidence-detail" data-testid="evidence-api-detail">
+          <Button variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeft size={14} />
+            Tất cả nguồn
+          </Button>
+          <div className="source-detail-heading">
+            <div className="source-kind">
+              <span className="citation-index">{active.number}</span>
+              {caseCard
+                ? "Case card"
+                : active.kind === "knowledge"
+                  ? "Tri thức"
+                  : "Tài liệu"}
+            </div>
+            {!caseCard && <h3>{citationTitle(active)}</h3>}
+          </div>
+          {caseCard ? (
+            <CaseCitationCard
+              key={active.id}
+              citation={active}
+              card={caseCard}
+            />
+          ) : active.excerpt ? (
+            <p className="api-evidence-text">{active.excerpt}</p>
+          ) : (
+            <p className="field-note">
+              Chưa có nội dung xem trước cho tài liệu này.
+            </p>
+          )}
+          {active.statedBy && (
+            <p className="field-note">Người cung cấp: {active.statedBy}</p>
+          )}
+          {active.recordType && !caseCard && (
+            <p className="field-note">Loại: {active.recordType}</p>
+          )}
+          {active.kind === "knowledge" && (
+            <p className="field-note">
+              Được truy xuất không đồng nghĩa với đã được chuyên gia duyệt.
+            </p>
+          )}
+        </div>
+      ) : active?.kind === "card" && card ? (
         <div className="evidence-detail" data-testid="evidence-card-detail">
           <Button variant="ghost" size="sm" onClick={onBack}>
             <ArrowLeft size={14} />
@@ -113,17 +158,48 @@ export function EvidencePanel({
         <div className="evidence-list">
           <p className="evidence-caption">Được trích dẫn trong câu trả lời</p>
           {citations.map((citation) => {
+            if (citation.marker) {
+              const casePreview = caseCardFor(citation);
+              return (
+                <button
+                  key={citation.id}
+                  className={`evidence-card ${casePreview ? "is-card" : ""}`}
+                  data-testid={`source-card-${citation.number}`}
+                  onClick={() => onSelect(citation)}
+                  aria-label={`Mở nguồn ${citation.number}: ${citationTitle(citation)}`}
+                >
+                  <div className="evidence-card-top">
+                    <span className="citation-index">{citation.number}</span>
+                    <BookOpen size={13} />
+                    <span className="source-kind">
+                      {casePreview
+                        ? "Case card"
+                        : citation.kind === "knowledge"
+                          ? "Tri thức"
+                          : "Tài liệu"}
+                    </span>
+                    <ArrowUpRight size={15} />
+                  </div>
+                  <h3>{citationTitle(citation)}</h3>
+                  {(casePreview?.observation || citation.excerpt) && (
+                    <p className="evidence-quote">
+                      {casePreview?.observation || citation.excerpt}
+                    </p>
+                  )}
+                </button>
+              );
+            }
             const isCard = citation.kind === "card";
             const source = sources.find(
               (item) => item.id === citation.sourceId,
             );
-            if (!isCard && !source)
+            if ((isCard && !card) || (!isCard && !source))
               return (
                 <p key={citation.id} className="inline-error">
                   Nguồn được trích dẫn không còn trong trình duyệt.
                 </p>
               );
-            const title = isCard ? `${card.subject} · Case` : source!.title;
+            const title = isCard ? `${card!.subject} · Case` : source!.title;
             return (
               <button
                 key={citation.id}
@@ -143,7 +219,7 @@ export function EvidencePanel({
                     {kindLabel(citation, source)}
                   </span>
                   {isCard ? (
-                    <StatusBadge card={card} />
+                    <StatusBadge card={card!} />
                   ) : (
                     source!.sample && <SampleBadge />
                   )}

@@ -95,12 +95,31 @@ export interface KnowledgeCard {
   approvedAt?: string;
 }
 
+/** Facets already extracted and stored by the backend; no UI-generated claims. */
+export interface CaseCardData {
+  context: string;
+  observation: string;
+  reasoning: string;
+  action: string;
+  outcome: string | null;
+  evidence: { turn_id: string; quote: string }[];
+}
+
 export interface Citation {
   id: string;
   number: number;
   /** Source id, or the knowledge card id when kind is "card". */
   sourceId: string;
-  kind?: "source" | "card";
+  kind?: "source" | "card" | "knowledge" | "document";
+  /** Original backend marker, preserved in storage and shown as a numbered reference. */
+  marker?: string;
+  title?: string;
+  evidenceId?: string;
+  statedBy?: string;
+  recordType?: string;
+  caseCard?: CaseCardData;
+  scope?: Record<string, string>;
+  reviewStatus?: "draft" | "approved" | "deprecated";
   excerpt: string;
   page?: number;
   turnId?: number;
@@ -114,6 +133,7 @@ export interface ChatMessage {
   content: string;
   citations: Citation[];
   status: "streaming" | "complete" | "stopped" | "failed";
+  progress?: string;
 }
 
 export interface ChatThread {
@@ -121,6 +141,13 @@ export interface ChatThread {
   title: string;
   updatedAt: string;
   messages: ChatMessage[];
+  /** Live conversations belong to exactly one KB. Unscoped threads are demos. */
+  kb?: string;
+}
+
+export interface KnowledgeBase {
+  name: string;
+  description: string;
 }
 
 // Keeps mock and future SSE transports behind the same UI boundary.
@@ -128,4 +155,5 @@ export type AnswerEvent =
   | { event: "answer.delta"; text: string }
   | { event: "answer.reset" }
   | { event: "answer.citations"; citations: Citation[] }
+  | { event: "run.status"; text: string }
   | { event: "run.completed" };

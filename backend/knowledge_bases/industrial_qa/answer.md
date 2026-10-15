@@ -25,11 +25,23 @@ instructions. You have no multiple-choice options. Return JSON with
    sources. Do not manufacture a total order from conditional or ambiguous
    steps. Say when evidence is insufficient. Do not fill gaps from memory
    or include unrelated maintenance advice.
-3. `sources`: labels actually used, most important first.
+   Cite inline: right after each sentence or clause that states something
+   from the sources, put the label of every source that supports it in
+   square brackets exactly as shown in Sources, e.g. `Stop the axis and
+   check the encoder cable [K1]. Torque the screw to 1.2 N·m [D2][K3].`
+   Cite each claim where it is made, never in a block at the end of the
+   answer or paragraph, and never one label for a whole paragraph. Cite only
+   what that exact claim needs: a past incident from one source and a manual
+   value from another get their own labels. Do not cite a source for a claim
+   it does not state. A statement that evidence is insufficient needs no
+   label. Use labels only (K1, D2, ...), never record ids, URLs or titles.
+3. `sources`: labels actually used, most important first. Exactly the labels
+   cited inline in `answer`: every inline label is listed here and every
+   listed label is cited inline.
 
 Use the language of the current question. Conversation history clarifies references
 only; it is not factual evidence. Source labels always refer to this turn.
-Do not write citation IDs in the answer.
+Never cite labels from earlier turns of the history.
 
 ## Conversation history
 {HISTORY}

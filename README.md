@@ -3,7 +3,8 @@
 **A solution for capturing expert manufacturing know-how and turning it into traceable, reusable knowledge for engineers and AI.**
 
 This repository implements text-based knowledge extraction, storage, retrieval
-and evidence-grounded answers, with a synthetic benchmark and a Streamlit UI.
+and evidence-grounded answers, with a synthetic benchmark, a React QA UI and a
+Streamlit trace UI.
 Voice, multimodal capture, location awareness and QR identification are planned
 capabilities.
 
@@ -82,7 +83,7 @@ To build knowledge from scratch instead, use the fresh benchmark workflow below.
 See the [snapshot guide](backend/knowledge_bases/industrial_qa/SNAPSHOT.md) for
 local imports and other restore options.
 
-## 3. API and Streamlit UI
+## 3. API and QA UI
 
 **Terminal 1 — API:**
 
@@ -90,7 +91,21 @@ local imports and other restore options.
 uv run uvicorn backend.app:app --host 0.0.0.0 --port 8005
 ```
 
-**Terminal 2 — UI:**
+**Terminal 2 — React QA UI** (Node.js 22.12+, run from `frontend/`):
+
+```bash
+npm ci
+cp .env.example .env.local
+npx vite --host 127.0.0.1 --port 5180 --strictPort
+```
+
+Open **http://127.0.0.1:5180**, select a knowledge base, and ask a question. The
+default `VITE_DATA_MODE=api` connects QA to FastAPI through the Vite `/v1` proxy.
+If you already have `.env.local`, set its data mode to `api` and restart Vite.
+Recording and document uploads are outside this integration. See the
+[frontend guide](frontend/README.md) for configuration, tests and optional mock demo.
+
+**Alternative — Streamlit trace UI:**
 
 ```bash
 uv run streamlit run streamlit_app.py

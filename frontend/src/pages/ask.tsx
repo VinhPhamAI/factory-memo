@@ -10,7 +10,7 @@ import {
   Square,
 } from "lucide-react";
 import Markdown from "react-markdown";
-import type { ChatMessage, ChatThread, Citation } from "@/types";
+import type { ChatMessage, ChatThread, Citation, KnowledgeBase } from "@/types";
 import { useWorkspace } from "@/hooks/workspace";
 import { createKnowledgeClient } from "@/services/chat";
 import { buildCard, currentCard } from "@/services/analysis";
@@ -24,6 +24,13 @@ import {
 } from "@/components/ui/sheet";
 import { EvidencePanel } from "@/components/evidence-panel";
 import { BrandMark } from "@/components/brand";
+import { isLive } from "@/services/config";
+import { listKnowledgeBases } from "@/services/knowledge-api";
+import {
+  answerMarkdown,
+  displayAnswer,
+  numberedCitations,
+} from "@/services/citation-display";
 
 const client = createKnowledgeClient();
 
@@ -54,7 +61,11 @@ function AnswerContent({
           ),
       }}
     >
-      {message.content.replace(/\[(\d+)\]/g, "[$1](#citation-$1)")}
+      {answerMarkdown(
+        message.content,
+        message.citations,
+        message.status === "streaming",
+      )}
     </Markdown>
   );
 }
@@ -64,6 +75,13 @@ export function AskPage() {
   const navigate = useNavigate();
   const workspace = useWorkspace();
   const thread = workspace.threads.find((item) => item.id === threadId);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [preferredKb, setPreferredKb] = useState("");
+  const [kbLoading, setKbLoading] = useState(isLive);
+  const [kbError, setKbError] = useState("");
+  const [kbReload, setKbReload] = useState(0);
+  const kb = thread?.kb ?? preferredKb;
+  const kbAvailable = knowledgeBases.some((item) => item.name === kb);
   const [query, setQuery] = useState("");
   const [sending, setSending] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState("");
@@ -81,13 +99,42 @@ export function AskPage() {
     thread?.messages.filter((message) => message.role === "assistant") ?? [];
   const selected =
     answers.find((answer) => answer.id === selectedMessage) ?? answers.at(-1);
-  const citations = selected?.citations ?? [];
-  const card =
-    currentCard(workspace.cards) ??
-    buildCard(
-      workspace.sources,
-      workspace.sources.map((source) => source.id),
-    );
+  const citations = numberedCitations(
+    selected?.content ?? "",
+    selected?.citations ?? [],
+  );
+  const card = isLive
+    ? undefined
+    : (currentCard(workspace.cards) ??
+      buildCard(
+        workspace.sources,
+        workspace.sources.map((source) => source.id),
+      ));
+
+  useEffect(() => {
+    if (!isLive) return;
+    const abort = new AbortController();
+    listKnowledgeBases(abort.signal)
+      .then((items) => {
+        if (abort.signal.aborted) return;
+        setKnowledgeBases(items);
+        setPreferredKb((current) =>
+          items.some((item) => item.name === current)
+            ? current
+            : (items[0]?.name ?? ""),
+        );
+        setKbError(items.length ? "" : "Backend chưa có knowledge base nào.");
+        setKbLoading(false);
+      })
+      .catch(() => {
+        if (abort.signal.aborted) return;
+        setKbError(
+          "Không tải được knowledge base. Kiểm tra kết nối backend rồi thử lại.",
+        );
+        setKbLoading(false);
+      });
+    return () => abort.abort();
+  }, [kbReload]);
 
   useEffect(() => () => controller.current?.abort(), []);
   useEffect(() => {
@@ -106,7 +153,9 @@ export function AskPage() {
   }, [thread?.messages]);
 
   function openCitation(message: ChatMessage, number: number) {
-    const citation = message.citations.find((item) => item.number === number);
+    const citation = numberedCitations(message.content, message.citations).find(
+      (item) => item.number === number,
+    );
     if (!citation) return;
     setSelectedMessage(message.id);
     setActiveCitation(citation);
@@ -114,7 +163,13 @@ export function AskPage() {
   }
 
   async function send(value = query) {
-    if (!value.trim() || sending) return;
+    if (
+      !value.trim() ||
+      sending ||
+      workspace.loading ||
+      (isLive && (!kbAvailable || kbLoading || !!kbError))
+    )
+      return;
     setQuery("");
     setSending(true);
     setLocalError("");
@@ -141,6 +196,7 @@ export function AskPage() {
       title: thread?.title ?? question,
       updatedAt: new Date().toISOString(),
       messages: [...(thread?.messages ?? []), userMessage, answer],
+      ...(isLive ? { kb } : {}),
     };
     activeThread.current = current.id;
     setSelectedMessage(answer.id);
@@ -162,16 +218,21 @@ export function AskPage() {
         question,
         workspace.sources,
         abort.signal,
+        isLive ? { kb, threadId: current.id } : undefined,
       )) {
         if (event.event === "answer.delta")
           answer = { ...answer, content: answer.content + event.text };
-        if (event.event === "answer.reset") answer = { ...answer, content: "" };
+        if (event.event === "answer.reset")
+          answer = { ...answer, content: "", citations: [] };
+        if (event.event === "run.status")
+          answer = { ...answer, progress: event.text };
         if (event.event === "answer.citations")
           answer = { ...answer, citations: event.citations };
         if (event.event === "run.completed")
           answer = { ...answer, status: "complete" };
         update();
       }
+      abort.signal.throwIfAborted();
     } catch (cause) {
       const stopped = abort.signal.aborted;
       answer = {
@@ -207,7 +268,9 @@ export function AskPage() {
 
   async function copy(message: ChatMessage) {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(
+        displayAnswer(message.content, message.citations),
+      );
       setCopied(message.id);
       setTimeout(() => setCopied(""), 1500);
     } catch {
@@ -228,6 +291,102 @@ export function AskPage() {
   return (
     <div className="ask-layout">
       <main className="chat-area">
+        {isLive && (
+          <div className="qa-toolbar">
+            <label>
+              Knowledge base
+              <select
+                aria-label="Knowledge base"
+                data-testid="kb-select"
+                value={kb}
+                disabled={sending || kbLoading || !knowledgeBases.length}
+                onChange={(event) => {
+                  setPreferredKb(event.target.value);
+                  setLocalError("");
+                  setQuery("");
+                  void navigate("/ask");
+                }}
+              >
+                {!kb && (
+                  <option value="">
+                    {kbLoading ? "Đang tải…" : "Chưa có knowledge base"}
+                  </option>
+                )}
+                {kb && !kbAvailable && (
+                  <option value={kb}>{kb} (không khả dụng)</option>
+                )}
+                {knowledgeBases.map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Cuộc hỏi đáp
+              <select
+                aria-label="Cuộc hỏi đáp"
+                value={threadId ?? ""}
+                disabled={sending || workspace.loading}
+                onChange={(event) => {
+                  setPreferredKb(kb);
+                  setQuery("");
+                  setLocalError("");
+                  void navigate(
+                    event.target.value ? `/ask/${event.target.value}` : "/ask",
+                  );
+                }}
+              >
+                <option value="">Cuộc hỏi đáp mới</option>
+                {workspace.threads
+                  .filter((item) => item.kb === kb)
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.title}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={sending}
+              onClick={() => {
+                setPreferredKb(kb);
+                setQuery("");
+                setLocalError("");
+                void navigate("/ask");
+              }}
+            >
+              Hỏi đáp mới
+            </Button>
+            <p className="qa-description">
+              {knowledgeBases.find((item) => item.name === kb)?.description}
+            </p>
+            {kbError && (
+              <p role="alert" className="inline-error">
+                {kbError}{" "}
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => {
+                    setKbLoading(true);
+                    setKbError("");
+                    setKbReload((value) => value + 1);
+                  }}
+                >
+                  Thử lại
+                </button>
+              </p>
+            )}
+            {!kbLoading && !kbError && kb && !kbAvailable && (
+              <p role="alert" className="inline-error">
+                Knowledge base của cuộc hỏi đáp này không còn khả dụng. Hãy chọn
+                KB khác.
+              </p>
+            )}
+          </div>
+        )}
         <div className="chat-mobile-bar">
           <Button
             variant="outline"
@@ -255,8 +414,16 @@ export function AskPage() {
         >
           {!thread?.messages.length ? (
             <div className="chat-empty">
-              <h2>Máy đang gặp vấn đề gì?</h2>
-              <p>Hỏi bằng tiếng Việt. Câu trả lời luôn kèm nguồn để kiểm tra.</p>
+              <h2>
+                {isLive
+                  ? "Bạn muốn tìm hiểu điều gì?"
+                  : "Máy đang gặp vấn đề gì?"}
+              </h2>
+              <p>
+                {isLive
+                  ? "Chọn knowledge base rồi đặt câu hỏi. Kiểm tra các nguồn được agent trích dẫn."
+                  : "Hỏi bằng tiếng Việt. Câu trả lời luôn kèm nguồn để kiểm tra."}
+              </p>
             </div>
           ) : (
             <div className="message-list">
@@ -279,7 +446,9 @@ export function AskPage() {
                     <div className="assistant-label">
                       <BrandMark small />
                       <span>Factory memo</span>
-                      <span className="scope-pill">Phạm vi: MR-JE-AX167</span>
+                      <span className="scope-pill">
+                        {isLive ? `KB: ${thread?.kb}` : "Phạm vi: MR-JE-AX167"}
+                      </span>
                     </div>
                     <div className="answer-prose">
                       {message.content ? (
@@ -287,25 +456,29 @@ export function AskPage() {
                           message={message}
                           onCitation={(number) => openCitation(message, number)}
                         />
-                      ) : (
+                      ) : message.status === "streaming" ? (
                         <div
                           className="thinking-status"
                           role="status"
                           data-testid="chat-searching"
                         >
                           <Search size={15} />
-                          Đang tìm nguồn liên quan…
+                          {message.progress || "Đang tìm nguồn liên quan…"}
                           <span className="scope-pill">
-                            Phạm vi: MR-JE-AX167
+                            {isLive
+                              ? `KB: ${thread?.kb}`
+                              : "Phạm vi: MR-JE-AX167"}
                           </span>
                         </div>
+                      ) : (
+                        <p>Agent không trả về nội dung.</p>
                       )}
                     </div>
                     {message.status === "streaming" && message.content && (
-                      <span
-                        className="stream-cursor"
-                        aria-label="Đang tạo câu trả lời"
-                      />
+                      <span role="status" className="field-note">
+                        {message.progress || "Đang tạo câu trả lời…"}
+                        <span className="stream-cursor" />
+                      </span>
                     )}
                     {message.status !== "streaming" && (
                       <div className="answer-actions">
@@ -338,6 +511,11 @@ export function AskPage() {
                         </Button>
                         {message.status === "stopped" && (
                           <span className="field-note">Đã dừng</span>
+                        )}
+                        {message.status === "failed" && (
+                          <span className="inline-error">
+                            Trả lời chưa hoàn tất
+                          </span>
                         )}
                       </div>
                     )}
@@ -400,7 +578,9 @@ export function AskPage() {
             <div className="composer-bottom">
               <span>
                 <BookOpen size={13} />
-                Tri thức đã duyệt + manual
+                {isLive
+                  ? `Knowledge base: ${kb || "chưa chọn"}`
+                  : "Tri thức đã duyệt + manual"}
               </span>
               {sending ? (
                 <Button
@@ -418,7 +598,11 @@ export function AskPage() {
                   size="icon"
                   aria-label="Gửi câu hỏi"
                   data-testid="chat-send"
-                  disabled={!query.trim() || workspace.loading}
+                  disabled={
+                    !query.trim() ||
+                    workspace.loading ||
+                    (isLive && (!kbAvailable || kbLoading || !!kbError))
+                  }
                 >
                   <ArrowUp size={19} />
                 </Button>
@@ -426,7 +610,9 @@ export function AskPage() {
             </div>
           </form>
           <p className="composer-note">
-            Mỗi câu trả lời dẫn về đúng nguồn gốc.
+            {isLive
+              ? "Kiểm tra nguồn và phạm vi áp dụng. Kết quả tìm kiếm có thể bao gồm tri thức nháp."
+              : "Mỗi câu trả lời dẫn về đúng nguồn gốc."}
           </p>
         </div>
       </main>

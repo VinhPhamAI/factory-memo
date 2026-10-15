@@ -1,6 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { ChatThread, KnowledgeCard, Source } from "@/types";
 import { seedSources } from "@/fixtures/seed";
+import { apiBaseUrl, isLive } from "./config";
 
 interface WorkspaceDB extends DBSchema {
   sources: { key: string; value: Source };
@@ -12,7 +13,10 @@ interface WorkspaceDB extends DBSchema {
 
 export class WorkspaceStorage {
   private database?: Promise<IDBPDatabase<WorkspaceDB>>;
-  constructor(private readonly name = "voice-agent-workspace-v1") {}
+  constructor(
+    private readonly name = "voice-agent-workspace-v1",
+    private readonly seed = true,
+  ) {}
 
   private open() {
     this.database ??= openDB<WorkspaceDB>(this.name, 1, {
@@ -31,7 +35,7 @@ export class WorkspaceStorage {
     // Check and seed in one transaction, including across simultaneous tabs.
     const tx = db.transaction(["sources", "settings"], "readwrite");
     if (!(await tx.objectStore("settings").get("seeded"))) {
-      for (const source of seedSources())
+      for (const source of this.seed ? seedSources() : [])
         await tx.objectStore("sources").put(source);
       await tx.objectStore("settings").put(true, "seeded");
     }
@@ -78,7 +82,12 @@ export class WorkspaceStorage {
   }
 }
 
-export const storage = new WorkspaceStorage();
+export const storage = isLive
+  ? new WorkspaceStorage(
+      `voice-agent-qa-v1:${apiBaseUrl || "same-origin"}`,
+      false,
+    )
+  : new WorkspaceStorage();
 export function storageError(error: unknown) {
   return error instanceof DOMException && error.name === "QuotaExceededError"
     ? "Bộ nhớ trình duyệt đã đầy. Thay đổi chưa được lưu."

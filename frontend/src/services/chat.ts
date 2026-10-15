@@ -8,12 +8,15 @@ import {
   SOURCE_IDS,
 } from "@/fixtures/ax167";
 import { sleep } from "./timing";
+import { isLive } from "./config";
+import { ApiKnowledgeClient } from "./knowledge-api";
 
 export interface KnowledgeClient {
   streamAnswer(
     query: string,
     sources: Source[],
     signal: AbortSignal,
+    context?: { kb: string; threadId: string },
   ): AsyncIterable<AnswerEvent>;
 }
 
@@ -98,10 +101,5 @@ export class MockKnowledgeClient implements KnowledgeClient {
 }
 
 export function createKnowledgeClient(): KnowledgeClient {
-  const mode = import.meta.env.VITE_DATA_MODE || "mock";
-  if (mode !== "mock")
-    throw new Error(
-      "Frontend hiện chỉ hỗ trợ chế độ mock. Đặt VITE_DATA_MODE=mock.",
-    );
-  return new MockKnowledgeClient();
+  return isLive ? new ApiKnowledgeClient() : new MockKnowledgeClient();
 }

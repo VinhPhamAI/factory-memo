@@ -160,6 +160,18 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(InvalidKnowledgeCitation):
                 answer_with_citations(WrittenAnswer.model_validate_json(written(answer=prose)),result)
 
+    def test_industrial_citations_keep_stored_case_card_for_ui(self):
+        card = {"context": "Line 5", "observation": "Intermittent alarm",
+                "reasoning": "Welder suspected, not confirmed", "action": "Planned checks only.",
+                "outcome": None, "evidence": [{"turn_id": "T03", "quote": "Check first."}]}
+        rec = record(machine_id="MR-JE-AX205", case_card=card, benchmark_run_id="internal")
+        rec.type = KnowledgeType.CASE
+        result = RetrievalResult((Source("K1", record=rec),))
+        _, (citation,) = answer_with_citations(WrittenAnswer.model_validate_json(written(("K1",))), result)
+        self.assertEqual(citation.case_card, card)
+        self.assertEqual(citation.scope, {"machine_id": "MR-JE-AX205"})
+        self.assertEqual(citation.status, "draft")
+
     async def test_service_history_is_scoped_and_deleted_and_trace_hides_claims(self):
         rec = record(machine_id='MR-JE-AX391',machine_model='MR-JE')
         knowledge,documents=stores([rec])
@@ -183,6 +195,19 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('a',service._threads)
         await service.aclose()
         documents.aclose.assert_not_awaited() # caller owns an injected store
+
+    async def test_inline_labels_stay_in_place_and_are_not_kept_in_history(self):
+        rec,chunk=record(),passage()
+        knowledge,documents=stores([rec],[chunk])
+        inline='Check CN2 first [K1]. Isolate power before touching it [D1].'
+        with patch.object(llm,'ainvoke',AsyncMock(side_effect=['{"labels":["K1","D1"]}',written(('K1','D1'),inline)])):
+            service=IndustrialQaService(SPEC,knowledge,documents=documents,
+                pipeline=IndustrialQaPipeline(retriever=build_retriever(ranker=object()),writer=IndustrialAnswerWriter(object())))
+            events=[e async for e in service.start_stream('encoder',thread_id='a').events]
+        text=next(e.data['text'] for e in events if e.event=='answer.delta')
+        self.assertEqual(text,f'Check CN2 first [K:{rec.id}]. Isolate power before touching it [D:{chunk.doc_id}].')
+        self.assertEqual(service._threads['a'].history,
+            [('encoder','Check CN2 first. Isolate power before touching it.')])
 
     async def test_failure_never_emits_or_saves_invalid_answer(self):
         rec=record()
@@ -268,6 +293,26 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
 
 
 class IndustrialHttpTests(unittest.TestCase):
+    def test_case_presentation_metadata_survives_public_sse_without_internal_context(self):
+        card = {"context": "Line 5", "observation": "Alarm", "reasoning": "Suspected welder",
+                "action": "Planned checks", "outcome": None,
+                "evidence": [{"turn_id": "T03", "quote": "Check first."}]}
+        rec = record(machine_id="MR-JE-AX205", case_card=card, benchmark_run_id="private-run")
+        rec.type = KnowledgeType.CASE
+        knowledge, documents = stores([rec])
+        pipeline = SimpleNamespace(retrieve=AsyncMock(return_value=RetrievalResult((Source("K1", record=rec),))),
+            write=AsyncMock(return_value=(WrittenAnswer.model_validate_json(written(("K1",))), None)))
+        service = IndustrialQaService(SPEC, knowledge, documents=documents, pipeline=pipeline)
+        with TestClient(create_app(knowledge_agents={"industrial_qa": service})) as client:
+            response = client.post("/v1/knowledge-agent/industrial_qa/stream",
+                json={"query": "MR-JE-AX205", "thread_id": "case-ui"})
+        events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+        (citation,) = next(event["data"]["citations"] for event in events if event["type"] == "answer.citations")
+        self.assertEqual(citation["case_card"], card)
+        self.assertEqual(citation["status"], "draft")
+        self.assertEqual(citation["scope"], {"machine_id": "MR-JE-AX205"})
+        self.assertNotIn("private-run", response.text)
+
     def test_registered_factory_pipeline_runs_via_public_http_and_closes_stores(self):
         rec,chunk=record(machine_id='MR-JE-AX391',machine_model='MR-JE-70A'),passage()
         knowledge,documents=stores([rec],[chunk])

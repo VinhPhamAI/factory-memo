@@ -121,6 +121,10 @@ class KnowledgeCitation:
     type: str | None
     evidence_id: str | None
     stated_by: str | None
+    # Optional presentation metadata, additive to the v1 citation contract.
+    case_card: dict[str, Any] | None = None
+    scope: dict[str, str] | None = None
+    status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -500,6 +504,40 @@ def _document_citations(answer: str, evidence: list[Evidence]) -> tuple[Document
     )
 
 
+def _citation_metadata(record: Evidence) -> dict[str, Any]:
+    """Expose only case facets/quotes and scope, never arbitrary record context."""
+    if record.get("type") != "case":
+        return {}
+    context = record.get("context")
+    if not isinstance(context, dict):
+        return {}
+    raw = context.get("case_card")
+    card = None
+    fields = ("context", "observation", "reasoning", "action")
+    if (isinstance(raw, dict) and all(isinstance(raw.get(key), str) for key in fields)
+            and (raw.get("outcome") is None or isinstance(raw.get("outcome"), str))):
+        card = {key: raw[key] for key in fields}
+        card["outcome"] = raw.get("outcome")
+        quotes = raw.get("evidence")
+        card["evidence"] = [
+            {"turn_id": item["turn_id"], "quote": item["quote"]}
+            for item in (quotes if isinstance(quotes, list) else [])
+            if isinstance(item, dict) and isinstance(item.get("turn_id"), str)
+            and re.fullmatch(r"T\d{2,}", item["turn_id"])
+            and isinstance(item.get("quote"), str) and item["quote"].strip()
+        ]
+    scope_keys = (
+        "machine_id", "machine_model", "machine_model_specific", "component_id",
+        "component_model", "line_id", "station", "product_model", "configuration",
+        "serial_range", "condition", "failure_mode",
+    )
+    scope = {key: context[key] for key in scope_keys
+             if isinstance(context.get(key), str) and context[key].strip()}
+    status = record.get("status")
+    return {"case_card": card, "scope": scope or None,
+            "status": status if status in ("draft", "approved", "deprecated") else None}
+
+
 def _knowledge_citations(answer: str, evidence: list[Evidence]) -> tuple[KnowledgeCitation, ...]:
     records = {
         str(item["knowledge_id"]).lower(): item
@@ -523,6 +561,7 @@ def _knowledge_citations(answer: str, evidence: list[Evidence]) -> tuple[Knowled
             type=records[knowledge_id].get("type"),
             evidence_id=records[knowledge_id].get("evidence_id"),
             stated_by=records[knowledge_id].get("stated_by"),
+            **_citation_metadata(records[knowledge_id]),
         )
         for knowledge_id in ordered_ids
     )

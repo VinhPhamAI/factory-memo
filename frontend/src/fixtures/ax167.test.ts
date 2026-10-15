@@ -23,7 +23,7 @@ const read = (path: string) =>
   readFileSync(resolve(process.cwd(), "..", path), "utf8");
 const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
 
-const caseJson = JSON.parse(read("case-mr-je-ax167.json"));
+const caseJson = JSON.parse(read("data/case-mr-je-ax167.json"));
 const transcript = read("conversation-mr-je-ax167.txt");
 const script = read("docs/demo-script-mr-je-ax167.md");
 const manual = read("benchmark/public/corpus_chunks.jsonl")

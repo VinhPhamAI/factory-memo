@@ -146,6 +146,32 @@ def _service(store: FakeStore, *responses: AIMessage) -> tuple[KnowledgeAgentSer
 
 
 class CitationTest(unittest.TestCase):
+    def test_case_citation_retains_structured_facets_and_only_allowed_metadata(self) -> None:
+        row = self.evidence()[0]
+        card = {"context": "Line 5", "observation": "Intermittent alarm",
+                "reasoning": "Welder suspected, not confirmed",
+                "action": "Planned checks: inspect routing before ordering parts.",
+                "outcome": "Pending: report back before ordering parts.",
+                "evidence": [{"turn_id": "T03", "quote": "Report back first.", "private": "omit"}],
+                "private": "omit"}
+        row.update(type="case", status="draft", context={"case_card": card,
+                   "machine_id": "MR-JE-AX205", "line_id": "Line 5",
+                   "benchmark_run_id": "private-run", "secret": "omit"})
+        (citation,) = citations_from_evidence(f"Check [K:{RECORD.id}].", [row])
+        self.assertEqual(citation.case_card["outcome"], card["outcome"])
+        self.assertEqual(citation.case_card["action"], card["action"])
+        self.assertEqual(citation.case_card["evidence"], [{"turn_id": "T03", "quote": "Report back first."}])
+        self.assertNotIn("private", citation.case_card)
+        self.assertEqual(citation.scope, {"machine_id": "MR-JE-AX205", "line_id": "Line 5"})
+        self.assertEqual(citation.status, "draft")
+
+    def test_non_case_and_malformed_card_never_expose_arbitrary_context(self) -> None:
+        for kind in ("rule", "case"):
+            row = self.evidence()[0]
+            row.update(type=kind, context={"case_card": {"secret": "omit"}, "secret": "omit"})
+            (citation,) = citations_from_evidence(f"Check [K:{RECORD.id}].", [row])
+            self.assertIsNone(citation.case_card)
+
     def evidence(self) -> list[dict[str, Any]]:
         return [
             {

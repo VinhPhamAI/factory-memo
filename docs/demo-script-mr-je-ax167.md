@@ -6,7 +6,7 @@
 | Người xem | Ban giám khảo hackathon |
 | Ngôn ngữ | Mọi chữ trên màn hình là tiếng Việt. Dữ liệu (hội thoại, tài liệu, nội dung card, trích dẫn) giữ tiếng Anh như dữ liệu gốc. Không có giọng đọc hay phụ đề: chữ trên màn hình chính là kịch bản |
 | Giao diện | Cảnh 1–6 và 8 là cảnh dựng bằng hình động (HTML) trên nền xanh navy công nghệ. Riêng cảnh 7 (hỏi đáp) là đoạn quay màn hình app thật (`frontend/`) |
-| Nguồn case | `case-mr-je-ax167.json`, `conversation-mr-je-ax167.txt`, manual MELSERVO-JE trang 71 |
+| Nguồn case | `data/case-mr-je-ax167.json`, `conversation-mr-je-ax167.txt`, manual MELSERVO-JE trang 71 |
 | Dự án video | `videos/voice-agent-demo/` (HyperFrames). Quay màn hình: `videos/voice-agent-demo/scripts/record-flow.mjs` |
 
 Thông điệp chính: Factory memo biến cuộc trao đổi và tài liệu sửa máy thành knowledge card có bằng chứng, được chuyên gia duyệt, để người sau hỏi và nhận câu trả lời kèm nguồn.
@@ -225,7 +225,7 @@ Cảnh hỏi đáp quay frontend thật đang chạy; các cảnh còn lại là
 |---|---|---|
 | Ghi âm, chuyển giọng nói thành văn bản, nhận diện người nói | Mô phỏng: phát lại transcript thật T01–T14 theo từng lượt | Chưa có. Bản thử Whisper nằm ở nhánh `tronganh`, chưa gộp |
 | AI OCR đọc tài liệu | Mô phỏng: quét trang và hiện văn bản từ Phụ lục A–C | Chưa có. Manual được chia chunk và index, không qua OCR hay LLM |
-| AI trả lời 7 câu hỏi → knowledge card | Mô phỏng với dữ liệu từ `case-mr-je-ax167.json` | Đã có rút trích case/lesson, kiểm chứng trích dẫn, gắn phạm vi (`industrial_qa`). Backend ra 5 trường + scope; "Cách kiểm tra" và "Điều kiện áp dụng" là phần tách khi hiển thị |
+| AI trả lời 7 câu hỏi → knowledge card | Mô phỏng với dữ liệu từ `data/case-mr-je-ax167.json` | Đã có rút trích case/lesson, kiểm chứng trích dẫn, gắn phạm vi (`industrial_qa`). Backend ra 5 trường + scope; "Cách kiểm tra" và "Điều kiện áp dụng" là phần tách khi hiển thị |
 | Kết quả từ buổi follow-up | Dữ liệu [GIẢ LẬP] Phụ lục D | Consolidate tạo case mới và liên kết `supports`/`contradicts`, không điền `outcome` vào case cũ |
 | Chuyên gia duyệt → lưu CSDL | Mô phỏng: lưu trạng thái duyệt trong IndexedDB | Có trạng thái `draft`/`approved` trong `KnowledgeStatus`, chưa có API hay màn hình duyệt. Card nháp vẫn được dùng khi chat |
 | Hỏi đáp có trích nguồn | Mô phỏng: câu trả lời viết sẵn | Đã có API `/v1/knowledge-agent/{kb}/stream`, citation `[K:uuid]`/`[D:doc_id]`. Frontend chưa nối với API |

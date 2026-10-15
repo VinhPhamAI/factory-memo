@@ -1,18 +1,23 @@
-# Factory memo frontend (demo)
+# Factory memo frontend
 
-A Vietnamese-language UI that walks one real maintenance case, MR-JE-AX167 (grinding
-noise on the Z axis, Line 11, machining cell B), through the Factory memo flow:
-record → documents with OCR → AI analysis → expert approval → questions with sources.
-React, TypeScript, Vite, Tailwind CSS and shadcn/ui. No account is needed.
+A Vietnamese-language QA UI for the backend knowledge agent, with a knowledge-base
+selector, streaming answers and a sources panel. React, TypeScript, Vite, Tailwind
+CSS and shadcn/ui. No account is needed.
 
-Everything runs in the browser. The STT, speaker detection, OCR, AI analysis,
-approval and chat answers are simulated with real case data; no backend request or
-microphone access is made. See "Mock provenance" below for what is real data and
-what is sample data.
+`api` is the default mode. Only QA is connected: recording, uploads, extraction and
+approval are outside this integration and are not offered in API mode. The old
+five-step MR-JE-AX167 simulation remains available explicitly in `mock` mode.
 
 ## Run
 
-Run from `frontend/` with Node.js 22.12+:
+Prepare the database, restore/ingest the desired KB and configure model/embedding
+providers using the repository README. Start FastAPI from the repository root:
+
+```sh
+uv run uvicorn backend.app:app --host 127.0.0.1 --port 8005
+```
+
+In another terminal, run from `frontend/` with Node.js 22.12+:
 
 ```sh
 npm ci
@@ -20,16 +25,67 @@ cp .env.example .env.local
 npx vite --host 127.0.0.1 --port 5180 --strictPort
 ```
 
-Open `http://127.0.0.1:5180`. Port 5180 is used because 5173 is often taken by other
-local projects (`npm run dev` still uses 5173). Only `VITE_DATA_MODE=mock` is
-implemented; an unsupported mode fails explicitly. `VITE_*` values are visible in the
-browser; never put API keys in them.
+Open `http://127.0.0.1:5180`. If an existing `.env.local` sets
+`VITE_DATA_MODE=mock`, change it to `api` and restart Vite. `/` opens `/ask` in API
+mode. Port 5180 is used because 5173 is often taken by other local projects
+(`npm run dev` still uses 5173). Unsupported data modes fail explicitly.
+
+Keep `VITE_API_BASE_URL` empty for the same-origin setup. Vite proxies `/v1` to
+`BACKEND_URL` (default `http://127.0.0.1:8005`), avoiding cross-origin requests during
+development. Production hosting must reverse-proxy `/v1` to FastAPI and disable
+SSE response buffering. `VITE_API_BASE_URL` can instead select an API origin that
+already permits the frontend origin via CORS; FastAPI does not enable CORS by
+default. `VITE_*` values are visible in the browser; never put API keys in them.
+Model credentials belong on the backend. Live questions may incur model costs.
+
+## Live QA
+
+- The selector loads `GET /v1/knowledge-agent/knowledge-bases`; it never substitutes
+  fixture KBs when the API is unavailable. Failed/empty lists block sending and
+  offer retry.
+- Questions POST only `query` and `thread_id` to
+  `/v1/knowledge-agent/{kb}/stream`. Model choice and retrieval policy remain on
+  the backend. Browser fixtures and local files are never sent as inference data.
+- Each chat is bound to its KB. Follow-up questions reuse its thread ID. Switching
+  KB opens a new chat, and the history selector shows only that KB's chats.
+- Answers handle deltas, resets, citations, completion, failure and stop. Public
+  tool phases become short progress labels; tool payloads/reasoning are not shown.
+  An interrupted stream is marked incomplete even if partial text was received.
+- Backend `[K:<id>]` and `[D:<id>]` identifiers remain in stored responses; the UI
+  and copied answer show numbered references `[1]`, `[2]` in order of first mention.
+  Numbered references open source cards with titles and available content, matching
+  the demo presentation. During streaming, unresolved citations show `[…]` until
+  validated metadata arrives. Knowledge sources show their returned claim.
+  Case records instead use the demo's card layout with the stored facets
+  (context, observation, diagnostic reasoning, action and outcome), actual scope
+  and review status, and clickable turn chips for supplied evidence quotes.
+  Diagnostic checks and corrective actions remain combined because the current
+  stored schema has one `action` field; the UI never infers seven demo fields or
+  a confirmed repair from a planned action. Missing outcomes stay unreported.
+  `case_card`, allowlisted `scope`, and `status` are optional additive citation
+  fields. Old saved case claims can use the exact ordered
+  `Observation/Reasoning/Action/Outcome` format as a display fallback; unrecognized
+  text stays intact. Old chats cannot gain missing turn quotes/review metadata
+  without asking the backend again.
+  Document citations currently contain only ID/title; the panel says a preview is
+  unavailable rather than inventing content or pages.
+  Retrieval does not imply expert approval, and searchable records may be drafts.
+- QA chats persist in a separate IndexedDB database per configured API base URL,
+  without demo sources/cards. Backend conversation memory is per KB and is lost on
+  API restart; restoring browser history does not restore server memory.
+
+## Optional mock demo
+
+Set `VITE_DATA_MODE=mock` in `.env.local` and restart Vite. Everything in this mode
+runs in the browser: STT, speaker detection, OCR, analysis, approval and chat are
+simulated with repository case data. No backend request or microphone access is
+made. See "Mock provenance" below for dataset and sample distinctions.
 
 Add `?speed=N` to any URL to divide every simulated delay by N (default 1, natural
 pace for screen recording; the e2e suite uses 40). The value is kept in
 `sessionStorage` while navigating.
 
-## The 5 steps
+### The 5 mock steps
 
 | Step | Route | What it shows |
 |---|---|---|
@@ -48,16 +104,15 @@ Sources, cards, file blobs and chats are saved in IndexedDB database
 `src/fixtures/ax167-sources.json` and `src/fixtures/ax167.ts` are built from repository
 files; `src/fixtures/ax167.test.ts` re-reads them and checks every quote verbatim:
 
-- Real data: `conversation-mr-je-ax167.txt` (transcript T01–T14), `case-mr-je-ax167.json`
+- Real data: `conversation-mr-je-ax167.txt` (transcript T01–T14), `data/case-mr-je-ax167.json`
   (the backend's extracted case card and its 8 evidence quotes), and manual chunk
   `melservo_je_p0071_c02` from `benchmark/public/corpus_chunks.jsonl`.
 - Sample data, marked "Mẫu" in the UI: the fault report, meeting minutes, expert note
   and follow-up recording from `docs/demo-script-mr-je-ax167.md` (Phụ lục A–D).
 
 `src/services/` separates storage, capture, OCR, analysis and chat transport from
-components. `KnowledgeClient` streams `answer.delta`, `answer.reset`,
-`answer.citations` and `run.completed`, which keeps a boundary for a future adapter
-to the backend SSE API (`/v1/knowledge-agent/{kb}/stream`).
+components. `KnowledgeClient` is implemented by both the fixture client and the
+live POST SSE client (`/v1/knowledge-agent/{kb}/stream`).
 
 ## Verify
 
@@ -67,10 +122,15 @@ npm run lint
 npm run test
 npm run build
 npm run test:e2e
+# Regression coverage for the optional five-step mock demo:
+PLAYWRIGHT_DATA_MODE=mock npm run test:e2e
 ```
 
 `playwright.config.ts` uses port 5180 (override with `PLAYWRIGHT_PORT`) and starts the
-dev server if needed. To use an already cached Chromium build instead of downloading
+dev server if needed. Use a free `PLAYWRIGHT_PORT` when another Vite mode is already
+running. API-mode browser tests intercept HTTP with contract fixtures; unit tests
+cover fragmented UTF-8/SSE and error handling. These tests do not validate live
+model answer quality. To use an already cached Chromium build instead of downloading
 one, set `PLAYWRIGHT_EXECUTABLE_PATH` to its executable, or use
 `PLAYWRIGHT_CHANNEL=chrome` with an installed Google Chrome.
 

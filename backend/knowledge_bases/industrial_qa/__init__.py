@@ -1,8 +1,4 @@
-"""Industrial maintenance QA over expert conversations and equipment manuals.
-
-The official H1/H3 pipeline is shared by the API, CLI and benchmark adapters.
-Manual chunks and extracted knowledge live in the same KB database; isolated
-benchmark runs can explicitly select another database without changing policy.
+"""
 """
 
 from pathlib import Path
