@@ -12,23 +12,21 @@ describe("Expert source review", () => {
       .mockRejectedValueOnce(new DOMException("full", "QuotaExceededError"))
       .mockResolvedValueOnce(undefined);
     render(<ReviewSource source={source} onSave={save} onCancel={vi.fn()} />);
-    expect(screen.getByRole("heading", { name: "Source" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Machine" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Summary" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Nguồn" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Máy" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Tóm tắt" })).toBeVisible();
     fireEvent.change(
-      screen.getByLabelText(
-        "Key observations, actions and what happened next.",
-      ),
+      screen.getByLabelText("Quan sát chính, hành động và kết quả."),
       { target: { value: "The repair is still pending." } },
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save draft" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("not saved");
+    await userEvent.click(screen.getByRole("button", { name: "Lưu nháp" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("chưa được lưu");
     expect(
       screen.getByRole("textbox", {
-        name: "Key observations, actions and what happened next.",
+        name: "Quan sát chính, hành động và kết quả.",
       }),
     ).toHaveValue("The repair is still pending.");
-    await userEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    await userEvent.click(screen.getByRole("button", { name: "Lưu nháp" }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     expect(save.mock.calls[1][0].summary).toBe("The repair is still pending.");
     expect(save.mock.calls[1][0].status).toBe("draft");
@@ -42,13 +40,13 @@ describe("Expert source review", () => {
         onCancel={vi.fn()}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save draft" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Add a title");
+    await userEvent.click(screen.getByRole("button", { name: "Lưu nháp" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("tiêu đề");
     expect(save).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("Title"), {
+    fireEvent.change(screen.getByLabelText("Tiêu đề"), {
       target: { value: "New capture" },
     });
-    await userEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    await userEvent.click(screen.getByRole("button", { name: "Lưu nháp" }));
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "New capture",

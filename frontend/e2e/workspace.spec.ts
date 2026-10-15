@@ -1,309 +1,257 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
-test("chat streams, sources open the exact turn, and history survives reload", async ({
-  page,
-}) => {
-  await page.goto("/ask");
-  await page.getByRole("button", { name: /Communication dropout/ }).click();
-  await expect(
-    page.getByRole("button", { name: "Stop response" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText(
-      "The conversation records troubleshooting advice, not a confirmed repair outcome.",
-    ),
-  ).toBeVisible();
-  await page.screenshot({
-    path: "test-results/answer-desktop.png",
-    fullPage: true,
-  });
-  await page.locator(".inline-citation").first().click();
-  await expect(
-    page.locator(".desktop-evidence [data-testid=turn-6]"),
-  ).toHaveClass(/is-cited/);
-  await expect(
-    page.locator(".desktop-evidence [data-testid=turn-6]"),
-  ).toContainText("RJ45");
-  await page.reload();
-  await expect(
-    page.getByText(
-      "The conversation records troubleshooting advice, not a confirmed repair outcome.",
-    ),
-  ).toBeVisible();
-  await expect(page.locator(".history-item")).toHaveCount(1);
-});
+// Simulated delays are divided by this factor so the suite runs quickly.
+const FAST = "?speed=40";
+const QUESTION =
+  "MR-JE-AX167 trục Z kêu rít khi chạy nhanh, không có alarm. Do vòng bi hay do máy? Cần làm gì?";
 
-test("upload reviews the actual text, machines and optional summary before local save", async ({
-  page,
-}) => {
-  await page.goto("/sources");
-  await expect(page.locator(".source-row")).toHaveCount(6);
-  await page.screenshot({
-    path: "test-results/sources-desktop.png",
-    fullPage: true,
-  });
-  await page
-    .getByRole("button", { name: "Upload document", exact: true })
-    .click();
-  await page.getByLabel("Choose document file").setInputFiles({
-    name: "shift-note.txt",
-    mimeType: "text/plain",
-    buffer: Buffer.from(
-      "Observed an intermittent signal. Outcome still pending.",
-    ),
-  });
-  await page.getByRole("button", { name: "Review document" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Machine", exact: true }),
-  ).toBeVisible();
-  await page.screenshot({
-    path: "test-results/upload-review-desktop.png",
-    fullPage: true,
-  });
-  await expect(
-    page.getByText("Observed an intermittent signal. Outcome still pending.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("textbox", { name: /Key observations/ }),
-  ).toHaveValue("");
-  await page.getByRole("button", { name: "Not identified" }).click();
-  await page.getByRole("menuitemcheckbox", { name: /MELSEC FX5/ }).click();
-  await page.keyboard.press("Escape");
-  await page
-    .getByRole("textbox", { name: /Key observations/ })
-    .fill("Pending diagnosis. No confirmed repair yet.");
-  await page.getByRole("button", { name: "Save draft" }).click();
-  await expect(page.getByRole("button", { name: /shift-note/ })).toBeVisible();
-  await page.reload();
-  await page.getByRole("button", { name: /shift-note/ }).click();
-  await expect(
-    page.getByRole("textbox", { name: /Key observations/ }),
-  ).toHaveValue("Pending diagnosis. No confirmed repair yet.");
-  await expect(
-    page.getByRole("button", { name: "MELSEC FX5", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Observed an intermittent signal. Outcome still pending.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-});
-
-test("recording pauses, blocks accidental departure, and saves edited context", async ({
-  page,
-}) => {
-  await page.goto("/sources");
-  await page
-    .locator(".capture-actions")
-    .getByRole("button", { name: "Start recording" })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Record know-how" }),
-  ).toBeVisible();
-  await expect(page.locator("[data-testid=turn-6]")).toBeVisible({
-    timeout: 20000,
-  });
-  await page.screenshot({
-    path: "test-results/recording-desktop.png",
-    fullPage: true,
-  });
-  await page.getByRole("button", { name: "Pause", exact: true }).click();
-  const turns = await page.locator(".transcript-turn").count();
-  await page.waitForTimeout(1200);
-  expect(await page.locator(".transcript-turn").count()).toBe(turns);
-  await page.getByRole("button", { name: "Resume", exact: true }).click();
-  await page
-    .locator(".record-header")
-    .getByRole("button", { name: "Sources", exact: true })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Your recording is still open" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Finish and review" }).click();
-  await page.screenshot({
-    path: "test-results/recording-review-desktop.png",
-    fullPage: true,
-  });
-  await page
-    .getByRole("textbox", { name: "Title" })
-    .fill("Inspection cell handover");
-  await page.getByRole("button", { name: "Remove FX5-PLC471" }).click();
-  await page
-    .getByRole("textbox", { name: /Key observations/ })
-    .fill("Check the damaged clip before replacing hardware.");
-  await page.getByRole("button", { name: "Save draft" }).click();
-  await expect(
-    page.getByRole("button", { name: /Inspection cell handover/ }),
-  ).toBeVisible();
-  await page.getByRole("link", { name: "Ask", exact: true }).click();
-  await page.getByRole("button", { name: /Communication dropout/ }).click();
-  await expect(
-    page.getByRole("button", {
-      name: /Open source 1: Inspection cell handover/,
-    }),
-  ).toBeVisible();
-});
-
-test("stop, unknown questions and reset do not leave a stuck or misleading answer", async ({
-  page,
-}) => {
-  await page.goto("/ask");
-  await page.getByRole("button", { name: /Servo troubleshooting/ }).click();
-  await page.getByRole("button", { name: "Stop response" }).click();
-  await expect(page.getByText("Stopped", { exact: true })).toBeVisible();
-  await page
-    .getByRole("textbox", { name: "Ask a question" })
-    .fill("What is the battery specification for i4L?");
-  await page.getByRole("button", { name: "Send question" }).click();
-  await expect(
-    page.getByText(/I couldn't find enough information/),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Workspace options" }).click();
-  await page.getByRole("menuitem", { name: "Reset demo" }).click();
-  await page.getByRole("button", { name: "Reset demo", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "What are you working on?" }),
-  ).toBeVisible();
-  await expect(page.locator(".history-item")).toHaveCount(0);
-});
-
-test("responsive layouts, keyboard interaction and source sheet", async ({
-  page,
-}) => {
+function trackErrors(page: Page) {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  for (const width of [1440, 1024, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto("/ask");
-    await expect(
-      page.getByRole("heading", { name: "What are you working on?" }),
-    ).toBeVisible();
-    expect(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= window.innerWidth,
-      ),
-    ).toBe(true);
-    await page.screenshot({
-      path: `test-results/ask-${width}.png`,
-      fullPage: true,
-    });
-  }
-  await page
-    .getByRole("textbox", { name: "Ask a question" })
-    .fill("What should I review when relocating the i4L front panel?");
-  await page.getByRole("textbox", { name: "Ask a question" }).press("Enter");
-  await expect(
-    page.getByText(
-      "The conversation does not report a completed modification or final acceptance.",
-    ),
-  ).toBeVisible();
-  await page.locator(".inline-citation").last().click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(
-    page.getByRole("dialog").getByText("Page 108–109"),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog")).toBeHidden();
-  await page.getByRole("button", { name: "Open navigation" }).click();
-  await page
-    .getByRole("dialog")
-    .getByRole("link", { name: "Sources", exact: true })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Sources", exact: true }),
-  ).toBeVisible();
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBe(true);
-  await page.screenshot({
-    path: "test-results/sources-390.png",
-    fullPage: true,
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
   });
+  return errors;
+}
+const noPageOverflow = (page: Page) =>
+  page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  );
+
+test("5-step flow: record → OCR → analyse → approve → ask with sources", async ({
+  page,
+}) => {
+  const errors = trackErrors(page);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+
+  // 1. Ghi âm
+  await page.goto(`/record${FAST}`);
+  await expect(page).toHaveTitle(/Factory memo/);
+  await expect(page.locator(".desktop-sidebar .brand")).toContainText(
+    "Factory memo",
+  );
+  await expect(page.getByTestId("record-state")).toHaveAttribute(
+    "data-state",
+    "idle",
+  );
+  await page.getByTestId("record-start").click();
+  await expect(page.getByTestId("speaker-junior_01")).toHaveAttribute(
+    "data-active",
+    "true",
+  );
+  await expect(page.getByTestId("record-turn-count")).toHaveText("14/14 lượt", {
+    timeout: 30000,
+  });
+  await expect(page.getByTestId("turn-T10")).toContainText(
+    "Always disconnect the motor power cable and wait 15 minutes",
+  );
+  await page.getByTestId("record-finish").click();
+  await expect(page.getByTestId("record-done")).toContainText("Nháp");
+  expect(await noPageOverflow(page)).toBe(true);
+
+  // 2. Tài liệu + OCR
+  await page.getByTestId("nav-sources").click();
+  await page.getByTestId("upload-open").click();
+  await page.getByTestId("sample-doc-doc-fr-l11-1007").click();
+  await expect(page.getByTestId("ocr-step-upload")).toHaveAttribute(
+    "data-state",
+    "done",
+  );
+  await expect(page.getByTestId("ocr-done")).toBeVisible();
+  await expect(page.getByTestId("ocr-text")).toContainText(
+    "Grinding noise during Z-axis rapid traverse",
+  );
+  await expect(page.getByTestId("ocr-field").first()).toBeVisible();
+  await expect(page.getByTestId("ocr-view")).toContainText("MR-JE-AX167");
+  await page.getByTestId("ocr-save").click();
+  await expect(page.getByTestId("save-notice")).toContainText(
+    "Phiếu báo lỗi FR-L11-1007",
+  );
+  await expect(page.locator(".source-row")).toHaveCount(6);
+  await expect(page.getByTestId("source-row-doc-fr-l11-1007")).toContainText(
+    "AI OCR",
+  );
+
+  // 3. Phân tích AI
+  await page.getByTestId("sources-analyze-cta").click();
+  await page.getByTestId("analyze-start").click();
+  await expect(page.getByTestId("analysis-question-1")).not.toHaveAttribute(
+    "data-state",
+    "pending",
+  );
+  await expect(page.getByTestId("analysis-done")).toBeVisible({
+    timeout: 45000,
+  });
+  for (let n = 1; n <= 7; n++)
+    await expect(page.getByTestId(`analysis-question-${n}`)).toHaveAttribute(
+      "data-state",
+      "done",
+    );
+  await expect(page.getByTestId("analysis-verify")).toContainText(
+    "8/8 khớp bản ghi gốc",
+  );
+  await expect(page.getByTestId("analysis-scope")).toContainText("wear");
+
+  // 4. Knowledge card
+  await page.getByTestId("analyze-submit-review").click();
+  await expect(page.getByTestId("card-status")).toHaveAttribute(
+    "data-status",
+    "draft",
+  );
+  await expect(page.getByTestId("card-ruled-out")).toContainText(
+    "Encoder failure",
+  );
+  await page.getByTestId("card-ref-check-T10").click();
+  await expect(page.getByTestId("ref-quote")).toContainText(
+    "Always disconnect the motor power cable",
+  );
+  await expect(page.getByTestId("review-approve")).toBeDisabled();
+  for (const n of [1, 2, 3])
+    await page.getByTestId(`review-check-${n}`).check();
+  await page.getByTestId("review-approve").click();
+  // "card-saving" lasts ~50 ms at this speed, so only the end state is asserted.
+  await expect(page.getByTestId("card-approved")).toContainText(
+    "knowledge_items · id f2bd9589",
+  );
+  await expect(page.getByTestId("card-status")).toHaveText("Đã duyệt");
+  await page.reload();
+  await expect(page.getByTestId("card-status")).toHaveAttribute(
+    "data-status",
+    "approved",
+  );
+
+  // 5. Hỏi đáp: only the chat feature, no step shell around it.
+  await page.getByTestId("card-ask-cta").click();
+  const chatRoot = page.getByTestId("chat-focus-root");
+  await expect(chatRoot).toContainText("Factory memo");
+  await expect(page.locator(".desktop-sidebar")).toHaveCount(0);
+  await expect(page.locator(".workspace-breadcrumb")).toHaveCount(0);
+  await expect(page.getByText("Mô phỏng")).toHaveCount(0);
+  await expect(page.getByText("BƯỚC 5 · HỎI ĐÁP")).toHaveCount(0);
+  await page.getByTestId("chat-input").fill(QUESTION);
+  await page.getByTestId("chat-send").click();
+  // The "searching" state lasts ~30 ms at this speed; the answer keeps the scope chip.
+  await expect(page.getByTestId("chat-answer")).toContainText(
+    "Phạm vi: MR-JE-AX167",
+  );
+  await expect(page.getByTestId("chat-answer")).toHaveAttribute(
+    "data-status",
+    "complete",
+    { timeout: 20000 },
+  );
+  await expect(page.getByTestId("chat-answer")).toContainText(
+    "xưởng Binh Duong",
+  );
+  await expect(page.getByTestId("source-card-1")).toContainText("Đã duyệt");
+  await expect(page.getByTestId("source-card-2")).toContainText("Trang 71");
+  await expect(page.getByTestId("source-card-3")).toContainText("Mẫu");
+  await page
+    .locator("[data-testid=citation-marker][data-citation='1']")
+    .first()
+    .click();
+  const detail = page.getByTestId("evidence-card-detail");
+  await expect(detail.getByTestId("card-row-check")).toHaveAttribute(
+    "data-highlighted",
+    "true",
+  );
+  await detail.getByTestId("card-ref-check-T10").click();
+  await detail.getByTestId("ref-open-source").click();
+  await expect(
+    page.locator("[data-testid=evidence-source-detail] [data-testid=turn-T10]"),
+  ).toHaveAttribute("data-cited", "true");
+  expect(await noPageOverflow(page)).toBe(true);
   expect(errors).toEqual([]);
 });
 
-test("source filters, upload validation and DOCX fallback remain usable with a keyboard", async ({
+test("recording pauses and blocks accidental departure", async ({ page }) => {
+  await page.goto("/record?speed=10");
+  await page.getByTestId("record-start").click();
+  await expect(page.getByTestId("turn-T02")).toBeVisible({ timeout: 20000 });
+  await page.getByTestId("record-pause").click();
+  await expect(page.getByTestId("record-state")).toHaveAttribute(
+    "data-state",
+    "paused",
+  );
+  const text = await page.getByTestId("live-transcript").innerText();
+  await page.waitForTimeout(800);
+  expect(await page.getByTestId("live-transcript").innerText()).toBe(text);
+  await page.getByTestId("nav-ask").click();
+  await expect(
+    page.getByRole("heading", { name: "Bản ghi âm vẫn đang mở" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Kết thúc và lưu" }).click();
+  await expect(page.getByTestId("record-done")).toBeVisible();
+});
+
+test("a real text upload goes through OCR and keeps the detected machine", async ({
   page,
 }) => {
-  await page.goto("/sources");
-  await page.getByRole("combobox", { name: "Filter source type" }).click();
-  await page.getByRole("option", { name: "Documents", exact: true }).click();
-  await expect(page.locator(".source-row")).toHaveCount(3);
-  await page.getByRole("textbox", { name: "Search sources" }).fill("MELSEC");
-  await expect(page.locator(".source-row")).toHaveCount(1);
-  await page
-    .getByRole("button", { name: "Upload document", exact: true })
-    .click();
-  await page.getByLabel("Choose document file").setInputFiles({
+  await page.goto(`/sources${FAST}`);
+  await page.getByTestId("upload-open").click();
+  await page.getByTestId("upload-file-input").setInputFiles({
+    name: "shift-note.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from(
+      "Shift note 2026-10-11\nMR-JE-AX167 Line 11 quiet today.",
+    ),
+  });
+  await page.getByTestId("upload-start").click();
+  await expect(page.getByTestId("ocr-done")).toBeVisible();
+  await page.getByTestId("ocr-save").click();
+  await expect(page.locator(".source-row")).toHaveCount(7);
+  await page.reload();
+  await expect(
+    page.locator(".source-row", { hasText: "shift-note" }),
+  ).toContainText("MR-JE-AX167");
+  await page.getByTestId("upload-open").click();
+  await page.getByTestId("upload-file-input").setInputFiles({
     name: "notes.exe",
     mimeType: "application/octet-stream",
     buffer: Buffer.from("not a document"),
   });
-  await expect(page.getByRole("alert")).toHaveText(/Choose a PDF/);
-  await expect(
-    page.getByRole("button", { name: "Review document" }),
-  ).toBeDisabled();
-  for (let i = 0; i < 8; i++) await page.keyboard.press("Tab");
-  expect(
-    await page
-      .getByRole("dialog")
-      .evaluate((dialog) => dialog.contains(document.activeElement)),
-  ).toBe(true);
-  await page.getByLabel("Choose document file").setInputFiles({
-    name: "handover.docx",
-    mimeType:
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    buffer: Buffer.from("opaque file bytes for the preview fallback test"),
-  });
-  await page.getByRole("button", { name: "Review document" }).click();
-  await expect(
-    page.getByText("Preview is not available for this file."),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "Download original" }),
-  ).toHaveAttribute("href", /^blob:/);
-  await expect(
-    page.getByRole("textbox", { name: /Key observations/ }),
-  ).toHaveValue("");
+  await expect(page.getByRole("alert")).toHaveText(/PDF, TXT, MD/);
+  await expect(page.getByTestId("upload-start")).toBeDisabled();
 });
 
-test("mobile recording and review do not overflow or require microphone permission", async ({
+test("chat works before approval, abstains off-topic, and reset clears it", async ({
   page,
 }) => {
-  const permissions: string[] = [];
-  await page.exposeFunction("requestedMicrophone", () =>
-    permissions.push("microphone"),
+  await page.goto(`/ask${FAST}`);
+  await page.getByTestId("chat-input").fill(QUESTION);
+  await page.getByTestId("chat-send").click();
+  await expect(page.getByTestId("chat-answer")).toHaveAttribute(
+    "data-status",
+    "complete",
   );
-  await page.addInitScript(() => {
-    navigator.mediaDevices.getUserMedia = () => {
-      void (
-        window as unknown as { requestedMicrophone(): Promise<void> }
-      ).requestedMicrophone();
-      return Promise.reject(new Error("Unexpected microphone request"));
-    };
-  });
-  await page.setViewportSize({ width: 390, height: 900 });
-  await page.goto("/record");
-  await page
-    .getByRole("button", { name: "Start recording", exact: true })
-    .click();
-  await expect(page.locator("[data-testid=turn-1]")).toBeVisible();
-  await page.getByRole("button", { name: "Finish recording" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Review your capture" }),
-  ).toBeVisible();
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBe(true);
-  await page.screenshot({
-    path: "test-results/recording-review-390.png",
-    fullPage: true,
-  });
-  expect(permissions).toEqual([]);
+  await expect(page.getByTestId("source-card-1")).toContainText("Nháp");
+  await page.getByTestId("chat-input").fill("Giá một con servo bao nhiêu?");
+  await page.getByTestId("chat-send").click();
+  await expect(page.getByText(/Chưa tìm thấy đủ thông tin/)).toBeVisible();
+  // The chat screen has no step shell; reset lives in the shell of steps 1–4.
+  await page.goto("/sources");
+  await expect(page.locator(".history-item")).toHaveCount(1);
+  await page.getByTestId("workspace-options").click();
+  await page.getByTestId("reset-demo").click();
+  await page.getByTestId("reset-confirm").click();
+  await expect(page.getByTestId("record-start")).toBeVisible();
+  await expect(page.locator(".history-item")).toHaveCount(0);
+});
+
+test("every step fits 1920, 1440 and 390 px without page overflow", async ({
+  page,
+}) => {
+  const errors = trackErrors(page);
+  for (const [width, height] of [
+    [1920, 1080],
+    [1440, 900],
+    [390, 900],
+  ]) {
+    await page.setViewportSize({ width, height });
+    for (const route of ["/record", "/sources", "/analyze", "/card", "/ask"]) {
+      await page.goto(route);
+      await expect(page.locator(".workspace-outlet > *")).toBeVisible();
+      expect(await noPageOverflow(page), `${route} at ${width}px`).toBe(true);
+    }
+  }
+  expect(errors).toEqual([]);
 });

@@ -1,14 +1,17 @@
 import { useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
   Check,
   ChevronRight,
+  FileText,
   FileUp,
   LoaderCircle,
   Mic,
   Plus,
+  ScanText,
   Search,
+  Sparkles,
   Upload,
   X,
 } from "lucide-react";
@@ -19,8 +22,8 @@ import {
   prepareUpload,
   validateFile,
 } from "@/services/capture";
+import { sampleDocuments, sampleToSource } from "@/fixtures/seed";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -37,12 +40,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ReviewSource } from "@/components/review-source";
-import { SourceIcon } from "@/components/source-preview";
+import { OcrView } from "@/components/ocr-view";
+import { SampleBadge, SourceIcon } from "@/components/source-preview";
 
 export function SourcesPage() {
   const workspace = useWorkspace();
   const navigate = useNavigate();
   const { sourceId } = useParams();
+  const [params] = useSearchParams();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -51,7 +56,9 @@ export function SourcesPage() {
   const [preparing, setPreparing] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [uploadDraft, setUploadDraft] = useState<Source>();
+  const [ocrSource, setOcrSource] = useState<Source>();
   const [notice, setNotice] = useState("");
+  const [highlight, setHighlight] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const existing =
     sourceId && workspace.sources.find((source) => source.id === sourceId);
@@ -65,11 +72,16 @@ export function SourcesPage() {
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
+  function openUpload() {
+    setUploadOpen(true);
+    setUploadError("");
+    setSelectedFile(undefined);
+  }
   function pick(files: FileList | null) {
     setUploadError("");
     if (!files?.length) return;
     if (files.length !== 1) {
-      setUploadError("Choose one document at a time.");
+      setUploadError("Mỗi lần chỉ chọn một tài liệu.");
       return;
     }
     const error = validateFile(files[0]);
@@ -86,14 +98,14 @@ export function SourcesPage() {
     setUploadError("");
     try {
       const source = await prepareUpload(selectedFile);
-      setUploadDraft(source);
+      // Text files go through the simulated OCR view; others are reviewed as-is.
+      if (source.text) setOcrSource(source);
+      else setUploadDraft(source);
       setUploadOpen(false);
       setSelectedFile(undefined);
     } catch (error) {
       setUploadError(
-        error instanceof Error
-          ? error.message
-          : "Could not preview this document.",
+        error instanceof Error ? error.message : "Không đọc được tài liệu này.",
       );
     } finally {
       setPreparing(false);
@@ -102,20 +114,37 @@ export function SourcesPage() {
   async function save(source: Source) {
     await workspace.saveSource(source);
     setUploadDraft(undefined);
+    setOcrSource(undefined);
+    setHighlight(source.id);
     setNotice(
       existing
-        ? "Changes saved to this browser."
-        : "Draft saved to this browser.",
+        ? "Đã lưu thay đổi trong trình duyệt này."
+        : `Đã lưu “${source.title}” vào thư viện.`,
     );
     void navigate("/sources");
   }
 
-  if (uploadDraft || existing)
+  if (ocrSource)
+    return (
+      <OcrView
+        key={ocrSource.id}
+        source={ocrSource}
+        onSave={save}
+        onCancel={() => setOcrSource(undefined)}
+      />
+    );
+  if (uploadDraft || existing) {
+    const turn = params.get("turn");
+    const turnId = turn
+      ? (existing as Source | undefined)?.turns?.find((t) => t.code === turn)
+          ?.id
+      : undefined;
     return (
       <ReviewSource
         key={uploadDraft?.id ?? (existing && existing.id)}
         source={uploadDraft ?? (existing as Source)}
         editing={!!existing}
+        citation={turnId ? { turnId, excerpt: "" } : undefined}
         onSave={save}
         onCancel={() => {
           setUploadDraft(undefined);
@@ -123,14 +152,13 @@ export function SourcesPage() {
         }}
       />
     );
+  }
   if (sourceId && !workspace.loading)
     return (
       <div className="route-empty">
-        <h1>Source not found</h1>
-        <p>This source is no longer available in this browser.</p>
-        <Button onClick={() => void navigate("/sources")}>
-          Back to sources
-        </Button>
+        <h1>Không tìm thấy nguồn</h1>
+        <p>Nguồn này không còn trong trình duyệt.</p>
+        <Button onClick={() => void navigate("/sources")}>Về thư viện</Button>
       </div>
     );
 
@@ -138,40 +166,46 @@ export function SourcesPage() {
     <main className="sources-page">
       <header className="sources-header">
         <div>
-          <span className="eyebrow">YOUR KNOWLEDGE LIBRARY</span>
-          <h1>Sources</h1>
-          <p>Keep your documents and experience in one place.</p>
+          <span className="eyebrow">BƯỚC 2 · INPUT TÀI LIỆU</span>
+          <h1>Thư viện tài liệu</h1>
+          <p>
+            Bản ghi âm, phiếu báo lỗi, biên bản họp, ghi chú chuyên gia và
+            manual của hãng cho MR-JE-AX167.
+          </p>
         </div>
         <div className="capture-actions">
           <Button
             variant="outline"
-            onClick={() => {
-              setUploadOpen(true);
-              setUploadError("");
-              setSelectedFile(undefined);
-            }}
+            data-testid="upload-open"
+            onClick={openUpload}
           >
             <Upload size={16} />
-            Upload document
+            Tải tài liệu lên
           </Button>
           <Button
+            variant="outline"
             onClick={() =>
               void navigate("/record", { state: { autoStart: true } })
             }
           >
             <Mic size={16} />
-            Start recording
+            Ghi âm
+          </Button>
+          <Button
+            data-testid="sources-analyze-cta"
+            onClick={() => void navigate("/analyze")}
+          >
+            <Sparkles size={16} />
+            Phân tích bằng AI
+            <ArrowRight size={16} />
           </Button>
         </div>
       </header>
       {notice && (
-        <div className="save-notice" role="status">
-          <Check size={15} />
+        <div className="save-notice" role="status" data-testid="save-notice">
+          <Check size={16} />
           {notice}
-          <button
-            aria-label="Dismiss save notification"
-            onClick={() => setNotice("")}
-          >
+          <button aria-label="Đóng thông báo" onClick={() => setNotice("")}>
             <X size={14} />
           </button>
         </div>
@@ -180,38 +214,37 @@ export function SourcesPage() {
         <div className="search-field">
           <Search size={16} />
           <Input
-            aria-label="Search sources"
-            placeholder="Search sources or machines"
+            aria-label="Tìm nguồn"
+            placeholder="Tìm theo tên nguồn hoặc máy"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
         <Select value={filter} onValueChange={setFilter}>
-          <SelectTrigger aria-label="Filter source type">
+          <SelectTrigger aria-label="Lọc loại nguồn">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All sources</SelectItem>
-            <SelectItem value="document">Documents</SelectItem>
-            <SelectItem value="conversation">Conversations</SelectItem>
+            <SelectItem value="all">Tất cả nguồn</SelectItem>
+            <SelectItem value="document">Tài liệu</SelectItem>
+            <SelectItem value="conversation">Ghi âm</SelectItem>
           </SelectContent>
         </Select>
-        <span className="library-count">
-          {visible.length} {visible.length === 1 ? "source" : "sources"}
-        </span>
+        <span className="library-count">{visible.length} nguồn</span>
       </div>
       <div className="source-table">
         <div className="source-table-head">
-          <span>Source</span>
-          <span>Machine</span>
-          <span>Status</span>
-          <span>Added</span>
+          <span>Nguồn</span>
+          <span>Máy</span>
+          <span>Trạng thái</span>
+          <span>Ngày thêm</span>
           <span />
         </div>
         {visible.map((source) => (
           <button
             key={source.id}
-            className="source-row"
+            className={`source-row ${highlight === source.id ? "just-saved" : ""}`}
+            data-testid={`source-row-${source.id}`}
             onClick={() => void navigate(`/sources/${source.id}`)}
           >
             <span className="source-name">
@@ -219,40 +252,46 @@ export function SourcesPage() {
                 <SourceIcon kind={source.kind} />
               </span>
               <span>
-                <strong>{source.title}</strong>
+                <strong>
+                  {source.title}
+                  {source.sample && <SampleBadge />}
+                </strong>
                 <span>
-                  {source.kind === "document" ? "Document" : "Conversation"} ·{" "}
-                  {source.origin === "upload"
-                    ? "Saved locally · Not indexed"
-                    : source.origin === "recording"
-                      ? "Saved demo recording"
-                      : "Demo source"}
+                  {source.kind === "document"
+                    ? (source.docType ?? "Tài liệu")
+                    : `Ghi âm · ${source.turns?.length ?? 0} lượt nói`}
+                  {source.ocr && (
+                    <span className="ocr-tag">
+                      <ScanText size={12} />
+                      AI OCR
+                    </span>
+                  )}
+                  {source.origin === "upload" && " · Lưu trong trình duyệt"}
+                  {source.origin === "recording" && " · Vừa ghi âm"}
                 </span>
                 <span className="source-mobile-machine">
                   {source.machines.map((machine) => machine.name).join(", ") ||
-                    "Not identified"}
+                    "Chưa xác định"}
                 </span>
               </span>
             </span>
             <span className="source-machine">
               {source.machines.length
                 ? source.machines.map((m) => m.name).join(", ")
-                : "Not identified"}
+                : "Chưa xác định"}
             </span>
             <span>
-              <Badge
-                variant="secondary"
-                className={
-                  source.status === "draft" ? "badge-draft" : "badge-reference"
-                }
+              <span
+                className={`status-badge ${source.status === "draft" ? "draft" : "reference"}`}
               >
-                {source.status === "draft" ? "Draft" : "Reference"}
-              </Badge>
+                {source.status === "draft" ? "Nháp" : "Tham chiếu"}
+              </span>
             </span>
             <span className="source-date">
-              {new Intl.DateTimeFormat("en", {
-                month: "short",
+              {new Intl.DateTimeFormat("vi", {
                 day: "numeric",
+                month: "numeric",
+                year: "numeric",
               }).format(new Date(source.createdAt))}
             </span>
             <ChevronRight size={16} />
@@ -262,12 +301,12 @@ export function SourcesPage() {
           <div className="library-empty">
             <Search size={26} />
             <h2>
-              {workspace.loading ? "Loading sources…" : "No sources found"}
+              {workspace.loading ? "Đang tải nguồn…" : "Không tìm thấy nguồn"}
             </h2>
             <p>
               {search || filter !== "all"
-                ? "Try another search or source type."
-                : "Upload a document or record your first session."}
+                ? "Thử từ khóa hoặc loại nguồn khác."
+                : "Tải tài liệu lên hoặc ghi âm buổi trao đổi đầu tiên."}
             </p>
             {(search || filter !== "all") && (
               <Button
@@ -277,7 +316,7 @@ export function SourcesPage() {
                   setFilter("all");
                 }}
               >
-                Clear filters
+                Xóa bộ lọc
               </Button>
             )}
           </div>
@@ -286,7 +325,8 @@ export function SourcesPage() {
       <div className="library-footer">
         <span className="small-dot" />
         <span>
-          Stored in this browser. Demo sources are synthetic benchmark examples.
+          Lưu trong trình duyệt này. Nhãn “Mẫu” đánh dấu tài liệu viết cho demo;
+          manual tr. 71 là trang thật của hãng.
         </span>
       </div>
 
@@ -298,9 +338,10 @@ export function SourcesPage() {
       >
         <DialogContent className="upload-dialog">
           <DialogHeader>
-            <DialogTitle>Upload a document</DialogTitle>
+            <DialogTitle>Tải tài liệu lên</DialogTitle>
             <DialogDescription>
-              Add an expert note, manual or troubleshooting document.
+              Ảnh chụp phiếu, biên bản, ghi chú chuyên gia hoặc manual. AI OCR
+              sẽ đọc và trích xuất văn bản.
             </DialogDescription>
           </DialogHeader>
           <input
@@ -308,7 +349,8 @@ export function SourcesPage() {
             className="sr-only"
             type="file"
             accept={ACCEPTED_FILES}
-            aria-label="Choose document file"
+            aria-label="Chọn tệp tài liệu"
+            data-testid="upload-file-input"
             onChange={(e) => pick(e.target.files)}
           />
           <div
@@ -328,20 +370,44 @@ export function SourcesPage() {
               <FileUp size={28} strokeWidth={1.5} />
             </span>
             <h3>
-              {selectedFile ? selectedFile.name : "Drop your document here"}
+              {selectedFile ? selectedFile.name : "Kéo thả tài liệu vào đây"}
             </h3>
             <p>
               {selectedFile
-                ? `${(selectedFile.size / 1024).toFixed(1)} KB · Ready to review`
-                : "PDF, TXT, MD or DOCX · Up to 20 MB"}
+                ? `${(selectedFile.size / 1024).toFixed(1)} KB · Sẵn sàng`
+                : "PDF, TXT, MD hoặc DOCX · Tối đa 20 MB"}
             </p>
             <Button
               variant="outline"
               onClick={() => fileInput.current?.click()}
             >
               <Plus size={15} />
-              {selectedFile ? "Choose another file" : "Choose a file"}
+              {selectedFile ? "Chọn tệp khác" : "Chọn tệp"}
             </Button>
+          </div>
+          <div className="sample-picker">
+            <span className="sample-picker-label">Dùng tài liệu mẫu</span>
+            {sampleDocuments.map((doc) => (
+              <button
+                key={doc.id}
+                type="button"
+                className="sample-option"
+                data-testid={`sample-doc-${doc.id}`}
+                disabled={preparing}
+                onClick={() => {
+                  setUploadOpen(false);
+                  setOcrSource(sampleToSource(doc, new Date().toISOString()));
+                }}
+              >
+                <FileText size={16} />
+                <span>
+                  <strong>{doc.title}</strong>
+                  <span>{doc.docType}</span>
+                </span>
+                {doc.sample && <SampleBadge />}
+                <ArrowRight size={15} />
+              </button>
+            ))}
           </div>
           {uploadError && (
             <p role="alert" className="inline-error">
@@ -354,18 +420,19 @@ export function SourcesPage() {
               disabled={preparing}
               onClick={() => setUploadOpen(false)}
             >
-              Cancel
+              Hủy
             </Button>
             <Button
+              data-testid="upload-start"
               disabled={!selectedFile || preparing}
               onClick={() => void prepare()}
             >
               {preparing ? (
                 <LoaderCircle size={15} className="animate-spin" />
               ) : (
-                <ArrowRight size={15} />
+                <ScanText size={15} />
               )}
-              Review document
+              Đọc tài liệu
             </Button>
           </div>
         </DialogContent>

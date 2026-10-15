@@ -1,72 +1,63 @@
-# Know-how workspace
+# Factory memo frontend (demo)
 
-A local UI for capturing expert experience and asking questions with inspectable
-sources. React, TypeScript, Vite, Tailwind CSS and shadcn/ui. No account is needed.
+A Vietnamese-language UI that walks one real maintenance case, MR-JE-AX167 (grinding
+noise on the Z axis, Line 11, machining cell B), through the Factory memo flow:
+record → documents with OCR → AI analysis → expert approval → questions with sources.
+React, TypeScript, Vite, Tailwind CSS and shadcn/ui. No account is needed.
+
+Everything runs in the browser. The STT, speaker detection, OCR, AI analysis,
+approval and chat answers are simulated with real case data; no backend request or
+microphone access is made. See "Mock provenance" below for what is real data and
+what is sample data.
 
 ## Run
 
-Run from `frontend/` with Node.js 22.12+ (or another current Vite-compatible version):
+Run from `frontend/` with Node.js 22.12+:
 
 ```sh
 npm ci
 cp .env.example .env.local
-npm run dev
+npx vite --host 127.0.0.1 --port 5180 --strictPort
 ```
 
-Open `http://127.0.0.1:5173`. This prototype uses these public frontend settings:
+Open `http://127.0.0.1:5180`. Port 5180 is used because 5173 is often taken by other
+local projects (`npm run dev` still uses 5173). Only `VITE_DATA_MODE=mock` is
+implemented; an unsupported mode fails explicitly. `VITE_*` values are visible in the
+browser; never put API keys in them.
 
-```dotenv
-VITE_DATA_MODE=mock
-VITE_API_BASE_URL=
-```
+Add `?speed=N` to any URL to divide every simulated delay by N (default 1, natural
+pace for screen recording; the e2e suite uses 40). The value is kept in
+`sessionStorage` while navigating.
 
-Only mock mode is implemented. An unsupported mode fails explicitly rather than
-silently falling back to mock answers. No backend requests or microphone access
-are made. `VITE_*` values are visible in the browser; never put API keys in them.
+## The 5 steps
 
-## Use
+| Step | Route | What it shows |
+|---|---|---|
+| 1 Ghi âm | `/record` (`/` redirects here) | Two speaker panels (Kỹ thuật viên junior_01, Chuyên gia expert_01); the active one glows with a waveform. Transcript turns T01–T14 stream in word by word. Finishing saves the recording as a draft ("Nháp"). |
+| 2 Tài liệu | `/sources`, `/sources/:id?turn=T10` | Library of 6 sources. Upload a file or pick a sample document; the OCR view scans a paper-like page and fills the extracted text line by line, then shows detected fields and saves the document. |
+| 3 Phân tích AI | `/analyze` | The AI answers 7 fixed questions (Hiện tượng, Bối cảnh, Nguyên nhân, Cách kiểm tra, Đối sách, Kết quả, Áp dụng khi nào), each with verbatim evidence quotes, then checks 8/8 quotes against the saved recording and assembles the knowledge card. |
+| 4 Knowledge card | `/card`, `/card?row=check` | 7-row card with source chips and a "Đã loại trừ" box. The expert ticks a checklist and approves; the card is marked "Đã duyệt" and stored. |
+| 5 Hỏi đáp | `/ask`, `/ask/:threadId` | Chat-only screen: no step sidebar or breadcrumb, only a slim "Factory memo" bar, the conversation, the composer and the Sources panel (`data-testid="chat-focus-root"`). A Vietnamese question gets a Vietnamese answer with [1][2][3]. Sources: the card (approved or draft), manual page 71, the follow-up recording. Clicking [1] opens the card; clicking T10 opens the transcript at T10. |
 
-- **Ask:** start from a sample question, inspect inline citations and the right
-  Sources panel, or start a new chat. On small screens, citations open a source
-  sheet. Questions outside the supported fixture topics receive a missing-evidence
-  response. Mock responses are authored from the public sources, not model output.
-- **Sources:** search by source title or machine and filter documents/conversations.
-  Open a source to edit its title, machine scope and summary.
-- **Upload document:** select one PDF/TXT/MD/DOCX up to 20 MB, review Source,
-  Machine and Summary, then Save draft. PDFs use the browser's native viewer;
-  TXT/MD are shown as plain text; DOCX offers metadata and download only.
-  The summary starts empty and no extraction or indexing is claimed. Uploaded
-  documents are not added to the mock answer corpus.
-- **Start recording:** enter Record know-how to stream a sample multi-speaker
-  transcript. Pause/resume, finish, review the machine and editable summary, then
-  save a draft. Leaving an open session prompts you to keep, finish or discard it.
-  Finishing a partial transcript leaves its summary empty rather than inventing
-  facts from turns not captured. Saved sample recordings with the required turn
-  can be cited by subsequent FX5 questions.
+Sources, cards, file blobs and chats are saved in IndexedDB database
+`voice-agent-workspace-v1` on this browser/origin. The workspace menu offers
+"Reset demo" (in the sidebar of steps 1–4); it is disabled while a recording is open.
 
-Sources, file blobs and chats are saved in IndexedDB on this browser/origin.
-Changing port/hostname creates a different local workspace; this is not shared or
-cloud storage. The workspace menu offers Reset demo with confirmation. Reset is
-unavailable while a recording is open. Drafts are never labelled expert-approved.
+## Mock provenance
 
-## Mock provenance and service boundary
+`src/fixtures/ax167-sources.json` and `src/fixtures/ax167.ts` are built from repository
+files; `src/fixtures/ax167.test.ts` re-reads them and checks every quote verbatim:
 
-`src/fixtures/public-fixtures.json` contains three unchanged conversations and three
-manual chunks copied from `benchmark/public/` only:
+- Real data: `conversation-mr-je-ax167.txt` (transcript T01–T14), `case-mr-je-ax167.json`
+  (the backend's extracted case card and its 8 evidence quotes), and manual chunk
+  `melservo_je_p0071_c02` from `benchmark/public/corpus_chunks.jsonl`.
+- Sample data, marked "Mẫu" in the UI: the fault report, meeting minutes, expert note
+  and follow-up recording from `docs/demo-script-mr-je-ax167.md` (Phụ lục A–D).
 
-- FX5: `conv_068_1`, `fx5_comm_p0805_c02`.
-- Servo: `conv_057_1`, `melservo_je_p0069_c01`.
-- i4L: `conv_065_1`, `omron_i4l_p0108_c01`.
-
-Speaker display names and transcript offsets are presentation-only demo metadata.
-Conversation know-how is synthetic. Source IDs, text, turns and PDF page references
-are retained. No generation/gold files or answer labels are imported.
-
-`src/services/` separates storage, capture and chat transport from components.
-`KnowledgeClient` streams `answer.delta`, `answer.reset`, `answer.citations` and
-`run.completed`, keeping a boundary for a future backend SSE adapter. Citation
-locators refer to actual source IDs plus page/turn; the frontend does not invent
-upload, recording or evidence-preview API endpoints.
+`src/services/` separates storage, capture, OCR, analysis and chat transport from
+components. `KnowledgeClient` streams `answer.delta`, `answer.reset`,
+`answer.citations` and `run.completed`, which keeps a boundary for a future adapter
+to the backend SSE API (`/v1/knowledge-agent/{kb}/stream`).
 
 ## Verify
 
@@ -75,22 +66,14 @@ npm run typecheck
 npm run lint
 npm run test
 npm run build
-npx playwright install chromium
 npm run test:e2e
 ```
 
-If Google Chrome is already installed, use it without downloading Chromium:
+`playwright.config.ts` uses port 5180 (override with `PLAYWRIGHT_PORT`) and starts the
+dev server if needed. To use an already cached Chromium build instead of downloading
+one, set `PLAYWRIGHT_EXECUTABLE_PATH` to its executable, or use
+`PLAYWRIGHT_CHANNEL=chrome` with an installed Google Chrome.
 
-```sh
-PLAYWRIGHT_CHANNEL=chrome npm run test:e2e
-```
-
-Playwright starts a localhost dev server if needed. Tests cover chat streaming,
-citations, local upload persistence, recording transitions and leaving protection,
-missing evidence, reset during a response, and 1440/1024/390px layouts. Screenshots
-and failure traces are saved under ignored `test-results/`.
-
-Production output is `dist/`; run `npm run preview` to inspect it. Hosting needs an
-SPA fallback to `index.html` for `/ask`, `/sources` and `/record` routes. There is no
-SSR, live transcription, speaker diarization, extraction, human approval workflow
-or verified backend integration in this version.
+The demo video records this UI with
+`node videos/voice-agent-demo/scripts/record-flow.mjs` (run from the repository root
+while the dev server is on 5180).

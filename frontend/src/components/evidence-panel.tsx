@@ -1,18 +1,34 @@
-import { ArrowLeft, ArrowUpRight, BookOpen, Cpu } from "lucide-react";
-import type { Citation, Source } from "@/types";
+import { Link } from "react-router-dom";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  BadgeCheck,
+  BookOpen,
+  Cpu,
+  ExternalLink,
+} from "lucide-react";
+import type { Citation, KnowledgeCard, Source } from "@/types";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { SourceIcon, SourcePreview } from "./source-preview";
+import { SampleBadge, SourceIcon, SourcePreview } from "./source-preview";
+import { CardRows, StatusBadge } from "@/pages/card";
+
+function kindLabel(citation: Citation, source?: Source) {
+  if (citation.kind === "card") return "Knowledge card";
+  if (source?.kind === "conversation") return "Ghi âm";
+  return source?.sample ? (source.docType ?? "Tài liệu") : "Manual hãng";
+}
 
 export function EvidencePanel({
   citations,
   sources,
+  card,
   active,
   onSelect,
   onBack,
 }: {
   citations: Citation[];
   sources: Source[];
+  card: KnowledgeCard;
   active?: Citation;
   onSelect(citation: Citation): void;
   onBack(): void;
@@ -22,8 +38,8 @@ export function EvidencePanel({
   return (
     <div className="evidence-panel">
       <div className="evidence-heading">
-        <BookOpen size={17} />
-        <h2>Sources</h2>
+        <BookOpen size={18} />
+        <h2>Nguồn</h2>
         <span className="count-pill">{citations.length}</span>
       </div>
       {!citations.length ? (
@@ -31,96 +47,123 @@ export function EvidencePanel({
           <span className="empty-icon">
             <BookOpen size={23} strokeWidth={1.5} />
           </span>
-          <h3>See where answers come from</h3>
+          <h3>Câu trả lời luôn kèm nguồn</h3>
           <p>
-            Documents and expert conversations will appear here when you ask a
-            question.
+            Knowledge card, manual và bản ghi âm được trích dẫn sẽ hiện ở đây
+            khi bạn đặt câu hỏi.
           </p>
-          <div className="evidence-key">
-            <span>
-              <SourceIcon kind="document" size={14} />
-              Documents
-            </span>
-            <span>
-              <SourceIcon kind="conversation" size={14} />
-              Conversations
-            </span>
-          </div>
         </div>
-      ) : selected && active ? (
-        <div className="evidence-detail">
+      ) : active?.kind === "card" ? (
+        <div className="evidence-detail" data-testid="evidence-card-detail">
           <Button variant="ghost" size="sm" onClick={onBack}>
             <ArrowLeft size={14} />
-            All sources
+            Tất cả nguồn
+          </Button>
+          <div className="source-detail-heading">
+            <div className="source-kind">
+              <BadgeCheck size={14} />
+              Knowledge card
+              <StatusBadge card={card} />
+            </div>
+            <h3>{card.subject} · Case</h3>
+            <Link className="link-button" to={`/card?row=${active.cardRow}`}>
+              Mở knowledge card
+              <ExternalLink size={13} />
+            </Link>
+          </div>
+          <CardRows
+            card={card}
+            compact
+            highlight={active.cardRow}
+            onOpenRef={(ref) =>
+              onSelect({
+                id: `${ref.sourceId}:${ref.label}`,
+                number: active.number,
+                sourceId: ref.sourceId,
+                turnId: ref.turnId,
+                turnCode: ref.turnId ? ref.label : undefined,
+                page: ref.page,
+                excerpt: ref.quote,
+              })
+            }
+          />
+        </div>
+      ) : selected && active ? (
+        <div className="evidence-detail" data-testid="evidence-source-detail">
+          <Button variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeft size={14} />
+            Tất cả nguồn
           </Button>
           <div className="source-detail-heading">
             <div className="source-kind">
               <SourceIcon kind={selected.kind} size={14} />
-              {selected.kind === "document" ? "Document" : "Conversation"}
-              <Badge variant="secondary">
-                {selected.status === "draft" ? "Draft" : "Reference"}
-              </Badge>
+              {kindLabel(active, selected)}
+              {selected.sample && <SampleBadge />}
             </div>
             <h3>{selected.title}</h3>
             <div className="source-scope">
               <Cpu size={13} />
               {selected.machines.map((m) => m.name).join(", ") ||
-                "Machine not identified"}
+                "Chưa xác định máy"}
             </div>
           </div>
           <SourcePreview source={selected} citation={active} compact />
         </div>
       ) : (
         <div className="evidence-list">
-          <p className="evidence-caption">Referenced in this answer</p>
+          <p className="evidence-caption">Được trích dẫn trong câu trả lời</p>
           {citations.map((citation) => {
+            const isCard = citation.kind === "card";
             const source = sources.find(
               (item) => item.id === citation.sourceId,
             );
-            if (!source)
+            if (!isCard && !source)
               return (
                 <p key={citation.id} className="inline-error">
-                  The cited source is unavailable.
+                  Nguồn được trích dẫn không còn trong trình duyệt.
                 </p>
               );
+            const title = isCard ? `${card.subject} · Case` : source!.title;
             return (
               <button
                 key={citation.id}
-                className="evidence-card"
+                className={`evidence-card ${isCard ? "is-card" : ""}`}
+                data-testid={`source-card-${citation.number}`}
                 onClick={() => onSelect(citation)}
-                aria-label={`Open source ${citation.number}: ${source.title}`}
+                aria-label={`Mở nguồn ${citation.number}: ${title}`}
               >
                 <div className="evidence-card-top">
                   <span className="citation-index">{citation.number}</span>
                   <span className="source-kind">
-                    <SourceIcon kind={source.kind} size={13} />
-                    {source.kind === "document" ? "Document" : "Conversation"}
+                    {isCard ? (
+                      <BadgeCheck size={13} />
+                    ) : (
+                      <SourceIcon kind={source!.kind} size={13} />
+                    )}
+                    {kindLabel(citation, source)}
                   </span>
+                  {isCard ? (
+                    <StatusBadge card={card} />
+                  ) : (
+                    source!.sample && <SampleBadge />
+                  )}
                   <ArrowUpRight size={15} />
                 </div>
-                <h3>{source.title}</h3>
-                <div className="source-scope">
-                  <Cpu size={12} />
-                  {source.machines.map((m) => m.name).join(", ")}
-                </div>
-                <p className="evidence-quote">
-                  “
-                  {citation.excerpt.length > 215
-                    ? `${citation.excerpt.slice(0, 215).trim()}…`
-                    : citation.excerpt}
-                  ”
-                </p>
+                <h3>{title}</h3>
+                {source?.section && (
+                  <div className="source-scope">{source.section}</div>
+                )}
+                <p className="evidence-quote">“{citation.excerpt}”</p>
                 <div className="evidence-card-bottom">
                   <span>
                     {citation.page
-                      ? `Page ${citation.page}`
-                      : `Turn ${citation.turnId}`}
+                      ? `Trang ${citation.page}`
+                      : `Lượt ${citation.turnCode}`}
                   </span>
                   <span>
-                    {source.status === "draft" ? "Draft" : "Reference"} ·{" "}
-                    {source.origin === "recording"
-                      ? "Saved recording"
-                      : "Demo source"}
+                    {isCard
+                      ? "Dòng: Cách kiểm tra"
+                      : source!.machines.map((m) => m.name).join(", ")}
                   </span>
                 </div>
               </button>

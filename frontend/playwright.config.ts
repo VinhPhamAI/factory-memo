@@ -1,22 +1,29 @@
 import { defineConfig } from "@playwright/test";
 
+// Port 5173 is often taken by other local projects; the demo uses 5180.
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 5180);
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
   workers: 1,
-  timeout: 45000,
-  expect: { timeout: 10000 },
+  timeout: 90000,
+  expect: { timeout: 15000 },
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: `http://127.0.0.1:${port}`,
     headless: true,
     channel: process.env.PLAYWRIGHT_CHANNEL,
+    // Lets a cached Chromium build be used without downloading a new one.
+    launchOptions: process.env.PLAYWRIGHT_EXECUTABLE_PATH
+      ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH }
+      : {},
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "npm run dev -- --port 5173",
-    url: "http://127.0.0.1:5173",
+    command: `npx vite --host 127.0.0.1 --port ${port} --strictPort`,
+    url: `http://127.0.0.1:${port}`,
     reuseExistingServer: !process.env.CI,
     timeout: 60000,
   },

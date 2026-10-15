@@ -16,13 +16,21 @@ export function SourceIcon({
   return kind === "document" ? <FileText size={size} /> : <Mic size={size} />;
 }
 
+export function SampleBadge() {
+  return (
+    <span className="sample-badge" title="Tài liệu mẫu viết cho demo">
+      Mẫu
+    </span>
+  );
+}
+
 export function SourcePreview({
   source,
   citation,
   compact = false,
 }: {
   source: Source;
-  citation?: Citation;
+  citation?: Pick<Citation, "turnId" | "page" | "excerpt">;
   compact?: boolean;
 }) {
   const [url, setUrl] = useState("");
@@ -36,38 +44,46 @@ export function SourcePreview({
   useEffect(() => {
     if (citation?.turnId)
       highlighted.current?.scrollIntoView({
-        block: "nearest",
+        block: "center",
         behavior: "instant",
       });
   }, [citation?.turnId, source.id]);
 
   if (source.kind === "conversation")
     return (
-      <div className={`transcript ${compact ? "transcript-compact" : ""}`}>
-        {source.turns?.map((turn) => (
-          <div
-            key={turn.id}
-            ref={turn.id === citation?.turnId ? highlighted : undefined}
-            className={`transcript-turn ${turn.id === citation?.turnId ? "is-cited" : ""}`}
-            data-testid={`turn-${turn.id}`}
-          >
+      <div
+        className={`transcript ${compact ? "transcript-compact" : ""}`}
+        data-testid="source-transcript"
+      >
+        {source.turns?.map((turn) => {
+          const cited = turn.id === citation?.turnId;
+          return (
             <div
-              className={`speaker-avatar ${turn.speaker === "Expert" ? "expert" : ""}`}
+              key={turn.id}
+              ref={cited ? highlighted : undefined}
+              className={`transcript-turn ${cited ? "is-cited" : ""}`}
+              data-testid={`turn-${turn.code}`}
+              data-cited={cited || undefined}
             >
-              {turn.speaker.charAt(0)}
-            </div>
-            <div className="turn-content">
-              <div className="turn-meta">
-                <strong>{turn.speaker}</strong>
-                <span>{timestamp(turn.seconds)}</span>
+              <div
+                className={`speaker-avatar ${turn.speakerId === "expert_01" ? "expert" : ""}`}
+              >
+                {turn.speakerId === "expert_01" ? "CG" : "KT"}
               </div>
-              <p>{turn.text}</p>
+              <div className="turn-content">
+                <div className="turn-meta">
+                  <span className="turn-chip">{turn.code}</span>
+                  <strong>
+                    {turn.speaker} · {turn.speakerId}
+                  </strong>
+                  <span>{timestamp(turn.seconds)}</span>
+                </div>
+                <p>{turn.text}</p>
+              </div>
             </div>
-          </div>
-        ))}
-        {!source.turns?.length && (
-          <p className="muted">No transcript captured yet.</p>
-        )}
+          );
+        })}
+        {!source.turns?.length && <p className="muted">Chưa có transcript.</p>}
       </div>
     );
 
@@ -76,24 +92,27 @@ export function SourcePreview({
       <div className="document-meta">
         <span>
           <FileText size={14} />
-          {source.fileName ?? "Manual excerpt"}
+          {source.fileName ?? "Trích đoạn tài liệu"}
+          {source.sample && <SampleBadge />}
         </span>
         {source.pageStart && (
           <span>
-            Page {source.pageStart}
-            {source.pageEnd !== source.pageStart && `–${source.pageEnd}`}
+            Trang {source.pageStart}
+            {source.pageEnd &&
+              source.pageEnd !== source.pageStart &&
+              `–${source.pageEnd}`}
           </span>
         )}
       </div>
       {source.fileType === "application/pdf" && url ? (
         <iframe
-          title={`Preview of ${source.fileName}`}
+          title={`Xem trước ${source.fileName}`}
           className="pdf-preview"
           src={`${url}${citation?.page ? `#page=${citation.page}` : ""}`}
         />
       ) : source.text ? (
         <div className={`document-text ${citation ? "is-cited" : ""}`}>
-          {source.origin === "demo" ? (
+          {source.origin === "demo" && !source.sample ? (
             <Markdown
               remarkPlugins={[remarkGfm]}
               components={{ a: ({ children }) => <span>{children}</span> }}
@@ -101,21 +120,21 @@ export function SourcePreview({
               {source.text}
             </Markdown>
           ) : (
-            source.text
+            <pre className="document-plain">{source.text}</pre>
           )}
         </div>
       ) : (
         <div className="unavailable-preview">
           <FileText size={28} />
-          <p>Preview is not available for this file.</p>
-          <span>You can download the original document.</span>
+          <p>Không xem trước được tệp này.</p>
+          <span>Bạn có thể tải tệp gốc về.</span>
         </div>
       )}
       {url && (
         <Button variant="outline" size="sm" asChild>
           <a href={url} download={source.fileName}>
             <Download size={14} />
-            Download original
+            Tải tệp gốc
           </a>
         </Button>
       )}

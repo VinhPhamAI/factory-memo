@@ -13,8 +13,10 @@ import "./index.css";
 const router = createBrowserRouter([
   {
     element: <Shell />,
+    // Lazy child routes load after the first render; nothing to show meanwhile.
+    hydrateFallbackElement: <div aria-busy="true" />,
     children: [
-      { path: "/", element: <Navigate to="/ask" replace /> },
+      { path: "/", element: <Navigate to="/record" replace /> },
       {
         path: "/ask/:threadId?",
         lazy: async () => ({
@@ -33,7 +35,19 @@ const router = createBrowserRouter([
           Component: (await import("@/pages/record")).RecordPage,
         }),
       },
-      { path: "*", element: <Navigate to="/ask" replace /> },
+      {
+        path: "/analyze",
+        lazy: async () => ({
+          Component: (await import("@/pages/analyze")).AnalyzePage,
+        }),
+      },
+      {
+        path: "/card",
+        lazy: async () => ({
+          Component: (await import("@/pages/card")).CardPage,
+        }),
+      },
+      { path: "*", element: <Navigate to="/record" replace /> },
     ],
   },
 ]);

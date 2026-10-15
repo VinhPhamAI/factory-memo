@@ -1,0 +1,77 @@
+{
+  "id": "f2bd9589-c74c-4511-8690-e42dd4ac1707",
+  "type": "case",
+  "claim": "MR-JE-AX167 on Line 11, machining cell B. Motor from 2019, around 21,000 running hours. Grinding noise from HG servo motor during Z-axis rapid traverse, about three times a shift since Monday. No alarm, drive runs fine otherwise, and it only happens when the axis moves.\nObservation: Grinding noise during Z-axis rapid traverse, about three times a shift since Monday. No alarm, drive runs fine otherwise, and it only happens when the axis moves. Quiet when sitting still. Motor from 2019, around 21,000 running hours.\nReasoning: Bearing noise on MR-JE-AX167 usually first shows up between 18,000 and 22,000 motor running hours; the motor is right in that window. Encoder failure was considered but not confirmed. Gain adjustment was rejected as a way to hide the noise.\nAction: Before removing the load, jog MR-JE-AX167 at 50 mm/min and listen with a stethoscope right at the motor flange. If the bearing is suspect, tag the motor and send it to the Binh Duong workshop for replacement, not local repair. Do not rotate the shaft by hand while still hooked up; always disconnect the motor power cable and wait 15 minutes before rotating the shaft by hand to release the brake safely. If no noise when turned by hand, maintain the machine itself; if noise when turned by hand, bearing is worn and the motor gets replaced. Do not touch the gain to hide a noise.\nOutcome: not stated",
+  "status": "draft",
+  "context": {
+    "line_id": "Line 11",
+    "station": "Machining cell B",
+    "case_card": {
+      "action": "Before removing the load, jog MR-JE-AX167 at 50 mm/min and listen with a stethoscope right at the motor flange. If the bearing is suspect, tag the motor and send it to the Binh Duong workshop for replacement, not local repair. Do not rotate the shaft by hand while still hooked up; always disconnect the motor power cable and wait 15 minutes before rotating the shaft by hand to release the brake safely. If no noise when turned by hand, maintain the machine itself; if noise when turned by hand, bearing is worn and the motor gets replaced. Do not touch the gain to hide a noise.",
+      "context": "MR-JE-AX167 on Line 11, machining cell B. Motor from 2019, around 21,000 running hours. Grinding noise from HG servo motor during Z-axis rapid traverse, about three times a shift since Monday. No alarm, drive runs fine otherwise, and it only happens when the axis moves.",
+      "outcome": null,
+      "evidence": [
+        {
+          "quote": "Operator keeps hearing a grinding noise from the HG servo motor during Z-axis rapid traverse, about three times a shift since Monday. No alarm, drive runs fine otherwise, and it only happens when the axis moves.",
+          "turn_id": "T01"
+        },
+        {
+          "quote": "Records say the motor's from 2019, around 21,000 running hours.",
+          "turn_id": "T03"
+        },
+        {
+          "quote": "On this cell, bearing noise on MR-JE-AX167 usually first shows up between 18,000 and 22,000 motor running hours. You're right in that window.",
+          "turn_id": "T04"
+        },
+        {
+          "quote": "Before you remove the load, jog MR-JE-AX167 at 50 mm/min and listen with a stethoscope right at the motor flange. That'll tell you if it's the bearing or the machine.",
+          "turn_id": "T06"
+        },
+        {
+          "quote": "No, if the bearing is suspect, tag the motor and send it to the Binh Duong workshop for replacement, not local repair.",
+          "turn_id": "T08"
+        },
+        {
+          "quote": "Don't do that. Always disconnect the motor power cable and wait 15 minutes before rotating the shaft by hand to release the brake safely.",
+          "turn_id": "T10"
+        },
+        {
+          "quote": "Then the motor's fine and you go maintain the machine itself. But if it makes noise when you turn it by hand, bearing's worn and the motor gets replaced.",
+          "turn_id": "T12"
+        },
+        {
+          "quote": "No, don't touch the gain to hide a noise. Check the bearing first, that's the real issue here.",
+          "turn_id": "T14"
+        }
+      ],
+      "reasoning": "Bearing noise on MR-JE-AX167 usually first shows up between 18,000 and 22,000 motor running hours; the motor is right in that window. Encoder failure was considered but not confirmed. Gain adjustment was rejected as a way to hide the noise.",
+      "observation": "Grinding noise during Z-axis rapid traverse, about three times a shift since Monday. No alarm, drive runs fine otherwise, and it only happens when the axis moves. Quiet when sitting still. Motor from 2019, around 21,000 running hours."
+    },
+    "machine_id": "MR-JE-AX167",
+    "failure_mode": "wear",
+    "machine_model": "MR-JE",
+    "benchmark_run_id": "industrial-qa-test-full-20261010T164959Z"
+  },
+  "subject": "MR-JE-AX167 servo motor",
+  "revision": {
+    "verify": {
+      "issues": [],
+      "method": "quotes",
+      "passed": true
+    },
+    "catalog": {
+      "changed": {
+        "station": "machining cell B"
+      }
+    }
+  },
+  "valid_to": null,
+  "stated_by": null,
+  "created_at": "2026-10-10T16:55:21.700844+00:00",
+  "valid_from": null,
+  "evidence_id": "19d0fe8a-dc67-4ae7-9990-54980dfc3e30",
+  "supported_by": [],
+  "conflict_with": [],
+  "superseded_by": null,
+  "contradicted_by": []
+}

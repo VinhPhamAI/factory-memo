@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ArrowLeft, Check, Cpu, FileText, LoaderCircle } from "lucide-react";
-import type { Source } from "@/types";
+import type { Citation, Source } from "@/types";
 import { SourcePreview } from "./source-preview";
 import { MachinePicker } from "./machine-picker";
 import { Button } from "@/components/ui/button";
@@ -12,18 +12,20 @@ export function ReviewSource({
   onSave,
   onCancel,
   editing = false,
+  citation,
 }: {
   source: Source;
   onSave(source: Source): Promise<void>;
   onCancel(): void;
   editing?: boolean;
+  citation?: Pick<Citation, "turnId" | "page" | "excerpt">;
 }) {
   const [draft, setDraft] = useState(source);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   async function save() {
     if (!draft.title.trim()) {
-      setError("Add a title before saving.");
+      setError("Hãy nhập tiêu đề trước khi lưu.");
       return;
     }
     setSaving(true);
@@ -35,7 +37,7 @@ export function ReviewSource({
         summary: draft.summary.trim(),
       });
     } catch {
-      setError("The draft was not saved. Please try again.");
+      setError("Bản nháp chưa được lưu. Hãy thử lại.");
     } finally {
       setSaving(false);
     }
@@ -45,14 +47,14 @@ export function ReviewSource({
       <div className="review-heading">
         <Button variant="ghost" size="sm" onClick={onCancel}>
           <ArrowLeft size={16} />
-          Back
+          Quay lại
         </Button>
         <div>
-          <h1>{editing ? "Source details" : "Review your capture"}</h1>
+          <h1>{editing ? "Chi tiết nguồn" : "Kiểm tra nguồn trước khi lưu"}</h1>
           <p>
             {editing
-              ? "Keep the source and its context together."
-              : "Check the source, machine and summary before saving."}
+              ? "Giữ nguồn và ngữ cảnh của nó ở cùng một chỗ."
+              : "Kiểm tra nguồn, máy và tóm tắt trước khi lưu."}
           </p>
         </div>
         <Button onClick={() => void save()} disabled={saving}>
@@ -61,7 +63,7 @@ export function ReviewSource({
           ) : (
             <Check size={16} />
           )}
-          {editing ? "Save changes" : "Save draft"}
+          {editing ? "Lưu thay đổi" : "Lưu nháp"}
         </Button>
       </div>
       {error && (
@@ -73,11 +75,11 @@ export function ReviewSource({
         <section className="review-source">
           <div className="section-label">
             <FileText size={17} />
-            <h2>Source</h2>
+            <h2>Nguồn</h2>
             <span className="section-number">01</span>
           </div>
           <label htmlFor="source-title" className="field-label">
-            Title
+            Tiêu đề
           </label>
           <Input
             id="source-title"
@@ -85,18 +87,18 @@ export function ReviewSource({
             onChange={(e) => setDraft({ ...draft, title: e.target.value })}
           />
           <div className="review-source-body">
-            <SourcePreview source={source} />
+            <SourcePreview source={source} citation={citation} />
           </div>
         </section>
         <div className="review-context">
           <section>
             <div className="section-label">
               <Cpu size={17} />
-              <h2>Machine</h2>
+              <h2>Máy</h2>
               <span className="section-number">02</span>
             </div>
             <p className="field-description">
-              Which machine or family does this apply to?
+              Nguồn này áp dụng cho máy hoặc dòng máy nào?
             </p>
             <MachinePicker
               value={draft.machines}
@@ -106,27 +108,27 @@ export function ReviewSource({
           <section>
             <div className="section-label">
               <FileText size={17} />
-              <h2>Summary</h2>
+              <h2>Tóm tắt</h2>
               <span className="section-number">03</span>
             </div>
             <label htmlFor="source-summary" className="field-description">
-              Key observations, actions and what happened next.
+              Quan sát chính, hành động và kết quả.
             </label>
             <Textarea
               id="source-summary"
               rows={9}
-              placeholder="Add a short summary (optional)"
+              placeholder="Thêm tóm tắt ngắn (không bắt buộc)"
               value={draft.summary}
               onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
             />
             {source.origin === "upload" && (
               <p className="field-note">
-                Saved locally. Document extraction is not connected yet.
+                Lưu trong trình duyệt. Chưa nối với backend trích xuất.
               </p>
             )}
             {source.kind === "conversation" && (
               <p className="field-note">
-                This is a draft. Saving does not mark it as expert-approved.
+                Đây là bản nháp. Lưu không có nghĩa là đã được chuyên gia duyệt.
               </p>
             )}
           </section>

@@ -27,13 +27,13 @@ export function MachinePicker({
             {value.length === 1
               ? value[0].name
               : value.length > 1
-                ? `${value.length} selected`
-                : "Not identified"}
+                ? `Đã chọn ${value.length}`
+                : "Chưa xác định"}
             <ChevronDown size={14} className="ml-auto" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-72">
-          <DropdownMenuLabel>Specific machines</DropdownMenuLabel>
+          <DropdownMenuLabel>Máy cụ thể</DropdownMenuLabel>
           {machines
             .filter((m) => m.kind === "asset")
             .map((machine) => (
@@ -58,7 +58,7 @@ export function MachinePicker({
               </DropdownMenuCheckboxItem>
             ))}
           <DropdownMenuSeparator />
-          <DropdownMenuLabel>Machine families</DropdownMenuLabel>
+          <DropdownMenuLabel>Dòng máy</DropdownMenuLabel>
           {machines
             .filter((m) => m.kind === "family")
             .map((machine) => (
@@ -82,7 +82,7 @@ export function MachinePicker({
             checked={!value.length}
             onCheckedChange={() => onChange([])}
           >
-            Not identified
+            Chưa xác định
           </DropdownMenuCheckboxItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -94,7 +94,7 @@ export function MachinePicker({
               {machine.name}
               <button
                 type="button"
-                aria-label={`Remove ${machine.name}`}
+                aria-label={`Bỏ ${machine.name}`}
                 onClick={() =>
                   onChange(value.filter((m) => m.id !== machine.id))
                 }

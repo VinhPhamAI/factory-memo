@@ -2,21 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowDown,
-  ArrowRight,
   ArrowUp,
   BookOpen,
   Check,
   Copy,
-  Cpu,
-  MessageSquare,
+  Search,
   Square,
-  Wrench,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import type { ChatMessage, ChatThread, Citation } from "@/types";
 import { useWorkspace } from "@/hooks/workspace";
 import { createKnowledgeClient } from "@/services/chat";
-import { suggestions } from "@/fixtures/seed";
+import { buildCard, currentCard } from "@/services/analysis";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -45,7 +42,9 @@ function AnswerContent({
             <button
               type="button"
               className="inline-citation"
-              aria-label={`Open source ${href.slice(10)}`}
+              data-testid="citation-marker"
+              data-citation={href.slice(10)}
+              aria-label={`Mở nguồn ${href.slice(10)}`}
               onClick={() => onCitation(Number(href.slice(10)))}
             >
               {children}
@@ -83,6 +82,12 @@ export function AskPage() {
   const selected =
     answers.find((answer) => answer.id === selectedMessage) ?? answers.at(-1);
   const citations = selected?.citations ?? [];
+  const card =
+    currentCard(workspace.cards) ??
+    buildCard(
+      workspace.sources,
+      workspace.sources.map((source) => source.id),
+    );
 
   useEffect(() => () => controller.current?.abort(), []);
   useEffect(() => {
@@ -175,15 +180,15 @@ export function AskPage() {
         content:
           answer.content ||
           (stopped
-            ? "Response stopped."
-            : "The response could not be completed. Please try again."),
+            ? "Đã dừng câu trả lời."
+            : "Không hoàn tất được câu trả lời. Hãy thử lại."),
       };
       update();
       if (!stopped)
         setLocalError(
           cause instanceof Error
             ? cause.message
-            : "Could not complete this response.",
+            : "Không hoàn tất được câu trả lời.",
         );
     } finally {
       update();
@@ -206,9 +211,7 @@ export function AskPage() {
       setCopied(message.id);
       setTimeout(() => setCopied(""), 1500);
     } catch {
-      setLocalError(
-        "Could not copy the answer. Select the text and copy it manually.",
-      );
+      setLocalError("Không sao chép được. Hãy bôi đen và sao chép thủ công.");
     }
   }
 
@@ -216,6 +219,7 @@ export function AskPage() {
     <EvidencePanel
       citations={citations}
       sources={workspace.sources}
+      card={card}
       active={activeCitation}
       onSelect={setActiveCitation}
       onBack={() => setActiveCitation(undefined)}
@@ -224,13 +228,7 @@ export function AskPage() {
   return (
     <div className="ask-layout">
       <main className="chat-area">
-        <header className="page-header">
-          <div>
-            <h1>Ask</h1>
-            <span className="header-subtitle">
-              Your team's knowledge, with sources.
-            </span>
-          </div>
+        <div className="chat-mobile-bar">
           <Button
             variant="outline"
             size="sm"
@@ -238,12 +236,12 @@ export function AskPage() {
             onClick={() => setSourcesOpen(true)}
           >
             <BookOpen size={15} />
-            Sources
+            Nguồn
             {citations.length > 0 && (
               <span className="count-pill">{citations.length}</span>
             )}
           </Button>
-        </header>
+        </div>
         <div
           className="chat-scroll"
           ref={scroll}
@@ -257,59 +255,31 @@ export function AskPage() {
         >
           {!thread?.messages.length ? (
             <div className="chat-empty">
-              <div className="chat-empty-mark">
-                <BrandMark />
-              </div>
-              <span className="eyebrow">ASK YOUR KNOWLEDGE</span>
-              <h2>What are you working on?</h2>
-              <p>
-                Find an answer in your documents
-                <br className="desktop-break" /> and your team's experience.
-              </p>
-              <div className="suggestion-list">
-                {suggestions.map((suggestion, i) => (
-                  <button
-                    key={suggestion.label}
-                    onClick={() => void send(suggestion.query)}
-                    disabled={workspace.loading}
-                  >
-                    <span className="suggestion-icon">
-                      {i === 0 ? (
-                        <Cpu size={19} />
-                      ) : i === 1 ? (
-                        <Wrench size={19} />
-                      ) : (
-                        <MessageSquare size={19} />
-                      )}
-                    </span>
-                    <span>
-                      <strong>{suggestion.label}</strong>
-                      <span>{suggestion.query}</span>
-                    </span>
-                    <ArrowRight size={17} />
-                  </button>
-                ))}
-              </div>
-              <div className="sample-caption">
-                <span className="small-dot" />
-                Try a question from the demo knowledge base
-              </div>
+              <h2>Máy đang gặp vấn đề gì?</h2>
+              <p>Hỏi bằng tiếng Việt. Câu trả lời luôn kèm nguồn để kiểm tra.</p>
             </div>
           ) : (
             <div className="message-list">
               {thread.messages.map((message) =>
                 message.role === "user" ? (
-                  <div key={message.id} className="user-message">
+                  <div
+                    key={message.id}
+                    className="user-message"
+                    data-testid="chat-question"
+                  >
                     <p>{message.content}</p>
                   </div>
                 ) : (
                   <article
                     key={message.id}
                     className={`assistant-message ${selected?.id === message.id ? "selected-answer" : ""}`}
+                    data-testid="chat-answer"
+                    data-status={message.status}
                   >
                     <div className="assistant-label">
                       <BrandMark small />
-                      <span>Know-how</span>
+                      <span>Factory memo</span>
+                      <span className="scope-pill">Phạm vi: MR-JE-AX167</span>
                     </div>
                     <div className="answer-prose">
                       {message.content ? (
@@ -318,18 +288,23 @@ export function AskPage() {
                           onCitation={(number) => openCitation(message, number)}
                         />
                       ) : (
-                        <div className="thinking-status" role="status">
-                          <span />
-                          <span />
-                          <span />
-                          Finding relevant sources
+                        <div
+                          className="thinking-status"
+                          role="status"
+                          data-testid="chat-searching"
+                        >
+                          <Search size={15} />
+                          Đang tìm nguồn liên quan…
+                          <span className="scope-pill">
+                            Phạm vi: MR-JE-AX167
+                          </span>
                         </div>
                       )}
                     </div>
                     {message.status === "streaming" && message.content && (
                       <span
                         className="stream-cursor"
-                        aria-label="Generating response"
+                        aria-label="Đang tạo câu trả lời"
                       />
                     )}
                     {message.status !== "streaming" && (
@@ -347,12 +322,12 @@ export function AskPage() {
                           }}
                         >
                           <BookOpen size={14} />
-                          {message.citations.length} sources
+                          {message.citations.length} nguồn
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="Copy answer"
+                          aria-label="Sao chép câu trả lời"
                           onClick={() => void copy(message)}
                         >
                           {copied === message.id ? (
@@ -362,7 +337,7 @@ export function AskPage() {
                           )}
                         </Button>
                         {message.status === "stopped" && (
-                          <span className="field-note">Stopped</span>
+                          <span className="field-note">Đã dừng</span>
                         )}
                       </div>
                     )}
@@ -377,7 +352,7 @@ export function AskPage() {
             variant="outline"
             size="icon"
             className="scroll-to-bottom"
-            aria-label="Scroll to latest answer"
+            aria-label="Cuộn tới câu trả lời mới nhất"
             onClick={() => {
               nearBottom.current = true;
               scroll.current?.scrollTo({
@@ -405,8 +380,9 @@ export function AskPage() {
             <textarea
               ref={composer}
               rows={2}
-              aria-label="Ask a question"
-              placeholder="Ask about a machine, issue or process…"
+              aria-label="Đặt câu hỏi"
+              data-testid="chat-input"
+              placeholder="Hỏi về máy, sự cố hoặc quy trình…"
               value={query}
               maxLength={20000}
               onChange={(e) => setQuery(e.target.value)}
@@ -424,13 +400,14 @@ export function AskPage() {
             <div className="composer-bottom">
               <span>
                 <BookOpen size={13} />
-                Demo knowledge base
+                Tri thức đã duyệt + manual
               </span>
               {sending ? (
                 <Button
                   type="button"
                   size="icon"
-                  aria-label="Stop response"
+                  aria-label="Dừng câu trả lời"
+                  data-testid="chat-stop"
                   onClick={() => controller.current?.abort()}
                 >
                   <Square size={15} fill="currentColor" />
@@ -439,7 +416,8 @@ export function AskPage() {
                 <Button
                   type="submit"
                   size="icon"
-                  aria-label="Send question"
+                  aria-label="Gửi câu hỏi"
+                  data-testid="chat-send"
                   disabled={!query.trim() || workspace.loading}
                 >
                   <ArrowUp size={19} />
@@ -448,7 +426,7 @@ export function AskPage() {
             </div>
           </form>
           <p className="composer-note">
-            Answers link back to the original source.
+            Mỗi câu trả lời dẫn về đúng nguồn gốc.
           </p>
         </div>
       </main>
@@ -456,10 +434,9 @@ export function AskPage() {
       <Sheet open={sourcesOpen} onOpenChange={setSourcesOpen}>
         <SheetContent side="right" className="evidence-sheet">
           <SheetHeader className="sr-only">
-            <SheetTitle>Answer sources</SheetTitle>
+            <SheetTitle>Nguồn của câu trả lời</SheetTitle>
             <SheetDescription>
-              Inspect the documents and conversations cited by the selected
-              answer.
+              Xem tài liệu và bản ghi được câu trả lời trích dẫn.
             </SheetDescription>
           </SheetHeader>
           {panel}

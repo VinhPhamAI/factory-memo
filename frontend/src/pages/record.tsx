@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useBlocker, useLocation, useNavigate } from "react-router-dom";
 import {
-  ArrowLeft,
+  ArrowRight,
   AudioLines,
   CircleCheck,
+  FileText,
+  HardHat,
   Mic,
   Pause,
   Play,
@@ -11,13 +13,14 @@ import {
 } from "lucide-react";
 import { useWorkspace } from "@/hooks/workspace";
 import {
-  finishRecording,
-  initialRecording,
   recordingSource,
-  tickRecording,
+  recordingView,
+  TICK_MS,
+  TOTAL_TICKS,
   timestamp,
 } from "@/services/capture";
-import { recordingTemplate } from "@/fixtures/seed";
+import { scaled } from "@/services/timing";
+import { speakers, type SpeakerId } from "@/fixtures/ax167";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -26,201 +29,287 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ReviewSource } from "@/components/review-source";
-import { SourcePreview } from "@/components/source-preview";
-import type { RecordingDraft, Source } from "@/types";
+import { cn } from "@/utils/cn";
+
+type Phase = "idle" | "recording" | "paused" | "done";
+
+function Waveform({ active }: { active: boolean }) {
+  return (
+    <span className={cn("waveform", active && "active")} aria-hidden="true">
+      {Array.from({ length: 28 }, (_, i) => (
+        <span key={i} style={{ animationDelay: `${(i * 97) % 700}ms` }} />
+      ))}
+    </span>
+  );
+}
+
+function SpeakerPanel({
+  id,
+  active,
+  live,
+}: {
+  id: SpeakerId;
+  active: boolean;
+  live: boolean;
+}) {
+  const speaker = speakers[id];
+  return (
+    <div
+      className={cn("speaker-panel", active && "active", id)}
+      data-testid={`speaker-${id}`}
+      data-active={active}
+    >
+      <span className="speaker-panel-avatar">
+        <HardHat size={26} strokeWidth={1.6} />
+        <span>{speaker.initials}</span>
+      </span>
+      <span className="speaker-panel-text">
+        <strong>
+          {speaker.label} · {speaker.name}
+        </strong>
+        <span>{speaker.role}</span>
+        <em>{active ? "Đang nói…" : live ? "Đang nghe" : "Sẵn sàng"}</em>
+      </span>
+      <Waveform active={active} />
+    </div>
+  );
+}
 
 export function RecordPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const workspace = useWorkspace();
-  const [draft, setDraft] = useState<RecordingDraft>(() => ({
-    ...initialRecording(),
-    phase: location.state?.autoStart
-      ? ("recording" as const)
-      : ("idle" as const),
-  }));
-  const [saved, setSaved] = useState(false);
-  const [review, setReview] = useState<Source>();
+  const [phase, setPhase] = useState<Phase>(() =>
+    location.state?.autoStart ? "recording" : "idle",
+  );
+  const [tick, setTick] = useState(0);
+  const [saving, setSaving] = useState(false);
   const scroll = useRef<HTMLDivElement>(null);
-  const nearBottom = useRef(true);
-  const unsaved = draft.phase !== "idle" && !saved;
-  const blocker = useBlocker(unsaved);
+  const view = recordingView(tick);
+  const live = phase === "recording" || phase === "paused";
+  const blocker = useBlocker(live);
+
   useEffect(() => {
-    if (draft.phase !== "recording") return;
-    const timer = setInterval(() => setDraft(tickRecording), 1000);
+    if (phase !== "recording") return;
+    const timer = setInterval(
+      () => setTick((value) => Math.min(value + 1, TOTAL_TICKS)),
+      scaled(TICK_MS),
+    );
     return () => clearInterval(timer);
-  }, [draft.phase]);
+  }, [phase]);
   useEffect(() => {
-    if (!unsaved) return;
+    if (!live) return;
     const handler = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [unsaved]);
+  }, [live]);
+  const lastText = view.turns.at(-1)?.text;
   useEffect(() => {
-    if (nearBottom.current && scroll.current)
-      scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [draft.turns.length]);
-  useEffect(() => {
-    if (saved) void navigate("/sources");
-  }, [saved, navigate]);
+    if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
+  }, [lastText, view.turns.length]);
 
-  function finish() {
-    const finished = finishRecording(draft);
-    setDraft(finished);
-    setReview(recordingSource(finished));
-  }
-  async function save(source: Source) {
-    await workspace.saveSource(source);
-    setSaved(true);
+  async function finish() {
+    setSaving(true);
+    try {
+      await workspace.saveSource(recordingSource(tick));
+      setPhase("done");
+    } finally {
+      setSaving(false);
+    }
   }
 
+  const active = phase === "recording" ? view.active : undefined;
   return (
     <>
-      {review ? (
-        <ReviewSource
-          source={review}
-          onSave={save}
-          onCancel={() => {
-            setReview(undefined);
-            setDraft({ ...draft, phase: "paused" });
-          }}
-        />
-      ) : (
-        <main className="record-page">
-          <header className="record-header">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void navigate("/sources")}
+      <main className="record-page">
+        <header className="record-topline">
+          <div className="record-topline-left">
+            <span
+              className={cn("rec-indicator", phase)}
+              data-testid="record-state"
+              data-state={phase}
             >
-              <ArrowLeft size={16} />
-              Sources
-            </Button>
-            <span className="record-demo-tag">Demo recording</span>
-          </header>
-          <div className="record-heading">
-            <span className="eyebrow">CAPTURE EXPERT EXPERIENCE</span>
-            <h1>Record know-how</h1>
-            <p>
-              Capture a process, troubleshooting session, or expert discussion.
-            </p>
+              <span className="rec-dot" />
+              {phase === "done"
+                ? "ĐÃ LƯU"
+                : phase === "paused"
+                  ? "TẠM DỪNG"
+                  : "REC"}
+            </span>
+            <span className="record-clock" data-testid="record-timer">
+              {timestamp(view.seconds)}
+            </span>
+            <span className="machine-chip">MR-JE-AX167 · Line 11</span>
           </div>
-          {draft.phase === "idle" ? (
-            <div className="record-idle">
-              <span className="record-idle-icon">
-                <Mic size={34} strokeWidth={1.5} />
-              </span>
-              <h2>Record an expert session</h2>
-              <p>
-                This demo streams a sample conversation.
-                <br />
-                No microphone access is needed.
-              </p>
-              <Button
-                size="lg"
-                onClick={() => setDraft({ ...draft, phase: "recording" })}
-              >
-                <Mic size={17} />
-                Start recording
-              </Button>
-            </div>
-          ) : (
-            <>
-              <div className="record-status">
-                <div>
-                  <span
-                    className={
-                      draft.phase === "recording" ? "record-dot" : "paused-dot"
-                    }
-                  />
-                  <strong>
-                    {draft.phase === "recording"
-                      ? "Recording sample session"
-                      : "Recording paused"}
-                  </strong>
-                  <span className="record-clock">
-                    {timestamp(draft.elapsed)}
-                  </span>
-                </div>
-                <span className="record-scope">
-                  {draft.machines[0]?.name} · Line 8
-                </span>
-              </div>
-              <section className="live-transcript">
-                <div className="live-transcript-header">
-                  <span>
-                    <AudioLines size={17} />
-                    Live transcript
-                  </span>
-                  <span>{draft.turns.length} turns</span>
-                </div>
-                <div
-                  className="live-transcript-scroll"
-                  ref={scroll}
-                  onScroll={() => {
-                    if (scroll.current)
-                      nearBottom.current =
-                        scroll.current.scrollHeight -
-                          scroll.current.scrollTop -
-                          scroll.current.clientHeight <
-                        80;
-                  }}
+          <div className="record-topline-right">
+            <span className="stt-label">
+              STT + nhận diện người nói (mô phỏng)
+            </span>
+            {live && (
+              <>
+                <Button
+                  variant="outline"
+                  data-testid="record-pause"
+                  onClick={() =>
+                    setPhase(phase === "paused" ? "recording" : "paused")
+                  }
                 >
-                  <SourcePreview source={recordingSource(draft)} />
-                  {!draft.turns.length && (
-                    <div className="listening-placeholder">
-                      <AudioLines size={20} />
-                      <p>The sample conversation is about to begin.</p>
-                    </div>
+                  {phase === "paused" ? (
+                    <Play size={15} />
+                  ) : (
+                    <Pause size={15} />
                   )}
+                  {phase === "paused" ? "Tiếp tục" : "Tạm dừng"}
+                </Button>
+                <Button
+                  data-testid="record-finish"
+                  className={cn(view.complete && "pulse-cta")}
+                  disabled={!view.completed.length || saving}
+                  onClick={() => void finish()}
+                >
+                  <Square size={13} fill="currentColor" />
+                  Kết thúc ghi âm
+                </Button>
+              </>
+            )}
+          </div>
+        </header>
+        <div className="page-title">
+          <span className="eyebrow">BƯỚC 1 · INPUT GIỌNG NÓI</span>
+          <h1>Ghi âm trao đổi giữa chuyên gia và kỹ thuật viên</h1>
+        </div>
+        <div className="speaker-row">
+          <SpeakerPanel
+            id="junior_01"
+            active={active === "junior_01"}
+            live={live}
+          />
+          <SpeakerPanel
+            id="expert_01"
+            active={active === "expert_01"}
+            live={live}
+          />
+        </div>
+        {phase === "idle" ? (
+          <div className="record-idle tech-hero">
+            <span className="record-idle-icon">
+              <Mic size={36} strokeWidth={1.5} />
+            </span>
+            <h2>Sẵn sàng ghi âm tại Line 11 · Machining cell B</h2>
+            <p>
+              Factory memo chuyển giọng nói thành văn bản và tách lời từng người
+              nói.
+              <br />
+              Bản demo phát lại cuộc trao đổi thật của case MR-JE-AX167, không
+              dùng micro.
+            </p>
+            <Button
+              size="lg"
+              data-testid="record-start"
+              onClick={() => setPhase("recording")}
+            >
+              <Mic size={18} />
+              Bắt đầu ghi âm
+            </Button>
+          </div>
+        ) : (
+          <section className="live-transcript" data-testid="live-transcript">
+            <div className="live-transcript-header">
+              <span>
+                <AudioLines size={18} />
+                Bản ghi trực tiếp
+              </span>
+              <span data-testid="record-turn-count">
+                {view.completed.length}/14 lượt
+              </span>
+            </div>
+            <div className="live-transcript-scroll" ref={scroll}>
+              {!view.turns.length && (
+                <div className="listening-placeholder">
+                  <AudioLines size={22} />
+                  <p>Đang lắng nghe…</p>
                 </div>
-                <div className="record-controls">
-                  <span>
-                    {draft.turns.length === recordingTemplate.turns.length ? (
-                      <>
-                        <CircleCheck size={15} />
-                        Sample transcript complete
-                      </>
-                    ) : (
-                      <>
-                        <AudioLines size={15} />
-                        Transcript appears as the session progresses
-                      </>
-                    )}
-                  </span>
-                  <div>
-                    <Button
-                      variant="outline"
-                      onClick={() =>
-                        setDraft({
-                          ...draft,
-                          phase:
-                            draft.phase === "paused" ? "recording" : "paused",
-                        })
-                      }
-                    >
-                      {draft.phase === "paused" ? (
-                        <Play size={15} />
-                      ) : (
-                        <Pause size={15} />
+              )}
+              {view.turns.map((turn) => (
+                <div
+                  key={turn.id}
+                  className={cn(
+                    "live-turn",
+                    turn.speakerId === "expert_01" && "expert",
+                    turn.streaming && "streaming",
+                  )}
+                  data-testid={`turn-${turn.code}`}
+                  data-streaming={turn.streaming}
+                >
+                  <span className="turn-chip">{turn.code}</span>
+                  <div className="live-turn-body">
+                    <div className="turn-meta">
+                      <strong>
+                        {turn.speaker} · {turn.speakerId}
+                      </strong>
+                      <span>{timestamp(turn.seconds)}</span>
+                    </div>
+                    <p>
+                      {turn.text}
+                      {turn.streaming && phase === "recording" && (
+                        <span className="stream-cursor" />
                       )}
-                      {draft.phase === "paused" ? "Resume" : "Pause"}
-                    </Button>
-                    <Button disabled={!draft.turns.length} onClick={finish}>
-                      <Square size={13} fill="currentColor" />
-                      Finish recording
-                    </Button>
+                    </p>
                   </div>
                 </div>
-              </section>
-            </>
-          )}
-        </main>
-      )}
+              ))}
+            </div>
+            {phase === "done" ? (
+              <div className="record-done" data-testid="record-done">
+                <span className="record-done-icon">
+                  <CircleCheck size={22} />
+                </span>
+                <div>
+                  <strong>Đã lưu bản ghi vào thư viện</strong>
+                  <span>
+                    {view.completed.length} lượt · 2 người nói ·{" "}
+                    {timestamp(view.seconds)} ·{" "}
+                    <span className="status-badge draft">Nháp</span>
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => void navigate("/sources")}
+                >
+                  <FileText size={15} />
+                  Thêm tài liệu
+                </Button>
+                <Button
+                  data-testid="record-analyze-cta"
+                  onClick={() => void navigate("/analyze")}
+                >
+                  Phân tích bằng AI
+                  <ArrowRight size={16} />
+                </Button>
+              </div>
+            ) : (
+              <div className="record-controls">
+                <span>
+                  {view.complete ? (
+                    <>
+                      <CircleCheck size={16} />
+                      Đã nhận đủ 14 lượt nói. Bấm “Kết thúc ghi âm” để lưu.
+                    </>
+                  ) : (
+                    <>
+                      <AudioLines size={16} />
+                      Transcript cập nhật theo từng lượt nói
+                    </>
+                  )}
+                </span>
+              </div>
+            )}
+          </section>
+        )}
+      </main>
       <Dialog
         open={blocker.state === "blocked"}
         onOpenChange={(open) => {
@@ -229,15 +318,9 @@ export function RecordPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>
-              {review
-                ? "You have an unsaved draft"
-                : "Your recording is still open"}
-            </DialogTitle>
+            <DialogTitle>Bản ghi âm vẫn đang mở</DialogTitle>
             <DialogDescription>
-              {review
-                ? "Keep reviewing to save your source, or discard this capture."
-                : "Finish recording to review and save it before leaving."}
+              Kết thúc ghi âm để lưu vào thư viện trước khi rời trang.
             </DialogDescription>
           </DialogHeader>
           <div className="leave-actions">
@@ -247,19 +330,17 @@ export function RecordPage() {
                 if (blocker.state === "blocked") blocker.reset();
               }}
             >
-              {review ? "Keep reviewing" : "Keep recording"}
+              Tiếp tục ghi
             </Button>
-            {!review && (
-              <Button
-                disabled={!draft.turns.length}
-                onClick={() => {
-                  if (blocker.state === "blocked") blocker.reset();
-                  finish();
-                }}
-              >
-                Finish and review
-              </Button>
-            )}
+            <Button
+              disabled={!view.completed.length}
+              onClick={() => {
+                if (blocker.state === "blocked") blocker.reset();
+                void finish();
+              }}
+            >
+              Kết thúc và lưu
+            </Button>
             <Button
               variant="ghost"
               className="destructive-text"
@@ -267,7 +348,7 @@ export function RecordPage() {
                 if (blocker.state === "blocked") blocker.proceed();
               }}
             >
-              Discard and leave
+              Bỏ bản ghi và rời trang
             </Button>
           </div>
         </DialogContent>

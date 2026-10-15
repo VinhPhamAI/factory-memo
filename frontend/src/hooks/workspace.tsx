@@ -6,17 +6,19 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { ChatThread, Source } from "@/types";
+import type { ChatThread, KnowledgeCard, Source } from "@/types";
 import { storage, storageError } from "@/services/storage";
 
 interface Workspace {
   sources: Source[];
   threads: ChatThread[];
+  cards: KnowledgeCard[];
   loading: boolean;
   generation: number;
   error: string;
   clearError(): void;
   saveSource(source: Source): Promise<void>;
+  saveCard(card: KnowledgeCard): Promise<void>;
   updateThread(thread: ChatThread): void;
   saveThread(thread: ChatThread): Promise<void>;
   reset(): Promise<void>;
@@ -26,6 +28,7 @@ const Context = createContext<Workspace | null>(null);
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [sources, setSources] = useState<Source[]>([]);
   const [threads, setThreads] = useState<ChatThread[]>([]);
+  const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const epoch = useRef(0);
@@ -38,13 +41,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (active) {
           setSources(data.sources);
           setThreads(data.threads);
+          setCards(data.cards);
           setLoading(false);
         }
       })
       .catch(() => {
         if (active) {
           setError(
-            "Could not open browser storage. Enable site storage and reload to use this workspace.",
+            "Không mở được bộ nhớ trình duyệt. Hãy bật lưu trữ cho trang này rồi tải lại.",
           );
           setLoading(false);
         }
@@ -71,6 +75,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const value: Workspace = {
     sources,
     threads,
+    cards,
     loading,
     error,
     generation,
@@ -82,6 +87,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setSources((current) => [
           source,
           ...current.filter((item) => item.id !== source.id),
+        ]);
+      }),
+    saveCard: (card) =>
+      guarded(async () => {
+        await storage.saveCard(card);
+        setCards((current) => [
+          card,
+          ...current.filter((item) => item.id !== card.id),
         ]);
       }),
     saveThread: (thread) =>
@@ -96,6 +109,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         const data = await storage.reset();
         setSources(data.sources);
         setThreads(data.threads);
+        setCards(data.cards);
       }),
   };
   return <Context.Provider value={value}>{children}</Context.Provider>;
