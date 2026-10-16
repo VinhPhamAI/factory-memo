@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 from backend.api.voice_capture import VoiceCaptureService
@@ -25,6 +26,7 @@ from backend.src.services.knowledge_extraction import (
 from backend.src.services.knowledge_ingestion import KnowledgeIngestionService
 from backend.src.services.llm import LLMResponseError
 from backend.src.services.speech_processing import (
+    SpeakerSegment,
     SpeechServiceError,
     TranscriptEvent,
     Utterance,
@@ -58,27 +60,40 @@ UTTERANCES = [
 ]
 
 
-class FakeSpeechClient:
-    """Realtime stream that yields scripted events, then optionally fails."""
+# Diarization of UTTERANCES: who spoke when.
+SEGMENTS = [SpeakerSegment(0.4, 2.1, 1), SpeakerSegment(2.3, 4.1, 2), SpeakerSegment(4.4, 5.1, 1)]
 
-    def __init__(self, events=(), *, fail_after: int | None = None, file_utterances=()):
+
+class FakeSpeechClient:
+    """Realtime stream that yields scripted events (in its first session), then
+    optionally fails; file recognition and diarization return fixed results."""
+
+    def __init__(self, events=(), *, fail_after: int | None = None, file_utterances=(),
+                 segments=SEGMENTS, diarization_error: Exception | None = None):
         self.settings = SimpleNamespace(language="vi-VN", endpointing_ms=800)
         self.events = list(events)
         self.fail_after = fail_after
         self.file_utterances = list(file_utterances)
+        self.segments = list(segments)
+        self.diarization_error = diarization_error
         self.received = b""
         self.transcribed: list[Path] = []
+        self.sessions: list[dict] = []
+        self.diarized = 0
 
     async def aready(self):
         return {"ready": True}
 
-    async def astream(self, frames, *, sample_rate=16000, language=None, **_):
+    async def astream(self, frames, *, sample_rate=16000, language=None, **options):
+        self.sessions.append(options)
+        events, self.events = self.events, []
+
         async def consume():
             async for chunk in frames:
                 self.received += chunk
 
         reader = asyncio.create_task(consume())
-        for index, event in enumerate(self.events):
+        for index, event in enumerate(events):
             if self.fail_after is not None and index == self.fail_after:
                 reader.cancel()
                 raise SpeechServiceError("socket closed")
@@ -86,9 +101,39 @@ class FakeSpeechClient:
             yield event
         await reader
 
-    async def atranscribe_file(self, path, *, language=None, diarization=True):
+    async def atranscribe_segments(self, path, *, language=None):
         self.transcribed.append(Path(path))
-        return self.file_utterances
+        return [Utterance(u.text, None, u.start, u.end) for u in self.file_utterances]
+
+    async def adiarize(self, wav, *, mode="offline"):
+        self.diarized += 1
+        if self.diarization_error is not None:
+            raise self.diarization_error
+        return self.segments
+
+    async def arecover(self, path, stretches, *, language=None):
+        self.recovered_stretches = list(stretches)
+        return [Utterance("bị sót", None, start + 0.1, end - 0.1) for start, end in stretches]
+
+
+class SessionScript:
+    """Realtime sessions that each give one final after a number of frames."""
+
+    def __init__(self, *finals: tuple[int, Utterance]):
+        self.settings = SimpleNamespace(language="vi-VN", endpointing_ms=800)
+        self.finals = list(finals)
+        self.frames: list[int] = []
+
+    async def astream(self, frames, *, sample_rate=16000, language=None, **_):
+        script = self.finals.pop(0) if self.finals else None
+        self.frames.append(0)
+        async for _chunk in frames:
+            self.frames[-1] += 1
+            if script and self.frames[-1] == script[0]:
+                yield TranscriptEvent("completed", script[1].text, (script[1],))
+
+    async def adiarize(self, wav, *, mode="offline"):
+        return []
 
 
 def final(*utterances: Utterance) -> TranscriptEvent:
@@ -193,19 +238,74 @@ class RecordingSessionTest(unittest.IsolatedAsyncioTestCase):
         return RecordingSession(client, recorder, self.sink)
 
     async def test_realtime_finals_become_the_transcript(self) -> None:
+        unlabelled = [Utterance(u.text, None, u.start, u.end) for u in UTTERANCES]
         client = FakeSpeechClient([
-            TranscriptEvent("delta", "Trục"), final(UTTERANCES[0]), final(*UTTERANCES[1:]),
+            TranscriptEvent("delta", "Trục"), final(unlabelled[0]), final(*unlabelled[1:]),
         ])
         session = self.session(client)
         session.start()
         session.feed(b"\x00\x01" * 800)
         outcome = await session.finish()
         self.assertEqual(outcome.path, "realtime")
+        # Speakers come from diarizing the whole file, not from the realtime sessions.
         self.assertEqual(outcome.utterances, UTTERANCES)
+        self.assertIsNone(outcome.diarization_error)
+        self.assertEqual(client.sessions[0]["diarization"], False)
+        self.assertEqual(client.sessions[0]["word_timestamps"], True)
         self.assertEqual(client.received, b"\x00\x01" * 800)
         self.assertEqual(self.events[0], {"type": "partial", "text": "Trục"})
-        self.assertEqual(self.events[1]["turns"][0]["speaker"], "A")
+        self.assertEqual(self.events[1], {"type": "turns", "turns": [
+            {"id": "T01", "speaker": None, "text": "Trục Z kêu rè từ sáng.", "start": 0.5, "end": 2.0},
+        ]})
+        self.assertGreaterEqual(client.diarized, 1)
         self.assertTrue(session.recorder.closed)
+
+    async def test_a_new_session_starts_in_the_quiet_after_a_final(self) -> None:
+        loud = (np.random.default_rng(0).integers(-9000, 9000, 1280).astype("<i2")).tobytes()
+        quiet = b"\x00\x00" * 1280  # 80 ms each
+        client = SessionScript(
+            (3, Utterance("một", None, 0.1, 0.3)), (9, Utterance("hai", None, 0.1, 0.2)),
+        )
+        session = self.session(client)
+        session.start()
+        for chunk in [loud] * 6 + [quiet] * 10 + [loud] * 6:
+            session.feed(chunk)
+            await asyncio.sleep(0.005)
+        outcome = await session.finish()
+        # Session 1 ends once 0.6 s of quiet followed its final (6 loud + 8 quiet
+        # frames). Session 2 is primed with the last 0.48 s of that quiet (6
+        # frames), then gets the 2 remaining quiet and 6 loud frames.
+        self.assertEqual(client.frames, [14, 14])
+        self.assertEqual(outcome.sessions, 2)
+        # Its times count from the priming audio: (14 - 6) * 0.08 + 0.1.
+        self.assertEqual([(u.text, round(u.start, 2)) for u in outcome.utterances],
+                         [("một", 0.1), ("hai", 0.74)])
+        self.assertEqual(session.recorder.frames, 22 * 1280)
+
+    async def test_speech_missed_by_recognition_is_recovered_and_labelled(self) -> None:
+        client = FakeSpeechClient(
+            [final(Utterance(UTTERANCES[0].text, None, 0.5, 2.0))],
+            # The diarizer also heard speaker 2 at 6-8 s, where no word was recognized.
+            segments=[SpeakerSegment(0.4, 2.1, 1), SpeakerSegment(6.0, 8.0, 2)],
+        )
+        session = self.session(client)
+        session.start()
+        session.feed(b"\x00\x01" * 800)
+        outcome = await session.finish()
+        self.assertEqual(client.recovered_stretches, [(6.0, 8.0)])
+        self.assertEqual(outcome.recovered, 1)
+        self.assertEqual([(u.text, u.speaker) for u in outcome.utterances],
+                         [(UTTERANCES[0].text, 1), ("bị sót", 2)])
+
+    async def test_failed_diarization_keeps_turns_without_letters(self) -> None:
+        client = FakeSpeechClient([final(UTTERANCES[0])],
+                                  diarization_error=SpeechServiceError("HTTP 501"))
+        session = self.session(client)
+        session.start()
+        session.feed(b"\x00\x01" * 800)
+        outcome = await session.finish()
+        self.assertEqual([u.speaker for u in outcome.utterances], [None])
+        self.assertIn("HTTP 501", outcome.diarization_error)
 
     async def test_lost_recognition_keeps_recording_and_transcribes_the_file(self) -> None:
         client = FakeSpeechClient([final(UTTERANCES[0]), final(UTTERANCES[1])], fail_after=1,
@@ -218,6 +318,7 @@ class RecordingSessionTest(unittest.IsolatedAsyncioTestCase):
         outcome = await session.finish()
         self.assertEqual(outcome.path, "file")
         self.assertIn("socket closed", outcome.realtime_error)
+        # Recognized piece by piece, then labelled by diarization.
         self.assertEqual(outcome.utterances, UTTERANCES)
         self.assertEqual(client.transcribed, [session.recorder.path])
         self.assertEqual(session.recorder.frames, 200)
@@ -520,6 +621,7 @@ class VoiceCaptureApiTest(unittest.TestCase):
 
     def test_silence_is_not_stored_but_its_audio_is_kept(self) -> None:
         self.speech.events = []
+        self.speech.segments = []  # the diarizer heard nobody either
         event = self.record()
         self.assertEqual((event["type"], event["code"]), ("error", "empty"))
         self.assertFalse(self.store.conversations)

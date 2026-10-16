@@ -18,17 +18,23 @@ from pathlib import Path
 import numpy as np
 
 from backend.src.services.speech_processing import (
+    SilenceTracker,
+    SpeakerSegment,
     SpeechClient,
     SpeechServiceError,
     SpeechSettings,
     Utterance,
     Word,
+    assign_speakers,
     format_transcript,
     iter_pcm_chunks,
     parse_transcription,
     read_wav_pcm16,
+    shift,
     speaker_label,
+    speech_pieces,
     split_by_speaker,
+    uncovered_speech,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -252,3 +258,68 @@ class LiveSpeechServiceTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _audio(*parts: tuple[str, float], rate: int = 16000) -> bytes:
+    """PCM16 of ("speech" | "pause", seconds) parts; speech is loud noise."""
+
+    rng = np.random.default_rng(1)
+    chunks = [
+        (rng.integers(-8000, 8000, int(seconds * rate)) if kind == "speech"
+         else rng.integers(-30, 30, int(seconds * rate))).astype("<i2").tobytes()
+        for kind, seconds in parts
+    ]
+    return b"".join(chunks)
+
+
+class LongAudioTest(unittest.TestCase):
+    def test_speakers_come_from_diarization_by_word_overlap(self) -> None:
+        words = (Word("chào", 0.0, 0.4), Word("anh", 0.5, 0.9), Word("dạ", 1.6, 1.9),
+                 Word("xa", 9.0, 9.2))
+        labelled = assign_speakers(
+            [Utterance("chào anh dạ xa", None, 0.0, 9.2, words)],
+            # Diarizer numbers 3 and 5; the first voice heard becomes 1 (A).
+            [SpeakerSegment(1.5, 2.5, 5), SpeakerSegment(0.0, 1.0, 3)],
+        )
+        self.assertEqual([(u.text, u.speaker) for u in labelled],
+                         [("chào anh", 1), ("dạ", 2), ("xa", None)])
+        # Without words the utterance span decides; a nearby segment counts.
+        (near,) = assign_speakers([Utterance("ừ", None, 2.9, 3.2)], [SpeakerSegment(1.5, 2.5, 5)])
+        self.assertEqual(near.speaker, 1)
+
+    def test_uncovered_speech_is_what_the_diarizer_heard_without_words(self) -> None:
+        said = [Utterance("a b", 1, 1.0, 3.0, (Word("a", 1.0, 1.4), Word("b", 2.6, 3.0)))]
+        segments = [SpeakerSegment(0.5, 3.2, 1), SpeakerSegment(5.0, 5.4, 2),
+                    SpeakerSegment(6.0, 7.0, 2), SpeakerSegment(7.3, 8.0, 2)]
+        # 1.7-2.3 between the words; 5.0-5.4 is too short; 6-7 and 7.3-8 join.
+        self.assertEqual(uncovered_speech(said, segments), [(1.7, 2.3), (6.0, 8.0)])
+        self.assertEqual(uncovered_speech(said, []), [])
+
+    def test_shift_moves_utterance_and_word_times(self) -> None:
+        moved = shift(Utterance("a", 1, 0.5, 1.0, (Word("a", 0.5, 1.0, 1),)), 10)
+        self.assertEqual((moved.start, moved.end, moved.words[0].start), (10.5, 11.0, 10.5))
+
+    def test_pieces_split_at_long_pauses_and_skip_silence(self) -> None:
+        rate = 16000
+        pcm = _audio(("speech", 3), ("pause", 0.8), ("speech", 3), ("pause", 3),
+                     ("speech", 2), ("pause", 4))
+        pieces = [(round(a / rate, 1), round(b / rate, 1)) for a, b in speech_pieces(pcm, rate)]
+        # The short pause joins its neighbours; the 3 s pause separates (cut in
+        # its middle, 8.2 s); the second half of the 4 s trailing pause is not sent.
+        self.assertEqual(pieces, [(0.0, 8.2), (8.2, 13.8)])
+        long = speech_pieces(_audio(("speech", 70)), rate)
+        self.assertTrue(all((b - a) / rate <= 30.0 for a, b in long))
+        self.assertEqual(long[-1][1], 70 * rate)
+
+    def test_silence_tracker_counts_trailing_quiet_only(self) -> None:
+        tracker = SilenceTracker(16000)
+        speech = _audio(("speech", 0.08))
+        pause = _audio(("pause", 0.08))
+        for chunk in [speech] * 10:
+            tracker.add(chunk)
+        self.assertEqual(tracker.quiet_seconds, 0.0)
+        for chunk in [pause] * 5:
+            tracker.add(chunk)
+        self.assertAlmostEqual(tracker.quiet_seconds, 0.4)
+        tracker.add(speech)
+        self.assertEqual(tracker.quiet_seconds, 0.0)

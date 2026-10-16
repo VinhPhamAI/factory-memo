@@ -9,6 +9,15 @@ detection. Two ways to send audio:
 - `SpeechClient.astream` sends PCM16 frames over the
   `/v1/audio/transcriptions/realtime` WebSocket and yields partial (`delta`)
   and final (`completed`) events; finals are split into speaker turns.
+- `SpeechClient.atranscribe_segments` transcribes a long WAV in pieces cut at
+  pauses, and `SpeechClient.adiarize` labels speakers over a whole file
+  (`/v1/audio/diarizations`); `assign_speakers` joins the two.
+
+The streaming model keeps its context for a whole session, and after a pause it
+can stop emitting words for speech that follows (seen on Vietnamese speech: a
+segment missed inside a 2-minute session was recognized when sent alone). So
+long audio is recognized in short sessions or pieces, and speakers come from
+one diarization pass over the whole recording, which keeps labels consistent.
 
 Speaker numbers are the diarizer's 1-based session labels, not identities;
 words the diarizer did not tag keep `speaker=None` rather than a guessed label.
@@ -17,9 +26,13 @@ words the diarizer did not tag keep `speaker=None` rather than a guessed label.
 from __future__ import annotations
 
 import asyncio
+import bisect
+import io
 import json
+import math
 import os
 import wave
+from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +45,21 @@ from websockets.asyncio.client import connect
 
 REALTIME_PATH = "/v1/audio/transcriptions/realtime"
 TRANSCRIPTION_PATH = "/v1/audio/transcriptions"
+DIARIZATION_PATH = "/v1/audio/diarizations"
+# A frame is quiet when it is less than MARGIN above the noise floor and at
+# least BELOW_SPEECH under the loud level, or below an absolute level (digital
+# silence). The second condition keeps speech from counting as quiet when the
+# recent audio is all speech and the "floor" is the speech level itself.
+QUIET_MARGIN_DB = 10.0
+QUIET_BELOW_SPEECH_DB = 12.0
+QUIET_ABSOLUTE_DB = -55.0
+# File pieces are cut in pauses at least SEGMENT_PAUSE_S long. Neighbours split
+# by a pause shorter than JOIN_PAUSE_S are joined up to TARGET for context; a
+# longer pause always separates pieces. No piece exceeds MAX.
+SEGMENT_PAUSE_S = 0.5
+JOIN_PAUSE_S = 1.5
+SEGMENT_TARGET_S = 15.0
+SEGMENT_MAX_S = 30.0
 _EVENT_PREFIX = "conversation.item.input_audio_transcription."
 
 
@@ -115,6 +143,15 @@ class Utterance:
 
 
 @dataclass(frozen=True)
+class SpeakerSegment:
+    """A stretch of audio the diarizer gives to one speaker (1-based label)."""
+
+    start: float
+    end: float
+    speaker: int
+
+
+@dataclass(frozen=True)
 class TranscriptEvent:
     kind: Literal["delta", "completed"]
     text: str
@@ -152,6 +189,252 @@ def split_by_speaker(
         )
         for turn in turns
     ]
+
+
+def shift(utterance: Utterance, seconds: float) -> Utterance:
+    """The utterance with its own and its words' times moved by `seconds`."""
+
+    if not seconds:
+        return utterance
+    move = lambda value: None if value is None else round(value + seconds, 3)  # noqa: E731
+    return Utterance(
+        text=utterance.text,
+        speaker=utterance.speaker,
+        start=move(utterance.start),
+        end=move(utterance.end),
+        words=tuple(
+            Word(word.text, move(word.start), move(word.end), word.speaker, word.confidence)
+            for word in utterance.words
+        ),
+        language=utterance.language,
+    )
+
+
+def _speaker_at(
+    start: float, end: float, segments: Sequence[SpeakerSegment], starts: Sequence[float],
+    max_gap: float,
+) -> int | None:
+    """Speaker of the segment overlapping [start, end] most, else the nearest one."""
+
+    best, best_overlap, nearest, nearest_gap = None, 0.0, None, math.inf
+    # Segments are sorted by start and rarely overlap, so few need checking.
+    index = bisect.bisect_right(starts, end + max_gap)
+    for segment in segments[max(0, index - 50):index]:
+        overlap = min(end, segment.end) - max(start, segment.start)
+        if overlap > best_overlap:
+            best, best_overlap = segment.speaker, overlap
+        gap = max(segment.start - end, start - segment.end, 0.0)
+        if gap < nearest_gap:
+            nearest, nearest_gap = segment.speaker, gap
+    if best is not None:
+        return best
+    return nearest if nearest_gap <= max_gap else None
+
+
+def assign_speakers(
+    utterances: Sequence[Utterance], segments: Sequence[SpeakerSegment], *, max_gap: float = 1.0
+) -> list[Utterance]:
+    """Utterances relabelled from diarization segments over the same timeline.
+
+    Each word takes the speaker whose segment it overlaps most, or the nearest
+    segment within `max_gap` seconds; otherwise it stays unlabelled. Turns are
+    re-split where the speaker changes, and speakers are renumbered by first
+    appearance, so the first voice heard is 1 (A).
+    """
+
+    segments = sorted(segments, key=lambda segment: (segment.start, segment.end))
+    starts = [segment.start for segment in segments]
+    labelled: list[Utterance] = []
+    for utterance in utterances:
+        if utterance.words:
+            words = [
+                Word(word.text, word.start, word.end,
+                     _speaker_at(word.start, word.end, segments, starts, max_gap),
+                     word.confidence)
+                for word in utterance.words
+            ]
+            labelled.extend(split_by_speaker(words, utterance.text, language=utterance.language))
+        elif utterance.start is not None and utterance.end is not None:
+            speaker = _speaker_at(utterance.start, utterance.end, segments, starts, max_gap)
+            labelled.append(Utterance(utterance.text, speaker, utterance.start, utterance.end,
+                                      (), utterance.language))
+        else:
+            labelled.append(Utterance(utterance.text, None, utterance.start, utterance.end,
+                                      (), utterance.language))
+    order: dict[int, int] = {}
+    for utterance in labelled:
+        if utterance.speaker is not None and utterance.speaker not in order:
+            order[utterance.speaker] = len(order) + 1
+    renumber = lambda speaker: None if speaker is None else order[speaker]  # noqa: E731
+    return [
+        Utterance(
+            u.text, renumber(u.speaker), u.start, u.end,
+            tuple(Word(w.text, w.start, w.end, renumber(w.speaker), w.confidence) for w in u.words),
+            u.language,
+        )
+        for u in labelled
+    ]
+
+
+def _quiet(level: float, levels: Sequence[float]) -> bool:
+    floor, loud = np.percentile(levels, [10, 90])
+    return level < QUIET_ABSOLUTE_DB or (
+        level < floor + QUIET_MARGIN_DB and level < loud - QUIET_BELOW_SPEECH_DB
+    )
+
+
+def frame_db(chunk: bytes) -> float:
+    """RMS level of PCM16 audio in dBFS; -120 for empty or digital silence."""
+
+    samples = np.frombuffer(chunk[: len(chunk) - len(chunk) % 2], dtype="<i2")
+    if not samples.size:
+        return -120.0
+    rms = math.sqrt(float(np.mean(samples.astype(np.float64) ** 2)))
+    return 20 * math.log10(rms / 32768) if rms > 0 else -120.0
+
+
+class SilenceTracker:
+    """How long a PCM16 stream has been quiet, relative to its own noise floor.
+
+    Levels are compared with the last `window_s` seconds (10th percentile as
+    the floor, 90th as speech), so a noisy room is not taken for speech.
+    """
+
+    def __init__(self, sample_rate: int, window_s: float = 10.0) -> None:
+        self._rate = sample_rate
+        self._window = window_s
+        self._levels: deque[tuple[float, float]] = deque()
+        self._span = 0.0
+        self.quiet_seconds = 0.0
+
+    def add(self, chunk: bytes) -> None:
+        seconds = len(chunk) / 2 / self._rate
+        level = frame_db(chunk)
+        self._levels.append((level, seconds))
+        self._span += seconds
+        while self._span > self._window and len(self._levels) > 1:
+            self._span -= self._levels.popleft()[1]
+        if _quiet(level, [value for value, _ in self._levels]):
+            self.quiet_seconds += seconds
+        else:
+            self.quiet_seconds = 0.0
+
+
+def speech_pieces(
+    pcm: bytes, sample_rate: int, *, pause_s: float = SEGMENT_PAUSE_S,
+    join_pause_s: float = JOIN_PAUSE_S, target_s: float = SEGMENT_TARGET_S,
+    max_s: float = SEGMENT_MAX_S, frame_ms: int = 80,
+) -> list[tuple[int, int]]:
+    """Sample ranges to transcribe separately, cut in the middle of pauses.
+
+    A stretch longer than `max_s` without such a pause is cut at its quietest
+    frame in the last third. Stretches with no frame above the noise floor are
+    left out. Neighbours separated by a pause shorter than `join_pause_s` are
+    joined while the result stays within `target_s`.
+    """
+
+    frame = max(1, sample_rate * frame_ms // 1000)
+    samples = len(pcm) // 2
+    if not samples:
+        return []
+    levels = [frame_db(pcm[offset * 2:(offset + frame) * 2]) for offset in range(0, samples, frame)]
+    floor, loud = np.percentile(levels, [10, 90])
+    quiet = [
+        level < QUIET_ABSOLUTE_DB
+        or (level < floor + QUIET_MARGIN_DB and level < loud - QUIET_BELOW_SPEECH_DB)
+        for level in levels
+    ]
+    pause_frames = max(1, round(pause_s * 1000 / frame_ms))
+    max_frames = max(pause_frames * 2, round(max_s * 1000 / frame_ms))
+    # Each cut with the length (in frames) of the pause it was made in.
+    cuts, pauses, start, run = [0], [0], 0, 0
+    for index, is_quiet in enumerate(quiet):
+        run = run + 1 if is_quiet else 0
+        if run >= pause_frames and not _quiet_next(quiet, index):
+            cuts.append(index - run // 2)
+            pauses.append(run)
+            start, run = cuts[-1], 0
+        elif index - start >= max_frames:
+            window = range(start + (max_frames * 2) // 3, index)
+            cut = min(window, key=lambda i: levels[i]) if window else index
+            cuts.append(cut)
+            pauses.append(0)
+            start, run = cut, 0
+    if run >= pause_frames:
+        # Trailing silence: cut it off so it is not sent.
+        cuts.append(len(levels) - run // 2)
+        pauses.append(run)
+    cuts.append(len(levels))
+    join_frames = join_pause_s * 1000 / frame_ms
+    target = target_s * sample_rate
+    pieces: list[tuple[int, int]] = []
+    joinable = False
+    for first, last, pause in zip(cuts, cuts[1:], pauses):
+        # A dropped all-quiet stretch in between is a long pause.
+        joinable = joinable and pause < join_frames
+        if last <= first or all(quiet[first:last]):
+            joinable = False
+            continue
+        start, end = first * frame, min(samples, last * frame)
+        if pieces and joinable and end - pieces[-1][0] <= target:
+            pieces[-1] = (pieces[-1][0], end)
+        else:
+            pieces.append((start, end))
+        joinable = True
+    return pieces
+
+
+def _quiet_next(quiet: Sequence[bool], index: int) -> bool:
+    return index + 1 < len(quiet) and quiet[index + 1]
+
+
+def uncovered_speech(
+    utterances: Sequence[Utterance], segments: Sequence[SpeakerSegment], *,
+    min_s: float = 0.6, margin_s: float = 0.3, join_s: float = 0.5,
+) -> list[tuple[float, float]]:
+    """Stretches the diarizer heard as speech but no recognized word covers.
+
+    Words (or whole utterances without word times) cover their span plus
+    `margin_s`; stretches closer than `join_s` are joined, and those shorter
+    than `min_s` are ignored.
+    """
+
+    covered = sorted(
+        (word.start - margin_s, word.end + margin_s)
+        for utterance in utterances
+        for word in (utterance.words or (
+            [Word(utterance.text, utterance.start, utterance.end)]
+            if utterance.start is not None and utterance.end is not None else []
+        ))
+    )
+    gaps: list[tuple[float, float]] = []
+    for segment in sorted(segments, key=lambda item: item.start):
+        cursor = segment.start
+        for start, end in covered:
+            if end <= cursor or start >= segment.end:
+                continue
+            if start > cursor:
+                gaps.append((cursor, start))
+            cursor = max(cursor, end)
+        if cursor < segment.end:
+            gaps.append((cursor, segment.end))
+    joined: list[tuple[float, float]] = []
+    for start, end in sorted(gaps):
+        if joined and start - joined[-1][1] < join_s:
+            joined[-1] = (joined[-1][0], max(joined[-1][1], end))
+        else:
+            joined.append((start, end))
+    return [(round(a, 3), round(b, 3)) for a, b in joined if b - a >= min_s]
+
+
+def pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(sample_rate)
+        writer.writeframes(pcm)
+    return buffer.getvalue()
 
 
 # A speaker's turn ends at a pause this long, or once it spans this long, so a
@@ -305,6 +588,17 @@ class SpeechClient:
     async def aready(self) -> dict[str, Any]:
         return await self.aget("/ready")
 
+    async def _post_file(
+        self, path: str, name: str, content: bytes, data: dict[str, str]
+    ) -> dict[str, Any]:
+        async with httpx.AsyncClient(
+            base_url=self.settings.base_url, timeout=self.settings.timeout_seconds
+        ) as client:
+            response = await client.post(
+                path, data=data, files={"file": (name, content, "audio/wav")}
+            )
+        return self._json(response)
+
     async def atranscribe_file(
         self,
         path: str | Path,
@@ -312,22 +606,72 @@ class SpeechClient:
         language: str | None = None,
         diarization: bool = True,
     ) -> list[Utterance]:
+        """One request for the whole file; long files may lose speech after
+        pauses (see the module note), so prefer `atranscribe_segments`."""
+
         path = Path(path)
-        data = {
+        return await self._transcribe(path.name, path.read_bytes(), language, diarization)
+
+    async def _transcribe(
+        self, name: str, wav: bytes, language: str | None, diarization: bool
+    ) -> list[Utterance]:
+        payload = await self._post_file(TRANSCRIPTION_PATH, name, wav, {
             "response_format": "verbose_json",
             "language": language or self.settings.language,
             "diarization": "true" if diarization else "false",
-        }
-        async with httpx.AsyncClient(
-            base_url=self.settings.base_url, timeout=self.settings.timeout_seconds
-        ) as client:
-            with path.open("rb") as handle:
-                response = await client.post(
-                    TRANSCRIPTION_PATH,
-                    data=data,
-                    files={"file": (path.name, handle, "audio/wav")},
-                )
-        return parse_transcription(self._json(response))
+        })
+        return parse_transcription(payload)
+
+    async def atranscribe_segments(
+        self, path: str | Path, *, language: str | None = None
+    ) -> list[Utterance]:
+        """The file transcribed piece by piece (cut at pauses), without speakers.
+
+        Times are relative to the start of the file; label speakers with
+        `adiarize` + `assign_speakers`.
+        """
+
+        pcm, rate = read_wav_pcm16(path)
+        utterances: list[Utterance] = []
+        for first, last in speech_pieces(pcm, rate):
+            piece = pcm_to_wav(pcm[first * 2:last * 2], rate)
+            for utterance in await self._transcribe("piece.wav", piece, language, False):
+                if utterance.text:
+                    utterances.append(shift(utterance, first / rate))
+        return utterances
+
+    async def arecover(
+        self, path: str | Path, stretches: Sequence[tuple[float, float]], *,
+        language: str | None = None,
+    ) -> list[Utterance]:
+        """Transcribes each (start, end) stretch of the file on its own."""
+
+        pcm, rate = read_wav_pcm16(path)
+        recovered: list[Utterance] = []
+        for start, end in stretches:
+            first, last = max(0, int(start * rate)), min(len(pcm) // 2, int(end * rate))
+            if last <= first:
+                continue
+            piece = pcm_to_wav(pcm[first * 2:last * 2], rate)
+            for utterance in await self._transcribe("gap.wav", piece, language, False):
+                if utterance.text:
+                    recovered.append(shift(utterance, first / rate))
+        return recovered
+
+    async def adiarize(
+        self, wav: str | Path | bytes, *, mode: Literal["offline", "streaming"] = "offline"
+    ) -> list[SpeakerSegment]:
+        """Speaker segments over a whole recording (a WAV path or its bytes)."""
+
+        content = wav if isinstance(wav, bytes) else Path(wav).read_bytes()
+        payload = await self._post_file(DIARIZATION_PATH, "audio.wav", content, {"mode": mode})
+        try:
+            return [
+                SpeakerSegment(float(item["start"]), float(item["end"]), int(item["speaker"]))
+                for item in payload["segments"]
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SpeechServiceError(f"malformed diarization response: {payload!r}") from exc
 
     async def astream(
         self,
@@ -337,6 +681,7 @@ class SpeechClient:
         language: str | None = None,
         diarization: bool = True,
         endpointing_ms: int | None = None,
+        word_timestamps: bool | None = None,
     ) -> AsyncIterator[TranscriptEvent]:
         """Streams PCM16 mono audio and yields transcript events until commit.
 
@@ -352,7 +697,7 @@ class SpeechClient:
             "sample_rate": sample_rate,
             "language": language,
             "automatic_punctuation": True,
-            "word_timestamps": diarization,
+            "word_timestamps": diarization if word_timestamps is None else word_timestamps,
             "speaker_diarization": diarization,
             "endpointing_ms": endpointing_ms or self.settings.endpointing_ms,
         }

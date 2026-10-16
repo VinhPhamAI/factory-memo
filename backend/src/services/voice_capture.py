@@ -3,7 +3,13 @@
 A `RecordingSession` receives PCM16 mono frames from a microphone. Every
 frame is appended to a WAV file first, then forwarded to the realtime speech
 service, so the recording is complete even when recognition fails midway; in
-that case the finished file is transcribed in one request instead.
+that case the finished file is transcribed piece by piece instead.
+
+Recognition runs in short realtime sessions: after a final, the next quiet
+moment closes the session and a new one continues, because one long session
+can stop recognizing speech that follows a pause (see speech_processing).
+Speakers come from diarizing the WAV recorded so far, so letters stay the same
+across sessions; the stored transcript is labelled from the whole file.
 
 Turns are numbered T01, T02, ... and speakers lettered A, B, C, ... in the
 order the diarizer labels them. Letters name voices within one recording,
@@ -28,6 +34,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from backend.src.services.speech_processing import (
+    SilenceTracker,
+    SpeakerSegment,
+    assign_speakers,
+    shift,
+    uncovered_speech,
     SpeechClient,
     Utterance,
     format_transcript,
@@ -48,6 +59,15 @@ MIN_SAMPLE_RATE = 8_000
 MAX_SAMPLE_RATE = 96_000
 # Waiting for the speech service to finish the last utterance after stop.
 FINISH_TIMEOUT_SECONDS = 120.0
+# Quiet audio needed after a final before the realtime session is renewed; the
+# new session is primed with up to PRIME seconds of that quiet audio, because a
+# session starting right on speech can miss its first words.
+ROTATE_QUIET_SECONDS = 0.6
+PRIME_SECONDS = 0.5
+# Live speaker labels are refreshed at most this often, and less often for long
+# recordings (the WAV so far is re-sent each time).
+RELABEL_MIN_SECONDS = 4.0
+RELABEL_SHARE = 1 / 30
 _TURN_LINE_RE = re.compile(r"^\[(T\d+)\] (?:Speaker ([A-Z]+)|Unknown speaker): ?(.*)$")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 # "Anh Minh: text" — a short speaker name before a colon.
@@ -259,10 +279,16 @@ def text_turns(
 @dataclass
 class RecognitionOutcome:
     utterances: list[Utterance]
-    # "realtime": finals streamed while recording; "file": the whole WAV
-    # transcribed after stop because realtime recognition failed.
+    # "realtime": finals streamed while recording; "file": the WAV transcribed
+    # piece by piece after stop because realtime recognition failed.
     path: Literal["realtime", "file"]
     realtime_error: str | None = None
+    # Why speakers could not be labelled; the turns then have no letters.
+    diarization_error: str | None = None
+    # Realtime sessions used (renewed after finals).
+    sessions: int = 0
+    # Utterances added from speech the diarizer heard but recognition missed.
+    recovered: int = 0
 
     @property
     def transcript(self) -> str:
@@ -272,12 +298,61 @@ class RecognitionOutcome:
 EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 
 
+def _error_text(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"[:500]
+
+
+async def complete_and_label(
+    client: SpeechClient, wav: Path, utterances: list[Utterance], *,
+    language: str | None = None,
+) -> tuple[list[Utterance], str | None, int]:
+    """Diarizes the whole file, transcribes speech no utterance covers, and
+    labels speakers. Returns the utterances, the diarization error (turns then
+    have no letters) and how many utterances were recovered."""
+
+    try:
+        segments = await client.adiarize(wav)
+    except Exception as exc:
+        logger.warning("Diarization of %s failed", wav, exc_info=True)
+        return [Utterance(u.text, None, u.start, u.end, u.words, u.language)
+                for u in utterances], _error_text(exc), 0
+    recovered: list[Utterance] = []
+    try:
+        if gaps := uncovered_speech(utterances, segments):
+            recovered = await client.arecover(wav, gaps, language=language)
+            logger.info("Recovered %d utterances from %d missed stretches of %s",
+                        len(recovered), len(gaps), wav.name)
+    except Exception:
+        logger.warning("Recovering missed speech in %s failed", wav, exc_info=True)
+    merged = sorted([*utterances, *recovered], key=lambda u: (u.start is None, u.start or 0.0))
+    return assign_speakers(merged, segments), None, len(recovered)
+
+
+async def recognize_file(
+    client: SpeechClient, wav: Path, *, language: str | None = None
+) -> tuple[list[Utterance], str | None, int]:
+    """Whole-file recognition: pieces cut at pauses, missed speech recovered,
+    speakers from diarization."""
+
+    utterances = await client.atranscribe_segments(wav, language=language)
+    return await complete_and_label(client, wav, utterances, language=language)
+
+
+def turns_json(utterances: Sequence[Utterance]) -> list[dict[str, Any]]:
+    return [
+        {"id": turn.id, "speaker": turn.speaker, "text": turn.text, "start": turn.start,
+         "end": turn.end}
+        for turn in build_turns(utterances)
+    ]
+
+
 @dataclass
 class RecordingSession:
     """One microphone recording: WAV file plus realtime recognition.
 
-    `on_event` receives `partial` (text appended to the current utterance),
-    `final` (finished speaker turns) and `recognition_lost` events.
+    `on_event` receives `partial` (text appended to the utterance in progress),
+    `turns` (every turn so far, numbered as the stored transcript will be, with
+    speaker letters once diarization has seen them) and `recognition_lost`.
     """
 
     client: SpeechClient
@@ -285,10 +360,21 @@ class RecordingSession:
     on_event: EventSink
     language: str | None = None
     finish_timeout: float = FINISH_TIMEOUT_SECONDS
+    # Recognized utterances on the recording's timeline, without speakers.
     utterances: list[Utterance] = field(default_factory=list)
     realtime_error: str | None = None
+    sessions: int = 0
     _queue: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     _task: asyncio.Task[None] | None = None
+    _carry: bytes | None = None
+    # Quiet frames that ended the previous session; they open the next one.
+    _prime: list[bytes] = field(default_factory=list)
+    _ended: bool = False
+    _sent: int = 0
+    _segments: list[SpeakerSegment] = field(default_factory=list)
+    _relabel_task: asyncio.Task[None] | None = None
+    _relabel_wanted: bool = False
+    _relabelled_at: float = -1e9
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._recognize())
@@ -305,10 +391,11 @@ class RecordingSession:
             self._queue.put_nowait(kept)
 
     async def finish(self) -> RecognitionOutcome:
-        """Stops recording; returns every recognized utterance.
+        """Stops recording; returns every recognized utterance with speakers.
 
-        Realtime finals are used when the stream ended cleanly; otherwise the
-        saved WAV is transcribed as a whole, so no recorded speech is skipped.
+        Realtime finals are used when recognition ran to the end; otherwise the
+        saved WAV is transcribed piece by piece, so no recorded speech is
+        skipped. Speakers come from diarizing the complete file.
         """
 
         self._queue.put_nowait(None)
@@ -319,60 +406,151 @@ class RecordingSession:
                 self._task.cancel()
                 await asyncio.gather(self._task, return_exceptions=True)
                 self.realtime_error = "timed out waiting for the last utterance"
+        await self._stop_relabel()
         self.recorder.close()
         if self.realtime_error is None:
-            return RecognitionOutcome(list(self.utterances), "realtime")
-        logger.warning(
-            "Realtime recognition failed (%s); transcribing %s",
-            self.realtime_error, self.recorder.path,
+            utterances, path = list(self.utterances), "realtime"
+        else:
+            logger.warning(
+                "Realtime recognition failed (%s); transcribing %s",
+                self.realtime_error, self.recorder.path,
+            )
+            utterances = await self.client.atranscribe_segments(
+                self.recorder.path, language=self.language
+            )
+            path = "file"
+        labelled, diarization_error, recovered = await complete_and_label(
+            self.client, self.recorder.path, utterances, language=self.language
         )
-        utterances = await self.client.atranscribe_file(
-            self.recorder.path, language=self.language
+        return RecognitionOutcome(
+            labelled, path, self.realtime_error, diarization_error, self.sessions, recovered
         )
-        return RecognitionOutcome(utterances, "file", self.realtime_error)
 
     async def abort(self) -> None:
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
+        for task in (self._task, self._relabel_task):
+            if task is not None and not task.done():
+                task.cancel()
+                # Do not let a stuck speech connection hold the recording open.
+                await asyncio.wait({task}, timeout=2.0)
         self.recorder.close()
 
-    async def _frames(self) -> AsyncIterator[bytes]:
-        while (chunk := await self._queue.get()) is not None:
+    async def _next_frame(self) -> bytes | None:
+        chunk, self._carry = self._carry, None
+        if chunk is None:
+            chunk = await self._queue.get()
+        if chunk is None:
+            self._ended = True
+        return chunk
+
+    async def _frames(self, renew: Callable[[], bool]) -> AsyncIterator[bytes]:
+        """Frames for one realtime session; ends at stop, or at a quiet moment
+        once `renew()` says the session has given a final."""
+
+        rate = self.recorder.sample_rate
+        silence = SilenceTracker(rate)
+        prime, self._prime = self._prime, []
+        for chunk in prime:
+            silence.add(chunk)
+            yield chunk
+        tail: list[bytes] = []
+        while (chunk := await self._next_frame()) is not None:
+            if renew() and silence.quiet_seconds >= ROTATE_QUIET_SECONDS:
+                # The next session starts with this frame, after the quiet tail.
+                self._carry = chunk
+                self._prime = tail
+                return
+            silence.add(chunk)
+            if silence.quiet_seconds:
+                tail.append(chunk)
+                while sum(len(c) for c in tail) / 2 / rate > PRIME_SECONDS and len(tail) > 1:
+                    tail.pop(0)
+            else:
+                tail = []
+            self._sent += len(chunk) // 2
             yield chunk
 
     async def _recognize(self) -> None:
+        rate = self.recorder.sample_rate
         try:
-            async for event in self.client.astream(
-                self._frames(), sample_rate=self.recorder.sample_rate, language=self.language
-            ):
-                if event.kind == "delta":
-                    if event.text:
-                        await self.on_event({"type": "partial", "text": event.text})
-                    continue
-                turns = [utterance for utterance in event.utterances if utterance.text]
-                self.utterances.extend(turns)
-                await self.on_event({
-                    "type": "final",
-                    "turns": [
-                        {
-                            "speaker": speaker_label(turn.speaker),
-                            "text": turn.text,
-                            "start": turn.start,
-                            "end": turn.end,
-                        }
-                        for turn in turns
-                    ],
-                })
+            while True:
+                # Open a session only when there is audio for it.
+                first = await self._next_frame()
+                if first is None:
+                    break
+                self._carry = first
+                # Session time 0 is the start of its priming audio.
+                offset = (self._sent - sum(len(c) for c in self._prime) // 2) / rate
+                finals: list[Utterance] = []
+                self.sessions += 1
+                logger.debug("Realtime session %d starts at %.2fs", self.sessions, offset)
+                async for event in self.client.astream(
+                    self._frames(lambda: bool(finals)), sample_rate=rate,
+                    language=self.language, diarization=False, word_timestamps=True,
+                ):
+                    if event.kind == "delta":
+                        if event.text:
+                            await self.on_event({"type": "partial", "text": event.text})
+                        continue
+                    new = [shift(u, offset) for u in event.utterances if u.text]
+                    logger.debug("Final at %.2fs: %r", offset + (event.audio_processed or 0),
+                                 event.text)
+                    if new:
+                        finals.extend(new)
+                        self.utterances.extend(new)
+                        await self._publish()
+                        self._schedule_relabel()
+                if self._ended:
+                    break
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.realtime_error = f"{type(exc).__name__}: {exc}"[:500]
+            self.realtime_error = _error_text(exc)
             logger.warning("Realtime recognition stopped", exc_info=True)
             # Frames keep going to the WAV file; drop the ones queued for ASR.
+            self._carry = None
             while not self._queue.empty():
                 self._queue.get_nowait()
             try:
                 await self.on_event({"type": "recognition_lost"})
             except Exception:
                 logger.debug("Could not report lost recognition", exc_info=True)
+
+    # ------------------------------------------------------- live speakers
+
+    async def _publish(self) -> None:
+        utterances = (
+            assign_speakers(self.utterances, self._segments) if self._segments
+            else self.utterances
+        )
+        await self.on_event({"type": "turns", "turns": turns_json(utterances)})
+
+    def _schedule_relabel(self) -> None:
+        self._relabel_wanted = True
+        if self._relabel_task is None or self._relabel_task.done():
+            self._relabel_task = asyncio.create_task(self._relabel())
+
+    async def _relabel(self) -> None:
+        """Diarizes the WAV so far after new finals, at a bounded rate."""
+
+        loop = asyncio.get_running_loop()
+        while self._relabel_wanted:
+            self._relabel_wanted = False
+            interval = max(RELABEL_MIN_SECONDS, self.recorder.duration_seconds * RELABEL_SHARE)
+            wait = self._relabelled_at + interval - loop.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._relabelled_at = loop.time()
+            try:
+                # Read in the event loop, between writes, so the header matches the data.
+                self._segments = await self.client.adiarize(self.recorder.path.read_bytes())
+                await self._publish()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Live letters are a preview; the saved transcript is diarized again.
+                logger.debug("Live diarization failed", exc_info=True)
+
+    async def _stop_relabel(self) -> None:
+        if self._relabel_task is not None and not self._relabel_task.done():
+            self._relabel_task.cancel()
+            await asyncio.gather(self._relabel_task, return_exceptions=True)

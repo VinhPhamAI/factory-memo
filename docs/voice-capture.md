@@ -84,8 +84,15 @@ can be retried from the review page.
 ## Recognition and loss handling
 
 - Every frame is written to the WAV file before it is sent to the speech service.
-- Realtime finals become the transcript. If realtime recognition fails or times
-  out, recording continues and the finished WAV is transcribed in one request
+- One long realtime session can stop recognizing speech after a pause, so a new
+  session starts in the first 0.6 s of quiet after each final (primed with that
+  quiet audio). Realtime finals become the transcript.
+- On stop the whole WAV is diarized once; speech the diarizer heard but no word
+  covers is transcribed on its own and inserted (`asr.recovered_utterances`),
+  and speaker letters come from that pass, so they stay consistent. During
+  recording the live letters come from diarizing the audio so far.
+- If realtime recognition fails or times out, recording continues and the
+  finished WAV is transcribed piece by piece, cut at pauses
   (`asr.recognition = "file"`).
 - If the browser loses the socket, it keeps recording locally; on Stop it uploads
   the whole WAV (`POST /v1/voice/{kb}/recordings`). A failed save offers a

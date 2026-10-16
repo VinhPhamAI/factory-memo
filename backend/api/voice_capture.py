@@ -61,6 +61,7 @@ from backend.src.services.voice_capture import (
     build_turns,
     format_turns,
     parse_transcript,
+    recognize_file,
     speaker_letters,
     text_turns,
     unique_path,
@@ -243,6 +244,9 @@ class VoiceCaptureService:
             "audio": recorder.path.name,
             "recognition": outcome.path,
             "realtime_error": outcome.realtime_error,
+            "realtime_sessions": outcome.sessions,
+            "diarization_error": outcome.diarization_error,
+            "recovered_utterances": outcome.recovered,
             "utterances": [utterance.to_json() for utterance in outcome.utterances],
         }, ensure_ascii=False, indent=1), encoding="utf-8")
         metadata = {
@@ -263,10 +267,16 @@ class VoiceCaptureService:
             "asr": {
                 "service": "nemo-speech.cpp",
                 "language": language,
-                "diarization": True,
+                # Speakers come from one diarization pass over the whole file.
+                "diarization": "file" if outcome.diarization_error is None else "failed",
                 "endpointing_ms": endpointing_ms,
                 "recognition": outcome.path,
+                **({"realtime_sessions": outcome.sessions} if outcome.sessions else {}),
+                # Speech the diarizer heard that recognition missed, transcribed alone.
+                **({"recovered_utterances": outcome.recovered} if outcome.recovered else {}),
                 **({"realtime_error": outcome.realtime_error} if outcome.realtime_error else {}),
+                **({"diarization_error": outcome.diarization_error}
+                   if outcome.diarization_error else {}),
             },
             # Letters name voices in this recording; reviewers may add names.
             "speakers": {letter: {"name": None} for letter in speaker_letters(turns)},
@@ -722,10 +732,12 @@ async def upload_recording(
         raise HTTPException(422, str(exc))
     client = service.speech_client()
     try:
-        utterances = await client.atranscribe_file(path)
+        utterances, diarization_error, recovered = await recognize_file(client, path)
         conversation_id = await service.save_recording(
             kb, name=name, recorded_at=started, recorder=recorder,
-            outcome=RecognitionOutcome(utterances, "file"), clean=clean,
+            outcome=RecognitionOutcome(utterances, "file", diarization_error=diarization_error,
+                                       recovered=recovered),
+            clean=clean,
             capture_mode="upload", language=client.settings.language,
             endpointing_ms=client.settings.endpointing_ms,
         )
@@ -782,7 +794,7 @@ class StartMessage(BaseModel):
 async def record(websocket: WebSocket, kb: str) -> None:
     """Live recording. Client: {"type":"start",...}, PCM16 binary frames, {"type":"stop"}.
 
-    Server: ready, partial, final, recognition_lost, saving, saved, error.
+    Server: ready, partial, turns, recognition_lost, saving, saved, error.
     """
 
     service = _service(websocket)

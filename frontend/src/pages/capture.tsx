@@ -633,7 +633,10 @@ function LiveTurnRow({ turn }: { turn: LiveTurn }) {
       <SpeakerBadge label={turn.speaker} compact />
       <div className="vc-turn-body">
         <span className="vc-turn-meta">
-          Người nói {turn.speaker ?? "?"} · {clock(turn.start)}
+          {turn.speaker
+            ? `Người nói ${turn.speaker}`
+            : "Đang nhận diện người nói"}{" "}
+          · {clock(turn.start)}
         </span>
         <p>{turn.text}</p>
       </div>

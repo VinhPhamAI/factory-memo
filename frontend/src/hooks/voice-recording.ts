@@ -9,6 +9,7 @@ import { recordSocketUrl, uploadRecording } from "@/services/voice-api";
 export interface LiveTurn {
   /** Same T01, T02 … numbering the server gives the saved transcript. */
   id: string;
+  /** Null until diarization has labelled this stretch of audio. */
   speaker: string | null;
   text: string;
   start: number | null;
@@ -24,15 +25,8 @@ export interface LiveTranscript {
 export type ServerEvent =
   | { type: "ready"; audio_file: string }
   | { type: "partial"; text: string }
-  | {
-      type: "final";
-      turns: {
-        speaker: string | null;
-        text: string;
-        start: number | null;
-        end: number | null;
-      }[];
-    }
+  /** Every turn so far; speakers may be relabelled as more audio is diarized. */
+  | { type: "turns"; turns: LiveTurn[] }
   | { type: "recognition_lost" }
   | { type: "saving" }
   | { type: "saved"; conversation_id: string }
@@ -45,62 +39,19 @@ export type ServerEvent =
 
 export const emptyTranscript: LiveTranscript = { turns: [], partial: "" };
 
-const turnId = (index: number) => `T${String(index + 1).padStart(2, "0")}`;
-
-// Same turn rule as the server's merge_turns: a turn ends at a 2 s pause or
-// once it spans 30 s, so turn ids match the saved transcript.
-const TURN_PAUSE_S = 2;
-const TURN_MAX_S = 30;
-
-function continues(
-  last: LiveTurn,
-  turn: { speaker: string | null; start: number | null; end: number | null },
-) {
-  if (last.speaker !== turn.speaker) return false;
-  if (
-    turn.start !== null &&
-    last.end !== null &&
-    turn.start - last.end >= TURN_PAUSE_S
-  )
-    return false;
-  if (
-    turn.end !== null &&
-    last.start !== null &&
-    turn.end - last.start > TURN_MAX_S
-  )
-    return false;
-  return true;
-}
-
-/** Adds recognized text; one speaker's finals join into turns as on the server. */
+/** The server sends whole turn lists, so the live view matches the saved ids. */
 export function applyTranscriptEvent(
   state: LiveTranscript,
   event: ServerEvent,
 ): LiveTranscript {
   if (event.type === "partial")
     return { ...state, partial: state.partial + event.text };
-  if (event.type !== "final") return state;
-  const turns = [...state.turns];
-  for (const turn of event.turns) {
-    const text = turn.text.trim();
-    if (!text) continue;
-    const last = turns.at(-1);
-    if (last && continues(last, turn))
-      turns[turns.length - 1] = {
-        ...last,
-        text: `${last.text} ${text}`,
-        end: turn.end ?? last.end,
-      };
-    else
-      turns.push({
-        id: turnId(turns.length),
-        speaker: turn.speaker,
-        text,
-        start: turn.start,
-        end: turn.end,
-      });
-  }
-  return { turns, partial: "" };
+  if (event.type !== "turns") return state;
+  // Later lists only add text, so a partial ends once a list grows.
+  const grew =
+    event.turns.map((turn) => turn.text).join(" ").length >
+    state.turns.map((turn) => turn.text).join(" ").length;
+  return { turns: event.turns, partial: grew ? "" : state.partial };
 }
 
 const SERVER_ERRORS: Record<string, string> = {
@@ -293,7 +244,7 @@ export function useVoiceRecording(onSaved: (conversationId: string) => void) {
           current.ready = true;
           clearTimeout(timer);
           resolve();
-        } else if (event.type === "partial" || event.type === "final")
+        } else if (event.type === "partial" || event.type === "turns")
           setTranscript((state) => applyTranscriptEvent(state, event));
         else if (event.type === "recognition_lost") setRecognitionLost(true);
         else if (event.type === "saving")

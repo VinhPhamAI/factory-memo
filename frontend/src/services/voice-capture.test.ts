@@ -36,60 +36,28 @@ const record = (context: Record<string, unknown>, claim = "Kiểm tra độ rơ.
   }) satisfies VoiceRecord;
 
 describe("live transcript", () => {
-  it("numbers turns like the server and merges one speaker's finals", () => {
+  it("shows the server's turns and keeps the partial until text is added", () => {
     let state = applyTranscriptEvent(emptyTranscript, {
       type: "partial",
       text: "Trục",
     });
     state = applyTranscriptEvent(state, { type: "partial", text: " Z" });
     expect(state.partial).toBe("Trục Z");
-    state = applyTranscriptEvent(state, {
-      type: "final",
-      turns: [
-        { speaker: "A", text: "Trục Z kêu rè.", start: 0.5, end: 2 },
-        { speaker: "B", text: "Từ khi nào?", start: 2.2, end: 3 },
-      ],
-    });
-    state = applyTranscriptEvent(state, {
-      type: "final",
-      turns: [
-        { speaker: "B", text: "Sau ca đêm?", start: 3.5, end: 4 },
-        { speaker: "A", text: " ", start: 5, end: 5 },
-      ],
-    });
-    expect(state.partial).toBe("");
-    expect(state.turns).toEqual([
-      { id: "T01", speaker: "A", text: "Trục Z kêu rè.", start: 0.5, end: 2 },
-      {
-        id: "T02",
-        speaker: "B",
-        text: "Từ khi nào? Sau ca đêm?",
-        start: 2.2,
-        end: 4,
-      },
-    ]);
-  });
+    const first = {
+      id: "T01",
+      speaker: null,
+      text: "Trục Z kêu rè.",
+      start: 0.5,
+      end: 2,
+    };
+    state = applyTranscriptEvent(state, { type: "turns", turns: [first] });
+    expect(state).toEqual({ turns: [first], partial: "" });
 
-  it("starts a new turn after a long pause or a long monologue", () => {
-    const final = (start: number, end: number) =>
-      ({
-        type: "final",
-        turns: [{ speaker: "A", text: `câu ${start}`, start, end }],
-      }) as const;
-    let state = emptyTranscript;
-    for (const [start, end] of [
-      [0, 5],
-      [5.8, 12],
-      [15, 20],
-      [20.5, 40],
-      [40.5, 52],
-    ])
-      state = applyTranscriptEvent(state, final(start, end));
-    expect(state.turns.map((turn) => [turn.id, turn.text])).toEqual([
-      ["T01", "câu 0 câu 5.8"],
-      ["T02", "câu 15 câu 20.5"],
-      ["T03", "câu 40.5"],
-    ]);
+    state = applyTranscriptEvent(state, { type: "partial", text: "Từ" });
+    // Diarization relabels the same text: the partial stays.
+    const labelled = { ...first, speaker: "A" };
+    state = applyTranscriptEvent(state, { type: "turns", turns: [labelled] });
+    expect(state).toEqual({ turns: [labelled], partial: "Từ" });
   });
 
   it("explains server errors and where the audio was kept", () => {
