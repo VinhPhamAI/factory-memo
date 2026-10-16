@@ -4,17 +4,23 @@ import {
   AlertTriangle,
   ChevronRight,
   Download,
+  FileText,
+  Keyboard,
   Loader2,
   Mic,
   RotateCcw,
+  Sparkles,
   Square,
   WifiOff,
 } from "lucide-react";
 import type { KnowledgeBase } from "@/types";
 import { useVoiceRecording, type LiveTurn } from "@/hooks/voice-recording";
 import {
+  addText,
   listCaptureKnowledgeBases,
   listConversations,
+  MAX_TEXT_CHARS,
+  typedTextProblem,
   type VoiceConversationSummary,
 } from "@/services/voice-api";
 import {
@@ -30,26 +36,41 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { CreateKnowledgeBaseDialog } from "@/components/voice/create-kb-dialog";
 import { LevelMeter, SpeakerBadge } from "@/components/voice/speaker-badge";
 import { cn } from "@/utils/cn";
 
 const KB_KEY = "voice-capture:kb";
 const CLEAN_KEY = "voice-capture:clean";
+const MODE_KEY = "voice-capture:mode";
+// Unsaved typed text survives navigating away within this tab.
+const DRAFT_KEY = "voice-capture:draft";
 
-function readSetting(key: string) {
+type Mode = "voice" | "text";
+
+// Select value of the "create a knowledge base" entry; not a valid KB id.
+const NEW_KB = "+new";
+
+function readSetting(key: string, storage = () => localStorage) {
   try {
-    return localStorage.getItem(key);
+    return storage().getItem(key);
   } catch {
     return null;
   }
 }
-function writeSetting(key: string, value: string) {
+function writeSetting(
+  key: string,
+  value: string,
+  storage = () => localStorage,
+) {
   try {
-    localStorage.setItem(key, value);
+    if (value) storage().setItem(key, value);
+    else storage().removeItem(key);
   } catch {
     // Settings are a convenience; private windows may refuse storage.
   }
 }
+const session = () => sessionStorage;
 
 export function CapturePage() {
   const navigate = useNavigate();
@@ -59,8 +80,16 @@ export function CapturePage() {
   );
   const [kbReload, setKbReload] = useState(0);
   const [kb, setKb] = useState(() => readSetting(KB_KEY) ?? "");
+  const [creatingKb, setCreatingKb] = useState(false);
   const [name, setName] = useState(() => defaultConversationName());
   const [clean, setClean] = useState(() => readSetting(CLEAN_KEY) !== "false");
+  const [mode, setMode] = useState<Mode>(() =>
+    readSetting(MODE_KEY) === "text" ? "text" : "voice",
+  );
+  const [text, setText] = useState(() => readSetting(DRAFT_KEY, session) ?? "");
+  const [dialogue, setDialogue] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [textError, setTextError] = useState("");
   // Set just before navigating to the saved conversation, which the blocker allows.
   const saved = useRef(false);
   const recording = useVoiceRecording((id) => {
@@ -103,6 +132,8 @@ export function CapturePage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [live]);
 
+  useEffect(() => writeSetting(DRAFT_KEY, text, session), [text]);
+
   const trimmedName = name.trim();
   const canStart =
     kbState === "ready" &&
@@ -110,11 +141,33 @@ export function CapturePage() {
     !!trimmedName &&
     recording.phase !== "starting";
 
+  function chooseMode(next: Mode) {
+    setMode(next);
+    writeSetting(MODE_KEY, next);
+  }
+
   function start() {
     if (!canStart) return;
     writeSetting(KB_KEY, kb);
     writeSetting(CLEAN_KEY, String(clean));
     void recording.start({ kb, name: trimmedName, clean });
+  }
+
+  async function saveText() {
+    if (!canStart || sending) return;
+    const problem = typedTextProblem(text, dialogue);
+    setTextError(problem);
+    if (problem) return;
+    writeSetting(KB_KEY, kb);
+    setSending(true);
+    try {
+      const id = await addText(kb, { name: trimmedName, text, dialogue });
+      writeSetting(DRAFT_KEY, "", session);
+      void navigate(`/capture/${encodeURIComponent(kb)}/${id}`);
+    } catch (reason) {
+      setTextError(reason instanceof Error ? reason.message : String(reason));
+      setSending(false);
+    }
   }
 
   if (recording.phase === "recording" || recording.phase === "saving")
@@ -142,10 +195,10 @@ export function CapturePage() {
     <main className="vc-page">
       <div className="vc-start">
         <header className="vc-heading">
-          <h1>Ghi âm hội thoại</h1>
+          <h1>Ghi lại hội thoại</h1>
           <p>
-            Ghi lại trao đổi tại hiện trường. Khi bạn bấm <strong>Dừng</strong>,
-            bản ghi được lưu và AI trích xuất tri thức để bạn duyệt.
+            Ghi âm trao đổi tại hiện trường, hoặc dán nội dung đã có. Sau khi
+            lưu, AI trích xuất tri thức để bạn duyệt.
           </p>
         </header>
 
@@ -153,9 +206,35 @@ export function CapturePage() {
           className="vc-start-card"
           onSubmit={(event) => {
             event.preventDefault();
-            start();
+            if (mode === "voice") start();
+            else void saveText();
           }}
         >
+          <div className="vc-mode" role="radiogroup" aria-label="Cách ghi lại">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={mode === "voice"}
+              disabled={recording.phase === "starting" || sending}
+              onClick={() => chooseMode("voice")}
+              data-testid="mode-voice"
+            >
+              <Mic />
+              Ghi âm
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={mode === "text"}
+              disabled={recording.phase === "starting" || sending}
+              onClick={() => chooseMode("text")}
+              data-testid="mode-text"
+            >
+              <Keyboard />
+              Nhập văn bản
+            </button>
+          </div>
+
           <label className="vc-field">
             <span>Tên cuộc hội thoại</span>
             <input
@@ -165,7 +244,9 @@ export function CapturePage() {
               placeholder="VD: Lỗi rung trục Z máy AX167"
               data-testid="capture-name"
             />
-            <small>Tên này cũng được dùng để đặt tên file âm thanh.</small>
+            {mode === "voice" && (
+              <small>Tên này cũng được dùng để đặt tên file âm thanh.</small>
+            )}
           </label>
 
           <label className="vc-field">
@@ -182,68 +263,207 @@ export function CapturePage() {
                 </button>
               </span>
             ) : (
-              <select
-                value={kb}
-                disabled={kbState !== "ready" || !knowledgeBases.length}
-                onChange={(event) => setKb(event.target.value)}
-                data-testid="capture-kb"
-              >
-                {kbState === "loading" && <option>Đang tải…</option>}
-                {knowledgeBases.map((item) => (
-                  <option key={item.name} value={item.name}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  value={kb}
+                  disabled={kbState !== "ready" || sending}
+                  onChange={(event) => {
+                    if (event.target.value === NEW_KB) setCreatingKb(true);
+                    else setKb(event.target.value);
+                  }}
+                  data-testid="capture-kb"
+                >
+                  {kbState === "loading" && <option>Đang tải…</option>}
+                  {kbState === "ready" && !knowledgeBases.length && (
+                    <option value="">Chưa có knowledge base</option>
+                  )}
+                  {knowledgeBases.map((item) => (
+                    <option key={item.name} value={item.name}>
+                      {item.title || item.name}
+                    </option>
+                  ))}
+                  {kbState === "ready" && (
+                    <option value={NEW_KB}>＋ Tạo knowledge base mới…</option>
+                  )}
+                </select>
+                {kbState === "ready" && kb && (
+                  <small data-testid="capture-kb-info">
+                    {knowledgeBases.find((item) => item.name === kb)
+                      ?.description || `Database kb_${kb}.`}
+                  </small>
+                )}
+              </>
             )}
           </label>
 
-          <label className="vc-toggle">
-            <input
-              type="checkbox"
-              role="switch"
-              checked={clean}
-              onChange={(event) => setClean(event.target.checked)}
-              data-testid="capture-clean"
+          {mode === "text" ? (
+            <TextFields
+              text={text}
+              dialogue={dialogue}
+              disabled={sending}
+              onText={(value) => {
+                setText(value);
+                if (textError) setTextError("");
+              }}
+              onDialogue={(value) => {
+                setDialogue(value);
+                setTextError("");
+              }}
             />
-            <span className="vc-toggle-track" aria-hidden="true" />
-            <span className="vc-toggle-text">
-              <strong>Làm sạch transcript bằng AI</strong>
-              <small>
-                Bỏ từ đệm, câu lặp để dễ đọc. Bản gốc vẫn được giữ và là căn cứ
-                để trích xuất tri thức.
-              </small>
-            </span>
-          </label>
-
-          {recording.phase === "failed" && (
-            <FailureNotice recording={recording} />
+          ) : (
+            <label className="vc-toggle">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={clean}
+                onChange={(event) => setClean(event.target.checked)}
+                data-testid="capture-clean"
+              />
+              <span className="vc-toggle-track" aria-hidden="true" />
+              <span className="vc-toggle-text">
+                <strong>Làm sạch transcript bằng AI</strong>
+                <small>
+                  Bỏ từ đệm, câu lặp để dễ đọc. Bản gốc vẫn được giữ và là căn
+                  cứ để trích xuất tri thức.
+                </small>
+              </span>
+            </label>
           )}
 
-          <Button
-            type="submit"
-            size="lg"
-            className="vc-start-button"
-            disabled={!canStart}
-            data-testid="capture-start"
-          >
-            {recording.phase === "starting" ? (
-              <>
-                <Loader2 className="animate-spin" />
-                Đang mở micro…
-              </>
-            ) : (
-              <>
-                <Mic />
-                Bắt đầu ghi âm
-              </>
-            )}
-          </Button>
+          {mode === "voice" && recording.phase === "failed" && (
+            <FailureNotice recording={recording} />
+          )}
+          {mode === "text" && textError && (
+            <div
+              className="vc-notice error"
+              role="alert"
+              data-testid="text-error"
+            >
+              <AlertTriangle size={18} />
+              <p>{textError}</p>
+            </div>
+          )}
+
+          {mode === "text" ? (
+            <Button
+              type="submit"
+              size="lg"
+              className="vc-start-button"
+              disabled={!canStart || sending}
+              data-testid="text-save"
+            >
+              {sending ? (
+                <>
+                  <Loader2 className="animate-spin" />
+                  Đang lưu…
+                </>
+              ) : (
+                <>
+                  <Sparkles />
+                  Lưu và trích xuất tri thức
+                </>
+              )}
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              size="lg"
+              className="vc-start-button"
+              disabled={!canStart}
+              data-testid="capture-start"
+            >
+              {recording.phase === "starting" ? (
+                <>
+                  <Loader2 className="animate-spin" />
+                  Đang mở micro…
+                </>
+              ) : (
+                <>
+                  <Mic />
+                  Bắt đầu ghi âm
+                </>
+              )}
+            </Button>
+          )}
         </form>
 
         {kb && kbState === "ready" && <RecentConversations kb={kb} />}
+
+        <CreateKnowledgeBaseDialog
+          open={creatingKb}
+          taken={knowledgeBases.map((item) => item.name)}
+          onClose={() => setCreatingKb(false)}
+          onCreated={(created) => {
+            setKnowledgeBases((items) => [...items, created]);
+            setKb(created.name);
+            writeSetting(KB_KEY, created.name);
+            setCreatingKb(false);
+          }}
+        />
       </div>
     </main>
+  );
+}
+
+function TextFields({
+  text,
+  dialogue,
+  disabled,
+  onText,
+  onDialogue,
+}: {
+  text: string;
+  dialogue: boolean;
+  disabled: boolean;
+  onText(value: string): void;
+  onDialogue(value: boolean): void;
+}) {
+  return (
+    <>
+      <label className="vc-field">
+        <span>Nội dung</span>
+        <textarea
+          value={text}
+          rows={10}
+          maxLength={MAX_TEXT_CHARS}
+          disabled={disabled}
+          onChange={(event) => onText(event.target.value)}
+          placeholder={
+            dialogue
+              ? "Anh Minh: Trục Z kêu rè từ sáng.\nChị Lan: Đã kiểm tra độ rơ chưa?\nAnh Minh: Chưa, để ca sau kiểm tra."
+              : "Dán biên bản, ghi chú hoặc lời kể của chuyên gia…"
+          }
+          data-testid="capture-text"
+        />
+        <small className="vc-field-foot">
+          <span>
+            {dialogue
+              ? "Mỗi dòng “Tên: nội dung” là một lượt nói. Dòng không có tên được nối vào lượt phía trên."
+              : "Lưu nguyên văn, xem như lời của một người. Mỗi đoạn (cách nhau bằng dòng trống) là một lượt để trích dẫn."}
+          </span>
+          <span>{text.length.toLocaleString("vi-VN")} ký tự</span>
+        </small>
+      </label>
+
+      <label className="vc-toggle">
+        <input
+          type="checkbox"
+          role="switch"
+          checked={dialogue}
+          disabled={disabled}
+          onChange={(event) => onDialogue(event.target.checked)}
+          data-testid="text-dialogue"
+        />
+        <span className="vc-toggle-track" aria-hidden="true" />
+        <span className="vc-toggle-text">
+          <strong>Hội thoại nhiều người</strong>
+          <small>
+            Người nói được gán chữ cái A, B, C… theo thứ tự xuất hiện; tên bạn
+            gõ được giữ để hiển thị và có thể sửa sau.
+          </small>
+        </span>
+      </label>
+    </>
   );
 }
 
@@ -491,7 +711,7 @@ function RecentConversations({ kb }: { kb: string }) {
 
   return (
     <section className="vc-recent" aria-labelledby="vc-recent-title">
-      <h2 id="vc-recent-title">Hội thoại đã ghi</h2>
+      <h2 id="vc-recent-title">Hội thoại đã lưu</h2>
       {error && <p className="vc-inline-error">{error}</p>}
       {!items && !error && <p className="vc-muted">Đang tải…</p>}
       {items && !items.length && (
@@ -512,10 +732,20 @@ function RecentConversations({ kb }: { kb: string }) {
                   to={`/capture/${encodeURIComponent(kb)}/${item.id}`}
                   data-testid="recent-conversation"
                 >
-                  <span className="vc-recent-name">{item.name}</span>
+                  <span className="vc-recent-name">
+                    {item.source === "text" ? (
+                      <FileText size={15} aria-label="Văn bản" />
+                    ) : (
+                      <Mic size={15} aria-label="Ghi âm" />
+                    )}
+                    <span>{item.name}</span>
+                  </span>
                   <span className="vc-recent-meta">
-                    {dateTime(item.recorded_at)} · {clock(item.duration_s)} ·{" "}
-                    {item.speakers} người nói
+                    {dateTime(item.recorded_at)} ·{" "}
+                    {item.source === "text"
+                      ? "Văn bản"
+                      : clock(item.duration_s)}{" "}
+                    · {item.speakers} người nói
                   </span>
                   <span className="vc-recent-state">
                     {JOB_LABELS[job] ? (

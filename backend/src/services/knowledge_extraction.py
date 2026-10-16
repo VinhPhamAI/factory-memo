@@ -86,6 +86,18 @@ def scope_context(scope: BaseModel | None) -> dict[str, Any]:
     return {key: value for key, value in scope.model_dump().items() if value is not None}
 
 
+def _with_rejection(prompt: str, error: Exception | None) -> str:
+    """The prompt again, followed by why the previous response was rejected."""
+
+    if error is None:
+        return prompt
+    return (
+        f"{prompt}\n\n## Rejected response (application note, not part of the conversation)\n\n"
+        f"Your previous response was rejected: {error}\n"
+        "Return the complete corrected JSON for the same conversation."
+    )
+
+
 class SupportsInvoke(Protocol):
     """Small client interface used to keep the service easy to unit test."""
 
@@ -96,6 +108,10 @@ class KnowledgeExtractionError(LLMResponseError):
     """Raised when the LLM response cannot be parsed or validated."""
 
 
+class KnowledgeValidationError(KnowledgeExtractionError):
+    """The response was JSON but failed the output schema; worth asking again."""
+
+
 class KnowledgeExtractionService:
     """LLM-backed service for turning a transcript into knowledge items.
 
@@ -103,6 +119,8 @@ class KnowledgeExtractionService:
     {RAW_CONVERSATION}, which is replaced by the transcript. `output_model` is
     an optional typed output schema (see StructuredExtraction); `ontology`
     constrains its closed context keys and is recorded in the provenance.
+    `validation_retries` asks the LLM again, with the error, when its JSON
+    fails the output schema; the output is still validated, never repaired.
     """
 
     def __init__(
@@ -112,7 +130,10 @@ class KnowledgeExtractionService:
         *,
         output_model: type[StructuredExtraction] | None = None,
         ontology: Ontology | None = None,
+        validation_retries: int = 0,
     ):
+        if validation_retries < 0:
+            raise ValueError("validation_retries must not be negative")
         if RAW_CONVERSATION_PLACEHOLDER not in prompt_template:
             raise ValueError(
                 f"Extraction prompt is missing its {RAW_CONVERSATION_PLACEHOLDER} placeholder"
@@ -121,6 +142,7 @@ class KnowledgeExtractionService:
         self._prompt_template = prompt_template
         self._output_model = output_model
         self._ontology = ontology
+        self._validation_retries = validation_retries
 
     @staticmethod
     def output_schema(
@@ -143,6 +165,8 @@ class KnowledgeExtractionService:
             details["output_model"] = self._output_model.__name__
         if self._ontology is not None:
             details["ontology_sha256"] = self._ontology.sha256
+        if self._validation_retries:
+            details["validation_retries"] = self._validation_retries
         return details
 
     @classmethod
@@ -158,6 +182,7 @@ class KnowledgeExtractionService:
         json_schema: bool = False,
         output_model: type[StructuredExtraction] | None = None,
         ontology: Ontology | None = None,
+        validation_retries: int = 0,
     ) -> "KnowledgeExtractionService":
         """Build the OpenAI-compatible client configured by environment variables.
 
@@ -184,13 +209,27 @@ class KnowledgeExtractionService:
             model=model,
             base_url=base_url,
         )
-        return cls(client, prompt_template, output_model=output_model, ontology=ontology)
+        return cls(
+            client, prompt_template, output_model=output_model, ontology=ontology,
+            validation_retries=validation_retries,
+        )
 
     def extract(self, raw_conversation: str) -> KnowledgeExtractionResult:
         """Extract and validate knowledge items from one raw conversation."""
 
         prompt = self._checked_prompt(raw_conversation)
-        return self._parse(llm.invoke(self._client, prompt, error=KnowledgeExtractionError))
+        error: KnowledgeValidationError | None = None
+        for attempt in range(self._validation_retries + 1):
+            response = llm.invoke(
+                self._client, _with_rejection(prompt, error), error=KnowledgeExtractionError
+            )
+            try:
+                return self._parse(response)
+            except KnowledgeValidationError as exc:
+                if attempt == self._validation_retries:
+                    raise
+                error = exc
+        raise AssertionError("unreachable")
 
     async def aextract(self, raw_conversation: str) -> KnowledgeExtractionResult:
         """Async extract, so many conversations can be in flight at once.
@@ -199,9 +238,18 @@ class KnowledgeExtractionService:
         """
 
         prompt = self._checked_prompt(raw_conversation)
-        return self._parse(
-            await llm.ainvoke(self._client, prompt, error=KnowledgeExtractionError)
-        )
+        error: KnowledgeValidationError | None = None
+        for attempt in range(self._validation_retries + 1):
+            response = await llm.ainvoke(
+                self._client, _with_rejection(prompt, error), error=KnowledgeExtractionError
+            )
+            try:
+                return self._parse(response)
+            except KnowledgeValidationError as exc:
+                if attempt == self._validation_retries:
+                    raise
+                error = exc
+        raise AssertionError("unreachable")
 
     def _checked_prompt(self, raw_conversation: str) -> str:
         if not raw_conversation or not raw_conversation.strip():
@@ -218,7 +266,7 @@ class KnowledgeExtractionService:
             return self._output_model.model_validate(payload).to_result()
         except ValidationError as exc:
             # Keep diagnostics useful without logging extracted document contents.
-            raise KnowledgeExtractionError(
+            raise KnowledgeValidationError(
                 "The LLM extraction JSON failed schema validation: "
                 + llm.validation_summary(exc)
             ) from exc

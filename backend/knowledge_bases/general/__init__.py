@@ -14,6 +14,6 @@ SPEC = KnowledgeBaseSpec.from_directory(
     # Scope values are free text, so they lead the embedding instead of
     # becoming exact-match filters; subject, type and valid_on still filter.
     embedding_context_keys=("applies_to", "condition"),
-    extraction_version="general-items-v1",
+    extraction_version="general-items-v2",
     extraction_output_model=GeneralExtraction,
 )

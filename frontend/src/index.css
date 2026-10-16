@@ -3839,7 +3839,8 @@ button.ref-chip:hover,
   color: #2f4566;
 }
 .vc-field input,
-.vc-field select {
+.vc-field select,
+.vc-field textarea {
   height: 44px;
   padding: 0 12px;
   border: 1px solid #d5dee9;
@@ -3850,6 +3851,7 @@ button.ref-chip:hover,
 }
 .vc-field input:focus,
 .vc-field select:focus,
+.vc-field textarea:focus,
 .vc-speaker-edit input:focus,
 .vc-reject input:focus {
   outline: none;
@@ -3859,6 +3861,94 @@ button.ref-chip:hover,
 .vc-field small {
   color: #7b8a9e;
   font-size: 12.5px;
+}
+.vc-field textarea {
+  height: auto;
+  min-height: 220px;
+  max-height: 60vh;
+  padding: 10px 12px;
+  line-height: 1.55;
+  resize: vertical;
+  font-family: inherit;
+}
+.vc-field textarea::placeholder {
+  color: #9aa7b8;
+}
+.vc-field textarea:disabled {
+  background: #f7f9fc;
+}
+.vc-field-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  line-height: 1.5;
+}
+.vc-field-foot span:last-child {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.vc-field > span:first-child em {
+  font-style: normal;
+  font-weight: 400;
+  color: #7b8a9e;
+}
+.vc-field input[aria-invalid="true"] {
+  border-color: #d06060;
+}
+.vc-field .vc-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px;
+}
+.vc-field code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #52647c;
+}
+.vc-kb-dialog {
+  max-width: min(520px, calc(100% - 2rem));
+}
+.vc-kb-form {
+  display: grid;
+  gap: 18px;
+}
+.vc-kb-form textarea {
+  min-height: 0;
+}
+.vc-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 4px;
+  border-radius: 11px;
+  background: #eef2f8;
+}
+.vc-mode button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  border-radius: 8px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: #5d6f86;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.vc-mode button svg {
+  width: 17px;
+  height: 17px;
+}
+.vc-mode button:hover:not(:disabled) {
+  color: #0f2547;
+}
+.vc-mode button[aria-checked="true"] {
+  background: #fff;
+  color: #0f2547;
+  box-shadow: 0 1px 2px #0b1b3a1f;
+}
+.vc-mode button:focus-visible {
+  outline: 2px solid #1263eb;
+  outline-offset: 1px;
 }
 .vc-toggle {
   display: flex;
@@ -3993,11 +4083,23 @@ button.ref-chip:hover,
 }
 .vc-recent-name {
   grid-area: name;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
   font-weight: 600;
   color: #0f2547;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.vc-recent-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vc-recent-name svg {
+  flex-shrink: 0;
+  color: #7b8a9e;
 }
 .vc-recent-meta {
   grid-area: meta;

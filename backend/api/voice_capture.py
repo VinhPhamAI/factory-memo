@@ -37,6 +37,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
+from backend.api.knowledge_bases import refresh_catalog
 from backend.knowledge_bases.base import DATA_DIR, KnowledgeBaseSpec, Retrieval
 from backend.src.services.knowledge_consolidation import KnowledgeConsolidator
 from backend.src.services.knowledge_extraction import KnowledgeExtractionService
@@ -48,15 +49,20 @@ from backend.src.services.knowledge_verification import KnowledgeVerifier
 from backend.src.services.speech_processing import SpeechClient, SpeechServiceError
 from backend.src.services.transcript_cleaning import TranscriptCleaner
 from backend.src.services.voice_capture import (
+    CAPTURE_SOURCE_KINDS,
+    MAX_TEXT_CHARS,
     SOURCE_KIND,
+    TEXT_SOURCE_KIND,
     AudioRecorder,
     EmptyRecordingError,
     RecognitionOutcome,
     RecordingSession,
     audio_stem,
     build_turns,
+    format_turns,
     parse_transcript,
     speaker_letters,
+    text_turns,
     unique_path,
 )
 from backend.src.storage import KnowledgeRecord, KnowledgeStore, StorageError
@@ -69,7 +75,9 @@ router = APIRouter(prefix="/v1/voice", tags=["voice"])
 MAX_NAME_LENGTH = 120
 MAX_SPEAKER_NAME_LENGTH = 60
 MAX_UPLOAD_BYTES = 1 << 30
-LIST_METADATA_KEYS = ("name", "recorded_at", "audio", "speakers", "cleaning", "ingestion")
+LIST_METADATA_KEYS = (
+    "source_kind", "name", "recorded_at", "audio", "speakers", "cleaning", "ingestion",
+)
 REVIEW_ACTOR = "voice-capture review UI (unauthenticated)"
 DECISIONS = {
     "approve": KnowledgeStatus.APPROVED,
@@ -106,7 +114,8 @@ def default_ingestion_factory(spec: KnowledgeBaseSpec, store: KnowledgeStore):
     """Same pipeline as `kb ingest`: extract, normalize, verify, consolidate.
 
     VOICE_VERIFY (off|quotes|llm, default quotes) and VOICE_CONSOLIDATE
-    (default true) tune the advisory steps.
+    (default true) tune the advisory steps. A response that fails the output
+    schema is asked for once more, so one bad field does not lose a recording.
     """
 
     from backend.scripts.kb import extraction_max_tokens_from_env
@@ -117,6 +126,7 @@ def default_ingestion_factory(spec: KnowledgeBaseSpec, store: KnowledgeStore):
         json_schema=spec.extraction_output_model is not None,
         output_model=spec.extraction_output_model,
         ontology=spec.ontology,
+        validation_retries=1,
     )
     service = KnowledgeIngestionService(
         extractor, store,
@@ -168,9 +178,15 @@ class VoiceCaptureService:
 
     # ----------------------------------------------------------- lookup
 
+    def add(self, spec: KnowledgeBaseSpec) -> None:
+        """Accepts recordings for a knowledge base created while the API runs."""
+
+        if spec.retrieval is Retrieval.KNOWLEDGE:
+            self._specs[spec.name] = spec
+
     def knowledge_bases(self) -> list[dict[str, str]]:
         return [
-            {"name": name, "description": spec.description.strip()}
+            {"name": name, "title": spec.title or name, "description": spec.description.strip()}
             for name, spec in sorted(self._specs.items())
         ]
 
@@ -189,7 +205,7 @@ class VoiceCaptureService:
 
     async def conversation(self, kb: str, conversation_id: UUID):
         conversation = await (await self.store(kb)).get_conversation(conversation_id)
-        if conversation is None or conversation.metadata.get("source_kind") != SOURCE_KIND:
+        if conversation is None or conversation.metadata.get("source_kind") not in CAPTURE_SOURCE_KINDS:
             raise HTTPException(404, "Conversation not found")
         return conversation
 
@@ -262,6 +278,34 @@ class VoiceCaptureService:
         self._start_ingestion(kb, conversation)
         if clean:
             self.start_cleaning(kb, conversation.id, conversation.transcript)
+        return conversation.id
+
+    async def save_text(self, kb: str, *, name: str, text: str, dialogue: bool) -> UUID:
+        """Stores a typed or pasted conversation as evidence and starts extraction.
+
+        Typed text has no recognition noise, so it is not cleaned.
+        """
+
+        turns, names = text_turns(text, dialogue=dialogue)
+        if not turns:
+            raise ValueError("the text is empty")
+        transcript = format_turns(turns)
+        store = await self.store(kb)
+        metadata = {
+            "source_kind": TEXT_SOURCE_KIND,
+            "kb": kb,
+            "name": name,
+            "capture_mode": "dialogue" if dialogue else "text",
+            "recorded_at": _now(),
+            "transcript_sha256": transcript_sha256(transcript),
+            # Names typed before a colon are display labels, as a reviewer's would be.
+            "speakers": {letter: {"name": names.get(letter)} for letter in speaker_letters(turns)},
+            "turns": [turn.to_json() for turn in turns],
+            "cleaning": {"enabled": False, "status": "off"},
+            "ingestion": {"status": "queued"},
+        }
+        conversation = await store.add_conversation(transcript, metadata=metadata)
+        self._start_ingestion(kb, conversation)
         return conversation.id
 
     # ----------------------------------------------------------- jobs
@@ -422,6 +466,7 @@ class VoiceCaptureService:
         return {
             "id": str(conversation.id),
             "kb": kb,
+            "source": _source(metadata),
             "name": metadata.get("name") or "",
             "recorded_at": metadata.get("recorded_at"),
             "created_at": conversation.created_at.isoformat(),
@@ -447,7 +492,7 @@ class VoiceCaptureService:
 
     async def conversations(self, kb: str, limit: int) -> list[dict[str, Any]]:
         rows = await (await self.store(kb)).list_conversations(
-            metadata_filter={"source_kind": SOURCE_KIND},
+            metadata_filters=[{"source_kind": kind} for kind in CAPTURE_SOURCE_KINDS],
             metadata_keys=LIST_METADATA_KEYS,
             limit=limit,
         )
@@ -460,6 +505,7 @@ class VoiceCaptureService:
                 ingestion["status"] = "failed"
             items.append({
                 "id": str(conversation_id),
+                "source": _source(metadata),
                 "name": metadata.get("name") or "",
                 "recorded_at": metadata.get("recorded_at"),
                 "duration_s": (metadata.get("audio") or {}).get("duration_s"),
@@ -468,6 +514,10 @@ class VoiceCaptureService:
                 "knowledge": row["knowledge_counts"],
             })
         return items
+
+
+def _source(metadata: Mapping[str, Any]) -> str:
+    return "text" if metadata.get("source_kind") == TEXT_SOURCE_KIND else "voice"
 
 
 def record_json(record: KnowledgeRecord) -> dict[str, Any]:
@@ -528,6 +578,7 @@ class ReviewRequest(BaseModel):
 
 @router.get("/knowledge-bases")
 async def list_capture_knowledge_bases(request: Request) -> dict[str, list[dict[str, str]]]:
+    await refresh_catalog(request)
     return {"knowledge_bases": _service(request).knowledge_bases()}
 
 
@@ -581,6 +632,8 @@ async def start_cleaning(request: Request, kb: str, conversation_id: UUID) -> di
     service = _service(request)
     try:
         conversation = await service.conversation(kb, conversation_id)
+        if _source(conversation.metadata) == "text":
+            raise HTTPException(409, "Typed text is not cleaned")
         await (await service.store(kb)).update_conversation_metadata(
             conversation_id, {"cleaning": {"enabled": True, "status": "queued"}}
         )
@@ -680,6 +733,31 @@ async def upload_recording(
         raise HTTPException(502, f"Speech recognition failed; the audio is kept as {path.name}") from exc
     except EmptyRecordingError as exc:
         raise HTTPException(422, f"{exc}; the audio is kept as {path.name}")
+    except StorageError as exc:
+        raise _storage_error(exc)
+    return {"conversation_id": str(conversation_id)}
+
+
+class TypedConversation(BaseModel):
+    name: str
+    text: str = Field(max_length=MAX_TEXT_CHARS)
+    # Lines are "Name: text"; otherwise the whole text has one author.
+    dialogue: bool = False
+
+
+@router.post("/{kb}/texts", status_code=201)
+async def add_text(request: Request, kb: str, body: TypedConversation) -> dict[str, str]:
+    """A typed or pasted conversation, extracted like a recording."""
+
+    service = _service(request)
+    service.spec(kb)
+    try:
+        name = _check_name(body.name)
+        conversation_id = await service.save_text(
+            kb, name=name, text=body.text, dialogue=body.dialogue
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     except StorageError as exc:
         raise _storage_error(exc)
     return {"conversation_id": str(conversation_id)}

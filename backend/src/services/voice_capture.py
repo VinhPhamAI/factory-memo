@@ -8,6 +8,9 @@ that case the finished file is transcribed in one request instead.
 Turns are numbered T01, T02, ... and speakers lettered A, B, C, ... in the
 order the diarizer labels them. Letters name voices within one recording,
 not people.
+
+A conversation can also be typed or pasted instead of recorded (`text_turns`);
+it gets the same transcript format, review and extraction, without audio.
 """
 
 from __future__ import annotations
@@ -37,12 +40,20 @@ from backend.src.services.speech_processing import (
 logger = logging.getLogger(__name__)
 
 SOURCE_KIND = "voice_recording"
+TEXT_SOURCE_KIND = "typed_text"
+# Conversations the capture UI lists and reviews.
+CAPTURE_SOURCE_KINDS = (SOURCE_KIND, TEXT_SOURCE_KIND)
+MAX_TEXT_CHARS = 100_000
 MIN_SAMPLE_RATE = 8_000
 MAX_SAMPLE_RATE = 96_000
 # Waiting for the speech service to finish the last utterance after stop.
 FINISH_TIMEOUT_SECONDS = 120.0
 _TURN_LINE_RE = re.compile(r"^\[(T\d+)\] (?:Speaker ([A-Z]+)|Unknown speaker): ?(.*)$")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+# "Anh Minh: text" — a short speaker name before a colon.
+_NAMED_LINE_RE = re.compile(r"^([^\s:\[][^:]{0,29}?)\s*:\s+(\S.*)$")
+_LETTER_NAME_RE = re.compile(r"^(?:Speaker\s+|Người nói\s+)?([A-Z])$", re.IGNORECASE)
+_BLANK_LINE_RE = re.compile(r"\n\s*\n")
 
 
 def audio_stem(name: str, started_at: datetime) -> str:
@@ -184,6 +195,65 @@ def parse_transcript(transcript: str) -> list[CapturedTurn]:
 
 def speaker_letters(turns: Sequence[CapturedTurn]) -> list[str]:
     return sorted({turn.speaker for turn in turns if turn.speaker}, key=lambda s: (len(s), s))
+
+
+def format_turns(turns: Sequence[CapturedTurn]) -> str:
+    """The stored transcript of turns, in `format_transcript`'s line format."""
+
+    return "\n".join(
+        f"[{turn.id}] {f'Speaker {turn.speaker}' if turn.speaker else 'Unknown speaker'}: {turn.text}"
+        for turn in turns
+    )
+
+
+def text_turns(
+    text: str, *, dialogue: bool = False
+) -> tuple[list[CapturedTurn], dict[str, str | None]]:
+    """Turns of a typed conversation, and the speaker name behind each letter.
+
+    Nothing is reworded. A transcript already in `[T01] Speaker A: text` form
+    keeps its turns (renumbered). With `dialogue`, each "Name: text" line starts
+    a turn, names are lettered A, B, ... in order of appearance and kept as
+    display names, and other lines continue the turn above. Otherwise the text
+    has one author, Speaker A: one turn per paragraph, or per line when there
+    are no blank lines. Raises ValueError for a dialogue whose first line has
+    no name.
+    """
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return [], {}
+    if _TURN_LINE_RE.match(lines[0]):
+        parsed = parse_transcript(text)
+        turns = [CapturedTurn(turn_id(n), turn.speaker, turn.text.strip())
+                 for n, turn in enumerate(parsed, start=1) if turn.text.strip()]
+        return turns, {letter: None for letter in speaker_letters(turns)}
+    if dialogue:
+        letters: dict[str, str] = {}
+        names: dict[str, str | None] = {}
+        said: list[tuple[str, str]] = []
+        for line in lines:
+            match = _NAMED_LINE_RE.match(line)
+            if match is None:
+                if not said:
+                    raise ValueError('the first line must start with a speaker name, e.g. "Anh Minh: ..."')
+                said[-1] = (said[-1][0], f"{said[-1][1]}\n{line}")
+                continue
+            key = " ".join(match[1].split()).casefold()
+            if key not in letters:
+                letters[key] = speaker_label(len(letters) + 1)
+                # "A" or "Speaker B" is a label, not a name.
+                names[letters[key]] = None if _LETTER_NAME_RE.match(match[1]) else match[1].strip()
+            said.append((letters[key], match[2].strip()))
+        return [CapturedTurn(turn_id(n), letter, words)
+                for n, (letter, words) in enumerate(said, start=1)], names
+    blocks = _BLANK_LINE_RE.split(text) if _BLANK_LINE_RE.search(text) else lines
+    paragraphs = ["\n".join(line.strip() for line in block.split("\n") if line.strip())
+                  for block in blocks]
+    turns = [CapturedTurn(turn_id(number), "A", paragraph)
+             for number, paragraph in enumerate((p for p in paragraphs if p), start=1)]
+    return turns, {"A": None}
 
 
 @dataclass

@@ -317,7 +317,7 @@ export function AskPage() {
                 )}
                 {knowledgeBases.map((item) => (
                   <option key={item.name} value={item.name}>
-                    {item.name}
+                    {item.title || item.name}
                   </option>
                 ))}
               </select>

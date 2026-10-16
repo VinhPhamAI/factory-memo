@@ -37,7 +37,9 @@ from backend.src.services.voice_capture import (
     RecordingSession,
     audio_stem,
     build_turns,
+    format_turns,
     parse_transcript,
+    text_turns,
 )
 from backend.src.storage import (
     ConversationStatus,
@@ -140,6 +142,39 @@ class AudioAndTurnsTest(unittest.TestCase):
     def test_unknown_speaker_round_trips(self) -> None:
         (turn,) = parse_transcript(format_transcript([Utterance("ồn quá", speaker=None)]))
         self.assertEqual((turn.id, turn.speaker, turn.text), ("T01", None, "ồn quá"))
+
+
+class TypedTextTest(unittest.TestCase):
+    def test_one_author_keeps_every_word_per_paragraph(self) -> None:
+        turns, names = text_turns("Ghi chú: thay dầu.\r\n\r\nBước 1: tắt máy\nBước 2: mở nắp\n")
+        self.assertEqual(names, {"A": None})
+        self.assertEqual(
+            format_turns(turns),
+            "[T01] Speaker A: Ghi chú: thay dầu.\n[T02] Speaker A: Bước 1: tắt máy\nBước 2: mở nắp",
+        )
+        self.assertEqual([t.text for t in parse_transcript(format_turns(turns))],
+                         [t.text for t in turns])
+        lines, _ = text_turns("một\nhai")
+        self.assertEqual([t.id for t in lines], ["T01", "T02"])
+
+    def test_dialogue_letters_names_in_order_and_keeps_them_as_names(self) -> None:
+        turns, names = text_turns(
+            "Anh Minh: Trục Z kêu.\nChị Lan: Từ bao giờ?\n- từ ca đêm\nanh  minh: Từ sáng.\nB: ừ",
+            dialogue=True,
+        )
+        self.assertEqual(names, {"A": "Anh Minh", "B": "Chị Lan", "C": None})
+        self.assertEqual([(t.id, t.speaker) for t in turns],
+                         [("T01", "A"), ("T02", "B"), ("T03", "A"), ("T04", "C")])
+        self.assertEqual(turns[1].text, "Từ bao giờ?\n- từ ca đêm")
+        with self.assertRaises(ValueError):
+            text_turns("xin chào\nAnh: hi", dialogue=True)
+
+    def test_a_pasted_transcript_keeps_its_speakers(self) -> None:
+        turns, names = text_turns("[T03] Speaker B: x\n[T07] Unknown speaker: y", dialogue=True)
+        self.assertEqual([(t.id, t.speaker, t.text) for t in turns],
+                         [("T01", "B", "x"), ("T02", None, "y")])
+        self.assertEqual(names, {"B": None})
+        self.assertEqual(text_turns("  \n "), ([], {}))
 
 
 class RecordingSessionTest(unittest.IsolatedAsyncioTestCase):
@@ -287,13 +322,13 @@ class VoiceStore:
     async def get_knowledge(self, ids):
         return [self.records[i] for i in ids if i in self.records]
 
-    async def list_conversations(self, *, metadata_filter, metadata_keys, limit=50):
+    async def list_conversations(self, *, metadata_filters, metadata_keys, limit=50):
         return [
             {"id": c.id, "status": c.status.value, "error": c.error, "created_at": c.created_at,
              "metadata": {k: v for k, v in c.metadata.items() if k in metadata_keys},
              "knowledge_counts": {}}
             for c in self.conversations.values()
-            if all(c.metadata.get(k) == v for k, v in metadata_filter.items())
+            if any(all(c.metadata.get(k) == v for k, v in f.items()) for f in metadata_filters)
         ]
 
     async def review_knowledge(self, record_id, status, *, event):
@@ -400,6 +435,47 @@ class VoiceCaptureApiTest(unittest.TestCase):
         self.assertEqual(detail["ingestion"]["stored"], 1)
         listed = self.client.get("/v1/voice/general/conversations").json()["conversations"]
         self.assertEqual(listed[0]["name"], "Rung trục Z")
+
+    def test_typed_dialogue_is_stored_and_extracted_without_audio(self) -> None:
+        response = self.client.post("/v1/voice/general/texts", json={
+            "name": " Ca đêm ", "text": "Anh Minh: Trục Z kêu.\nChị Lan: Từ bao giờ?", "dialogue": True,
+        })
+        self.assertEqual(response.status_code, 201)
+        conversation_id = response.json()["conversation_id"]
+        conversation = self.store.conversations[UUID(conversation_id)]
+        self.assertEqual(conversation.transcript,
+                         "[T01] Speaker A: Trục Z kêu.\n[T02] Speaker B: Từ bao giờ?")
+        self.assertEqual(conversation.metadata["source_kind"], "typed_text")
+        self.assertNotIn("audio", conversation.metadata)
+
+        detail = self.wait_for(conversation_id, lambda d: d["ingestion"]["status"] == "done")
+        self.assertEqual(detail["source"], "text")
+        self.assertEqual(detail["name"], "Ca đêm")
+        self.assertEqual(detail["speakers"], [{"label": "A", "name": "Anh Minh"},
+                                              {"label": "B", "name": "Chị Lan"}])
+        self.assertFalse(detail["audio"]["available"])
+        self.assertEqual(detail["cleaning"]["status"], "off")
+        self.assertEqual(detail["records"][0]["status"], "draft")
+        clean = self.client.post(f"/v1/voice/general/conversations/{conversation_id}/clean")
+        self.assertEqual(clean.status_code, 409)
+        self.assertEqual(
+            self.client.get(f"/v1/voice/general/conversations/{conversation_id}/audio").status_code,
+            404,
+        )
+
+        self.record()
+        listed = self.client.get("/v1/voice/general/conversations").json()["conversations"]
+        self.assertEqual(sorted(item["source"] for item in listed), ["text", "voice"])
+
+    def test_typed_text_is_validated(self) -> None:
+        url = "/v1/voice/general/texts"
+        self.assertEqual(self.client.post(url, json={"name": "a", "text": " \n "}).status_code, 422)
+        self.assertEqual(self.client.post(url, json={"name": " ", "text": "x"}).status_code, 422)
+        self.assertEqual(self.client.post(url, json={
+            "name": "a", "text": "không có tên", "dialogue": True}).status_code, 422)
+        self.assertEqual(self.client.post("/v1/voice/maintenance/texts",
+                                          json={"name": "a", "text": "x"}).status_code, 404)
+        self.assertEqual(self.store.conversations, {})
 
     def test_cleaning_can_be_turned_off_and_started_later(self) -> None:
         saved = self.record(clean=False)

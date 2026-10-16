@@ -1,0 +1,40 @@
+"""Knowledge bases created at runtime, e.g. from the UI.
+
+A created knowledge base copies a built-in template's policy (prompts, typed
+extraction schema, embedding settings) and gets its own `kb_<name>` database;
+only its name, title and description differ. Definitions are persisted by
+`backend.src.storage.kb_registry` and rebuilt here on start-up.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+
+from backend.knowledge_bases import general
+from backend.knowledge_bases.base import KnowledgeBaseSpec
+
+# Templates a created knowledge base may copy. Industrial QA and maintenance are
+# tied to their catalogs, manuals and benchmarks, so they are not offered.
+TEMPLATES: dict[str, KnowledgeBaseSpec] = {"general": general.SPEC}
+DEFAULT_TEMPLATE = "general"
+MAX_TITLE_LENGTH = 80
+MAX_DESCRIPTION_LENGTH = 500
+
+
+def custom_spec(
+    name: str, *, title: str, description: str = "", template: str = DEFAULT_TEMPLATE
+) -> KnowledgeBaseSpec:
+    """The spec of a created knowledge base; raises ValueError for bad fields."""
+
+    try:
+        base = TEMPLATES[template]
+    except KeyError:
+        raise ValueError(f"Unknown knowledge base template {template!r}") from None
+    title = " ".join(title.split())
+    description = description.strip()
+    if not title or len(title) > MAX_TITLE_LENGTH:
+        raise ValueError(f"Title must be 1-{MAX_TITLE_LENGTH} characters")
+    if len(description) > MAX_DESCRIPTION_LENGTH:
+        raise ValueError(f"Description must be at most {MAX_DESCRIPTION_LENGTH} characters")
+    # replace() re-runs validation, including the name pattern.
+    return dataclasses.replace(base, name=name, title=title, description=description)

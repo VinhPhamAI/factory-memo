@@ -482,8 +482,16 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored.metadata["name"], "b")
         self.assertEqual(stored.metadata["turns"], [{"id": "T01"}])
 
+        typed = await self.store.add_conversation(
+            "[T01] Speaker A: y", metadata={"source_kind": "typed_text", "name": "c"}
+        )
+        rows = await self.store.list_conversations(
+            metadata_filters=[{"source_kind": "voice_recording"}, {"source_kind": "typed_text"}],
+            metadata_keys=("name",),
+        )
+        self.assertEqual({row["id"] for row in rows}, {voice.id, typed.id})
         (row,) = await self.store.list_conversations(
-            metadata_filter={"source_kind": "voice_recording"}, metadata_keys=("name", "speakers")
+            metadata_filters=[{"source_kind": "voice_recording"}], metadata_keys=("name", "speakers")
         )
         self.assertEqual(row["id"], voice.id)
         self.assertEqual(row["metadata"], {"name": "b", "speakers": {"A": {"name": "Minh"}}})

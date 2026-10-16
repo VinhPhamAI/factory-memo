@@ -154,15 +154,33 @@ def split_by_speaker(
     ]
 
 
+# A speaker's turn ends at a pause this long, or once it spans this long, so a
+# monologue still gets citable turns that start near the quoted words.
+TURN_PAUSE_S = 2.0
+TURN_MAX_S = 30.0
+
+
+def _continues(previous: Utterance, utterance: Utterance) -> bool:
+    if previous.speaker != utterance.speaker:
+        return False
+    if utterance.start is not None and previous.end is not None:
+        if utterance.start - previous.end >= TURN_PAUSE_S:
+            return False
+    if utterance.end is not None and previous.start is not None:
+        if utterance.end - previous.start > TURN_MAX_S:
+            return False
+    return True
+
+
 def merge_turns(utterances: Iterable[Utterance]) -> list[Utterance]:
-    """Joins adjacent turns of the same speaker (e.g. across EOU finals)."""
+    """Joins adjacent finals of one speaker into a turn (see TURN_PAUSE_S)."""
 
     merged: list[Utterance] = []
     for utterance in utterances:
         if not utterance.text:
             continue
         previous = merged[-1] if merged else None
-        if previous is not None and previous.speaker == utterance.speaker:
+        if previous is not None and _continues(previous, utterance):
             merged[-1] = Utterance(
                 text=f"{previous.text} {utterance.text}",
                 speaker=previous.speaker,

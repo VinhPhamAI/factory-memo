@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from backend.api.knowledge_bases import refresh_catalog
 from backend.knowledge_bases import KnowledgeBaseSpec
 from backend.knowledge_bases.stores import open_store
 from backend.src.agents.agent.service import (
@@ -43,12 +44,21 @@ class KnowledgeAgentPool:
         self._stores: list[KnowledgeStore | DocumentStore] = []
         self._lock = asyncio.Lock()
 
+    def add(self, spec: KnowledgeBaseSpec) -> None:
+        """Serves a knowledge base created while the API runs."""
+
+        self._specs[spec.name] = spec
+
     def names(self) -> list[str]:
         return sorted({*self._specs, *self._agents})
 
     def description(self, name: str) -> str:
         spec = self._specs.get(name)
         return spec.description.strip() if spec else ""
+
+    def title(self, name: str) -> str:
+        spec = self._specs.get(name)
+        return (spec.title if spec else "") or name
 
     async def get(self, name: str) -> Any:
         if name in self._agents:
@@ -158,10 +168,11 @@ async def _service(request: Request, kb: str) -> KnowledgeAgentService:
 
 @router.get("/knowledge-bases")
 async def list_knowledge_bases(request: Request) -> dict[str, list[dict[str, str]]]:
+    await refresh_catalog(request)
     pool = _pool(request)
     return {
         "knowledge_bases": [
-            {"name": name, "description": pool.description(name)}
+            {"name": name, "title": pool.title(name), "description": pool.description(name)}
             for name in pool.names()
         ]
     }

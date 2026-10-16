@@ -12,6 +12,7 @@ export interface LiveTurn {
   speaker: string | null;
   text: string;
   start: number | null;
+  end: number | null;
 }
 
 export interface LiveTranscript {
@@ -46,7 +47,32 @@ export const emptyTranscript: LiveTranscript = { turns: [], partial: "" };
 
 const turnId = (index: number) => `T${String(index + 1).padStart(2, "0")}`;
 
-/** Adds recognized text; adjacent turns of one speaker merge, as on the server. */
+// Same turn rule as the server's merge_turns: a turn ends at a 2 s pause or
+// once it spans 30 s, so turn ids match the saved transcript.
+const TURN_PAUSE_S = 2;
+const TURN_MAX_S = 30;
+
+function continues(
+  last: LiveTurn,
+  turn: { speaker: string | null; start: number | null; end: number | null },
+) {
+  if (last.speaker !== turn.speaker) return false;
+  if (
+    turn.start !== null &&
+    last.end !== null &&
+    turn.start - last.end >= TURN_PAUSE_S
+  )
+    return false;
+  if (
+    turn.end !== null &&
+    last.start !== null &&
+    turn.end - last.start > TURN_MAX_S
+  )
+    return false;
+  return true;
+}
+
+/** Adds recognized text; one speaker's finals join into turns as on the server. */
 export function applyTranscriptEvent(
   state: LiveTranscript,
   event: ServerEvent,
@@ -59,14 +85,19 @@ export function applyTranscriptEvent(
     const text = turn.text.trim();
     if (!text) continue;
     const last = turns.at(-1);
-    if (last && last.speaker === turn.speaker)
-      turns[turns.length - 1] = { ...last, text: `${last.text} ${text}` };
+    if (last && continues(last, turn))
+      turns[turns.length - 1] = {
+        ...last,
+        text: `${last.text} ${text}`,
+        end: turn.end ?? last.end,
+      };
     else
       turns.push({
         id: turnId(turns.length),
         speaker: turn.speaker,
         text,
         start: turn.start,
+        end: turn.end,
       });
   }
   return { turns, partial: "" };

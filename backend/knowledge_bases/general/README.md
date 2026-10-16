@@ -41,14 +41,19 @@ Absent keys mean "not limited", so search filters treat them as unscoped.
 
 ## Extraction schema
 
-`schema.py` asks the LLM for `{"items": [...]}`. Each item has `type`
+`schema.py` asks the LLM for `{"items": [...]}`. Each item has a `key` (a short
+label unique within the response), `type`
 (`fact`, `rule`, `procedure`, `heuristic`, `case`), `subject`, `claim`, `steps`,
 `certainty`, `applies_to`, `condition`, `speaker`, `quotes` (at least one),
-`valid_from`/`valid_to` and `based_on` (positions of the cases a non-case item was
-drawn from, stored as `supported_by`). Validation rejects the following: a procedure
-without at least two steps, steps on any other type, missing quotes, unknown fields,
-and `based_on` that points outside the list, to the item itself or to a non-case.
-A failed validation marks the conversation `failed`; the transcript stays stored.
+`valid_from`/`valid_to` and `based_on` (keys of the cases a non-case item was
+drawn from, stored as `supported_by` positions). Keys replaced list positions in
+`general-items-v2`: models often counted positions wrongly, pointing a lesson at
+itself or at an unrelated case. Items are written in the speakers' language.
+Validation rejects the following: a procedure without at least two steps, steps
+on any other type, missing quotes, unknown fields, duplicate keys, and `based_on`
+naming an unknown key or a non-case. A failed validation marks the conversation
+`failed`; the transcript stays stored. Voice capture asks the LLM once more with
+the validation error before failing.
 
 ## Agent
 

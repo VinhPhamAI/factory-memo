@@ -119,6 +119,8 @@ class KnowledgeBaseSpec:
     extract_prompt: str
     agent_prompt: str
     description: str = ""
+    # Display name, e.g. of a knowledge base created in the UI; "" shows `name`.
+    title: str = ""
     dataset: DatasetSpec | None = None
     # PostgreSQL full-text search configuration for lexical retrieval.
     text_search_config: str = "english"

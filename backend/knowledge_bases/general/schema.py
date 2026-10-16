@@ -48,6 +48,9 @@ class GeneralItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Short label unique within one extraction, e.g. "case-demo-wifi", so
+    # `based_on` names a case instead of counting positions in the list.
+    key: str = Field(min_length=1)
     type: KnowledgeType
     subject: str = Field(min_length=1)
     claim: str = Field(min_length=1)
@@ -64,8 +67,8 @@ class GeneralItem(BaseModel):
     quotes: list[Quote] = Field(min_length=1)
     valid_from: date | None = None
     valid_to: date | None = None
-    # Positions in `items` of the cases this item was drawn from.
-    based_on: list[int] = Field(default_factory=list)
+    # Keys of the cases in `items` this item was drawn from.
+    based_on: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_steps(self) -> "GeneralItem":
@@ -75,7 +78,7 @@ class GeneralItem(BaseModel):
             raise ValueError(f"a {self.type.value} item has no steps")
         return self
 
-    def to_item(self) -> KnowledgeItem:
+    def to_item(self, positions: dict[str, int]) -> KnowledgeItem:
         context: dict = {"certainty": self.certainty.value}
         for key in ("applies_to", "condition", "speaker"):
             if value := getattr(self, key):
@@ -92,7 +95,7 @@ class GeneralItem(BaseModel):
             type=self.type,
             valid_from=self.valid_from,
             valid_to=self.valid_to,
-            supported_by=sorted(set(self.based_on)),
+            supported_by=sorted({positions[key] for key in self.based_on}),
         )
 
 
@@ -103,15 +106,23 @@ class GeneralExtraction(StructuredExtraction):
 
     @model_validator(mode="after")
     def _check_based_on(self) -> "GeneralExtraction":
+        types: dict[str, KnowledgeType] = {}
+        for index, item in enumerate(self.items):
+            if item.key in types:
+                raise ValueError(f"items.{index}.key {item.key!r} is used by another item")
+            types[item.key] = item.type
         for index, item in enumerate(self.items):
             if item.based_on and item.type is KnowledgeType.CASE:
                 raise ValueError(f"items.{index} is a case and cannot be based_on others")
-            for ref in item.based_on:
-                if ref == index or not 0 <= ref < len(self.items):
-                    raise ValueError(f"items.{index}.based_on points to no other item")
-                if self.items[ref].type is not KnowledgeType.CASE:
-                    raise ValueError(f"items.{index}.based_on must point to case items")
+            for key in item.based_on:
+                if key not in types:
+                    raise ValueError(f"items.{index}.based_on names unknown key {key!r}")
+                if types[key] is not KnowledgeType.CASE:
+                    raise ValueError(f"items.{index}.based_on {key!r} is not a case item")
         return self
 
     def to_result(self) -> KnowledgeExtractionResult:
-        return KnowledgeExtractionResult(knowledge_items=[item.to_item() for item in self.items])
+        positions = {item.key: index for index, item in enumerate(self.items)}
+        return KnowledgeExtractionResult(
+            knowledge_items=[item.to_item(positions) for item in self.items]
+        )

@@ -1,7 +1,10 @@
 # Voice capture
 
 Live microphone recording in the React UI (`/capture`, tab **Ghi âm**), turned
-into stored evidence, extracted knowledge drafts and a side-by-side review.
+into stored evidence, extracted knowledge drafts and a side-by-side review. The
+same page also accepts a typed or pasted conversation (**Nhập văn bản**; see
+[Typed text](#typed-text)), which goes through the same extraction and review
+without audio.
 
 ```text
 Browser mic ─ AudioWorklet (PCM16, 16 kHz) ─ WS /v1/voice/{kb}/record ─ FastAPI
@@ -14,8 +17,10 @@ Stop ─► transcript "[T01] Speaker A: …" ─► kb_<name>.raw_conversations
 Review page: transcript (raw / cleaned, audio per turn) | records (approve / reject)
 ```
 
-Only knowledge bases with `retrieval="knowledge"` (`general`, `industrial_qa`)
-accept recordings; document-retrieval KBs do not search extracted records.
+Only knowledge bases with `retrieval="knowledge"` (`general`, `industrial_qa`
+and knowledge bases created from the KB list on this page) accept recordings;
+document-retrieval KBs do not search extracted records. Creating a knowledge base
+is described in the [KB guide](../backend/knowledge_bases/README.md#knowledge-bases-created-in-the-ui).
 
 ## What is stored where
 
@@ -38,7 +43,9 @@ accept recordings; document-retrieval KBs do not search extracted records.
 
 Letters follow the diarizer's labels within one recording (1 → A, 2 → B, …).
 They name voices, not people; untagged speech is `Unknown speaker`, never a
-guessed letter. Adjacent turns of one speaker are merged. The `[Tnn]` ids let
+guessed letter. Consecutive finals of one speaker join into one turn until a
+pause of 2 s or more, or until the turn would span over 30 s, so a monologue
+still has turns near the words they quote. The `[Tnn]` ids let
 evidence quotes cite a turn and let quote verification check it.
 
 ### `raw_conversations.metadata`
@@ -57,7 +64,7 @@ evidence quotes cite a turn and let quote verification check it.
           "endpointing_ms": 800, "recognition": "realtime | file", "realtime_error": "…"},
   "speakers": {"A": {"name": "Anh Minh"}, "B": {"name": null}},
   "turns": [{"id": "T01", "speaker": "A", "start": 0.42, "end": 5.1}],
-  "extraction": {"version": "general-items-v1", "model": "…", "prompt_sha256": "…"},
+  "extraction": {"version": "general-items-v2", "model": "…", "prompt_sha256": "…"},
   "ingestion": {"status": "queued | running | done | failed", "started_at": "…",
                 "finished_at": "…", "error": "…", "stored": 3,
                 "merged": [{"subject": "…", "claim": "…", "type": "heuristic", "target": "<record id>"}],
@@ -87,6 +94,24 @@ can be retried from the review page.
   is kept and named in the error.
 - The speech service must be ready before recording starts.
 
+## Typed text
+
+`POST /v1/voice/{kb}/texts` with `{"name", "text", "dialogue"}` stores the text
+verbatim as a `[Tnn] Speaker X:` transcript (`source_kind: "typed_text"`,
+`capture_mode: "text" | "dialogue"`, no `audio`/`asr`) and starts extraction.
+Nothing is reworded or guessed:
+
+- Off (default): one author, Speaker A; one turn per paragraph (blank-line
+  separated), or per line when there are no blank lines.
+- `dialogue`: every `Name: text` line starts a turn; names are lettered A, B, …
+  in order of appearance and kept as display names (as a reviewer's rename
+  would be); lines without a name continue the turn above. A first line
+  without a name is refused. Detecting this automatically was rejected because
+  notes such as `Bước 1: …` would silently become speakers.
+- Text already in `[T01] Speaker A: …` form keeps its speakers (renumbered).
+
+Typed text is never cleaned (`POST …/clean` returns 409). Limit: 100,000 characters.
+
 ## Transcript cleaning
 
 Optional (toggle on the start screen, or **Làm sạch bằng AI** later). An LLM
@@ -111,6 +136,7 @@ the unauthenticated review UI.
 | GET | `/v1/voice/knowledge-bases` | KBs that accept recordings |
 | WS | `/v1/voice/{kb}/record` | Live recording (`start` → PCM16 frames → `stop`) |
 | POST | `/v1/voice/{kb}/recordings` | Whole WAV upload (fallback) |
+| POST | `/v1/voice/{kb}/texts` | Typed or pasted conversation |
 | GET | `/v1/voice/{kb}/conversations` | Recent recordings |
 | GET | `/v1/voice/{kb}/conversations/{id}` | Turns, speakers, job progress, records |
 | GET | `/v1/voice/{kb}/conversations/{id}/audio` | Original WAV (supports Range) |

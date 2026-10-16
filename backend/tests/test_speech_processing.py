@@ -75,6 +75,21 @@ class SpeakerTurnTest(unittest.TestCase):
         ])
         self.assertEqual(text, "[T01] Speaker A: A. B.\n[T02] Speaker B: C.")
 
+    def test_monologue_turns_end_at_long_pauses_and_after_thirty_seconds(self) -> None:
+        def said(start: float, end: float) -> Utterance:
+            return Utterance(f"{start:g}.", speaker=1, start=start, end=end)
+
+        text = format_transcript([
+            said(0, 5), said(5.8, 12),  # short pause: one turn
+            said(15, 20),  # 3 s pause: new turn
+            said(20.5, 40),  # still within 30 s of 15
+            said(40.5, 52),  # would span 37 s: new turn
+        ])
+        self.assertEqual(
+            text,
+            "[T01] Speaker A: 0. 5.8.\n[T02] Speaker A: 15. 20.5.\n[T03] Speaker A: 40.5.",
+        )
+
     def test_parses_verbose_json(self) -> None:
         turns = parse_transcription({
             "text": "Hi there. Yes.", "language": "en-US",

@@ -11,6 +11,10 @@ past events. Skip greetings, small talk, scheduling chatter and statements with
 no content beyond the conversation itself. Do not impose a count limit or skip
 late turns; a conversation may have no item.
 
+Write every item in the language the speakers use: a Vietnamese conversation
+gives Vietnamese `subject`, `claim`, `steps` and `condition`. Keep names, codes
+and identifiers as spoken, and quotes verbatim.
+
 One item holds one complete idea. Keep a statement together with the
 conditions, exceptions, numbers and reasons it depends on; do not split it into
 isolated fragments, and do not merge independent ideas into one item.
@@ -30,12 +34,14 @@ isolated fragments, and do not merge independent ideas into one item.
   why the speakers interpreted it that way, what was done and the reported
   outcome (or that the outcome is unknown).
 
-`based_on` lists the zero-based positions in `items` of the cases an item was
-drawn from, e.g. a heuristic the speaker draws from an incident. Only non-case
-items may have it; leave it empty otherwise.
+`based_on` lists the `key`s of the cases an item was drawn from, e.g. a
+heuristic the speaker draws from an incident. Only non-case items may have it,
+and only keys of `case` items in the same response; leave it empty otherwise.
 
 ## Fields
 
+- `key`: a short label unique within this response, made from the item's
+  type and topic, e.g. `case-export-disk-full`; only `based_on` uses it.
 - `subject`: the short name of the entity or topic the item is about (a
   product, system, process, team, document, person's role, ...), using the
   source's own name or identifier. Not a summary of the claim.
@@ -78,7 +84,7 @@ items may have it; leave it empty otherwise.
    ingestion metadata are attached by the application.
 
 Example shape (illustrative fields, not content to copy):
-{"items":[{"type":"case","subject":"subject name","claim":"What happened, why, what was done and the reported outcome.","steps":null,"certainty":"stated","applies_to":"specific scope","condition":null,"speaker":"Speaker A","quotes":[{"turn_id":"T03","quote":"Exact excerpt from that turn."}],"valid_from":null,"valid_to":null,"based_on":[]},{"type":"heuristic","subject":"subject name","claim":"One reusable piece of advice with its conditions.","steps":null,"certainty":"stated","applies_to":null,"condition":"short tag","speaker":"Speaker B","quotes":[{"turn_id":"T05","quote":"Exact excerpt."}],"valid_from":null,"valid_to":null,"based_on":[0]}]}
+{"items":[{"key":"case-subject-event","type":"case","subject":"subject name","claim":"What happened, why, what was done and the reported outcome.","steps":null,"certainty":"stated","applies_to":"specific scope","condition":null,"speaker":"Speaker A","quotes":[{"turn_id":"T03","quote":"Exact excerpt from that turn."}],"valid_from":null,"valid_to":null,"based_on":[]},{"key":"heuristic-subject-advice","type":"heuristic","subject":"subject name","claim":"One reusable piece of advice with its conditions.","steps":null,"certainty":"stated","applies_to":null,"condition":"short tag","speaker":"Speaker B","quotes":[{"turn_id":"T05","quote":"Exact excerpt."}],"valid_from":null,"valid_to":null,"based_on":["case-subject-event"]}]}
 
 Return {"items":[]} only if the conversation contains no reusable knowledge.
 

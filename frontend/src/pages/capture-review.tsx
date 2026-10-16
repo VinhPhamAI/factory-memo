@@ -173,13 +173,16 @@ export function CaptureReviewPage() {
           <h1>{conversation.name}</h1>
           <p>
             {dateTime(conversation.recorded_at ?? conversation.created_at)} ·{" "}
-            {clock(conversation.audio.duration_s)} ·{" "}
-            {conversation.speakers.length} người nói ·{" "}
+            {conversation.source === "text"
+              ? "Văn bản"
+              : clock(conversation.audio.duration_s)}{" "}
+            · {conversation.speakers.length} người nói ·{" "}
             {conversation.turns.length} lượt · KB{" "}
             <strong>{conversation.kb}</strong>
           </p>
         </div>
-        {conversation.audio.available ? (
+        {conversation.source === "text" ? null : conversation.audio
+            .available ? (
           <audio
             ref={audio}
             className="vc-audio"
@@ -411,6 +414,8 @@ function TranscriptPanel({
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [focus]);
 
+  // Typed text has no recognition noise: no cleaning, no audio.
+  const typed = conversation.source === "text";
   const cleaningRunning = ACTIVE.has(cleaning.status ?? "");
   const done = Object.keys(cleaned).length;
   const counts = turnsBySpeaker(conversation.turns);
@@ -422,76 +427,84 @@ function TranscriptPanel({
     >
       <header className="vc-panel-head">
         <div>
-          <h2 id="vc-transcript-title">Bản ghi hội thoại</h2>
+          <h2 id="vc-transcript-title">
+            {typed ? "Nội dung hội thoại" : "Bản ghi hội thoại"}
+          </h2>
           <p className="vc-muted">
-            {conversation.asr.recognition === "file"
-              ? "Nhận dạng lại từ file âm thanh do mất kết nối trực tiếp."
-              : "Nhận dạng giọng nói tự động, có thể sai một số từ."}
+            {typed
+              ? "Văn bản nhập tay, lưu nguyên văn."
+              : conversation.asr.recognition === "file"
+                ? "Nhận dạng lại từ file âm thanh do mất kết nối trực tiếp."
+                : "Nhận dạng giọng nói tự động, có thể sai một số từ."}
           </p>
         </div>
-        <div
-          className="vc-segmented"
-          role="group"
-          aria-label="Phiên bản transcript"
-        >
-          <button
-            aria-pressed={view === "clean"}
-            disabled={!hasCleaned}
-            onClick={() => setView("clean")}
-            data-testid="view-clean"
+        {!typed && (
+          <div
+            className="vc-segmented"
+            role="group"
+            aria-label="Phiên bản transcript"
           >
-            Dễ đọc
-          </button>
-          <button
-            aria-pressed={view === "raw"}
-            onClick={() => setView("raw")}
-            data-testid="view-raw"
-          >
-            Bản gốc
-          </button>
-        </div>
+            <button
+              aria-pressed={view === "clean"}
+              disabled={!hasCleaned}
+              onClick={() => setView("clean")}
+              data-testid="view-clean"
+            >
+              Dễ đọc
+            </button>
+            <button
+              aria-pressed={view === "raw"}
+              onClick={() => setView("raw")}
+              data-testid="view-raw"
+            >
+              Bản gốc
+            </button>
+          </div>
+        )}
       </header>
 
-      <div className="vc-cleaning-line" aria-live="polite">
-        {cleaningRunning ? (
-          <>
-            <Loader2 size={14} className="animate-spin" />
-            Đang làm sạch {done}/{cleaning.total ?? conversation.turns.length}{" "}
-            lượt…
-          </>
-        ) : cleaning.status === "done" ? (
-          <>
-            <Sparkles size={14} />
-            Bản dễ đọc do AI làm sạch, chỉ để đọc. Trích xuất tri thức dùng bản
-            gốc.
-          </>
-        ) : cleaning.status === "failed" ||
-          cleaning.status === "interrupted" ? (
-          <>
-            <AlertTriangle size={14} />
-            {cleaning.status === "failed"
-              ? "Làm sạch transcript bị lỗi."
-              : "Làm sạch transcript bị gián đoạn."}
-            <CleanButton
-              conversation={conversation}
-              label="Thử lại"
-              onStarted={onCleaningStarted}
-              onError={setStartError}
-            />
-          </>
-        ) : (
-          <>
-            Đang xem bản gốc. Làm sạch đã tắt khi ghi.
-            <CleanButton
-              conversation={conversation}
-              label="Làm sạch bằng AI"
-              onStarted={onCleaningStarted}
-              onError={setStartError}
-            />
-          </>
-        )}
-        {startError && <span className="vc-inline-error">{startError}</span>}
-      </div>
+      {!typed && (
+        <div className="vc-cleaning-line" aria-live="polite">
+          {cleaningRunning ? (
+            <>
+              <Loader2 size={14} className="animate-spin" />
+              Đang làm sạch {done}/{cleaning.total ?? conversation.turns.length}{" "}
+              lượt…
+            </>
+          ) : cleaning.status === "done" ? (
+            <>
+              <Sparkles size={14} />
+              Bản dễ đọc do AI làm sạch, chỉ để đọc. Trích xuất tri thức dùng
+              bản gốc.
+            </>
+          ) : cleaning.status === "failed" ||
+            cleaning.status === "interrupted" ? (
+            <>
+              <AlertTriangle size={14} />
+              {cleaning.status === "failed"
+                ? "Làm sạch transcript bị lỗi."
+                : "Làm sạch transcript bị gián đoạn."}
+              <CleanButton
+                conversation={conversation}
+                label="Thử lại"
+                onStarted={onCleaningStarted}
+                onError={setStartError}
+              />
+            </>
+          ) : (
+            <>
+              Đang xem bản gốc. Làm sạch đã tắt khi ghi.
+              <CleanButton
+                conversation={conversation}
+                label="Làm sạch bằng AI"
+                onStarted={onCleaningStarted}
+                onError={setStartError}
+              />
+            </>
+          )}
+          {startError && <span className="vc-inline-error">{startError}</span>}
+        </div>
+      )}
 
       <SpeakerNames
         conversation={conversation}

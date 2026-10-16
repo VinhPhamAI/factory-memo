@@ -38,7 +38,7 @@ and [dependency manifest](pyproject.toml) for supporting details.
 
 | Core | Responsibility and change boundary |
 | --- | --- |
-| KB definitions | `backend/knowledge_bases/`: registry, `KnowledgeBaseSpec`, dataset mappings, retrieval mode, extraction/agent prompts, schemas, context filters and optional ontology/catalog. Keep domain policy here. |
+| KB definitions | `backend/knowledge_bases/`: registry, `KnowledgeBaseSpec`, dataset mappings, retrieval mode, extraction/agent prompts, schemas, context filters and optional ontology/catalog. Keep domain policy here. KBs created in the UI (`backend/api/knowledge_bases.py`, `custom.py`) copy the `general` policy and are persisted in the `knowledge_base_registry` table. |
 | Extraction and ingestion | `backend/src/services/`: structured extraction, catalog/ontology normalization, optional verification and consolidation, then embedding/persistence. Ingestion saves source evidence first so failed extraction remains traceable. |
 | Storage and embeddings | `backend/src/storage/`: source conversations, knowledge records, lifecycle/link metadata, PostgreSQL + pgvector, embeddings and knowledge search. Each KB normally uses its own `kb_<name>` database on the configured server. |
 | Document retrieval | `backend/src/agents/rag/`: chunking, document indexes, vector/keyword hybrid retrieval and evaluation. In document mode, standard ingest indexes sources without LLM extraction. |
@@ -63,8 +63,8 @@ Available domain packages in this checkout:
   [general guide](backend/knowledge_bases/general/README.md).
 - **EnterpriseRAG and AssetOpsBench:** documentation and some tests reference
   `enterprise_rag` and `assetopsbench`, but their packages are absent in this
-  checkout and the registry (checked 2026-10-15) lists only `maintenance`,
-  `industrial_qa` and `general`. Treat these as documented integrations with
+  checkout and the built-in registry (checked 2026-10-16) lists only `maintenance`,
+  `industrial_qa` and `general`, plus any KBs created in the UI. Treat these as documented integrations with
   missing implementation, rather than working commands. Recheck before starting work.
 
 The scoped API is `POST /v1/knowledge-agent/<kb>/stream` with `query` and
@@ -193,7 +193,8 @@ source checkout; use `deployments/speech/setup.sh`, `up.sh` and `smoke_test.sh`
 Voice capture (`backend/src/services/voice_capture.py`, `backend/api/voice_capture.py`,
 frontend `/capture`) streams microphone PCM over `WS /v1/voice/{kb}/record`, writes
 every frame to `data/audio/` before recognition, stores `[Tnn] Speaker X: text`
-transcripts in `raw_conversations` and extracts drafts in the background; optional
+transcripts in `raw_conversations` and extracts drafts in the background; typed
+or pasted text (`POST /v1/voice/{kb}/texts`) is stored verbatim the same way. Optional
 LLM cleaning (`CLEANING_*`) is a reading aid and never replaces the evidence
 transcript. See [voice capture](docs/voice-capture.md). Accuracy on Vietnamese
 factory audio has not been evaluated.

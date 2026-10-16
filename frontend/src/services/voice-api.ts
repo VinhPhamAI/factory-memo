@@ -77,9 +77,13 @@ export interface Speaker {
   name: string | null;
 }
 
+/** Recorded from the microphone, or typed/pasted as text (no audio). */
+export type ConversationSource = "voice" | "text";
+
 export interface VoiceConversation {
   id: string;
   kb: string;
+  source: ConversationSource;
   name: string;
   recorded_at: string | null;
   created_at: string;
@@ -96,6 +100,7 @@ export interface VoiceConversation {
 
 export interface VoiceConversationSummary {
   id: string;
+  source: ConversationSource;
   name: string;
   recorded_at: string | null;
   duration_s: number | null;
@@ -213,6 +218,42 @@ export function startCleaning(kb: string, id: string) {
     `${kbPath(kb)}/conversations/${id}/clean`,
     { method: "POST" },
   );
+}
+
+/** A typed or pasted conversation; extracted like a recording. */
+export async function addText(
+  kb: string,
+  form: { name: string; text: string; dialogue: boolean },
+): Promise<string> {
+  const body = await request<{ conversation_id: string }>(
+    `${kbPath(kb)}/texts`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(form),
+    },
+  );
+  return body.conversation_id;
+}
+
+export const MAX_TEXT_CHARS = 100_000;
+
+/** "Name: text" at the start of a line, as the server reads a typed dialogue. */
+const NAMED_LINE = /^[^\s:[][^:]{0,29}?\s*:\s+\S/;
+
+/** Problem the server would refuse the typed text for, in Vietnamese; "" when fine. */
+export function typedTextProblem(text: string, dialogue: boolean) {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
+  if (!lines.length) return "Hãy nhập hoặc dán nội dung cuộc hội thoại.";
+  if (text.length > MAX_TEXT_CHARS)
+    return `Nội dung quá dài (tối đa ${MAX_TEXT_CHARS.toLocaleString("vi-VN")} ký tự).`;
+  if (
+    dialogue &&
+    !/^\[T\d+\] /.test(lines[0].trim()) &&
+    !NAMED_LINE.test(lines[0].trim())
+  )
+    return "Dòng đầu cần có dạng “Tên: nội dung”, ví dụ “Anh Minh: Trục Z kêu rè từ sáng.”";
+  return "";
 }
 
 export function audioUrl(kb: string, id: string) {

@@ -38,7 +38,7 @@ TRANSCRIPT = """[T01] Lan: Our nightly export job failed again on the billing se
 
 def _item(**fields) -> dict:
     return {
-        "type": "fact", "subject": "export job", "claim": "A claim.", "steps": None,
+        "key": f"item-{uuid4().hex[:6]}", "type": "fact", "subject": "export job", "claim": "A claim.", "steps": None,
         "certainty": "stated", "applies_to": None, "condition": None, "speaker": None,
         "quotes": [{"quote": "It was the disk."}], "valid_from": None, "valid_to": None,
         "based_on": [], **fields,
@@ -47,7 +47,7 @@ def _item(**fields) -> dict:
 
 EXTRACTION = {"items": [
     _item(
-        type="case", subject="nightly export job",
+        key="case-export-disk-full", type="case", subject="nightly export job",
         claim="The nightly export job on the billing server failed because the disk was full; "
               "clearing old logs fixed it.",
         applies_to="billing server", speaker="Lan",
@@ -58,7 +58,7 @@ EXTRACTION = {"items": [
         type="rule", subject="nightly export job",
         claim="Never run the export while the backup is running.", speaker="Minh",
         quotes=[{"turn_id": "T04", "quote": "never run the export while the backup is running"}],
-        based_on=[0],
+        based_on=["case-export-disk-full"],
     ),
     _item(
         type="procedure", subject="nightly export job",
@@ -70,17 +70,22 @@ EXTRACTION = {"items": [
 
 
 class FakeLLM:
-    def __init__(self, payload: dict):
-        self.response = json.dumps(payload)
+    """Answers with each payload in turn, repeating the last one."""
+
+    def __init__(self, *payloads: dict):
+        self.responses = [json.dumps(payload) for payload in payloads]
+        self.prompts: list[str] = []
 
     def invoke(self, prompt: str) -> SimpleNamespace:
+        self.prompts.append(prompt)
         self.prompt = prompt
-        return SimpleNamespace(content=self.response)
+        return SimpleNamespace(content=self.responses[min(len(self.prompts), len(self.responses)) - 1])
 
 
-def _extract(payload: dict):
+def _extract(payload: dict, *, client: FakeLLM | None = None, validation_retries: int = 0):
     service = KnowledgeExtractionService(
-        FakeLLM(payload), GENERAL.extract_prompt, output_model=GENERAL.extraction_output_model
+        client or FakeLLM(payload), GENERAL.extract_prompt,
+        output_model=GENERAL.extraction_output_model, validation_retries=validation_retries,
     )
     return service.extract(TRANSCRIPT)
 
@@ -127,14 +132,46 @@ class GeneralExtractionTests(unittest.TestCase):
             "steps on a fact": [_item(steps=["a", "b"])],
             "no quotes": [_item(quotes=[])],
             "unknown certainty": [_item(certainty="confirmed")],
-            "based_on a non-case": [_item(), _item(based_on=[0])],
-            "based_on itself": [_item(type="case", based_on=[]), _item(based_on=[1])],
-            "case based_on a case": [_item(type="case"), _item(type="case", based_on=[0])],
+            "based_on a non-case": [_item(key="fact-a"), _item(based_on=["fact-a"])],
+            "based_on itself": [_item(type="case"), _item(key="tip", based_on=["tip"])],
+            "based_on an unknown key": [_item(type="case", key="case-a"), _item(based_on=["case-b"])],
+            "based_on a position": [_item(type="case"), _item(based_on=[0])],
+            "case based_on a case": [
+                _item(type="case", key="case-a"), _item(type="case", based_on=["case-a"]),
+            ],
+            "duplicate keys": [_item(key="same"), _item(key="same")],
+            "no key": [{k: v for k, v in _item().items() if k != "key"}],
             "unknown field": [_item(confidence=0.9)],
         }
         for name, items in cases.items():
             with self.subTest(name), self.assertRaises(KnowledgeExtractionError):
                 _extract({"items": items})
+
+    def test_based_on_keys_become_positions_in_any_order(self) -> None:
+        lesson, case = _extract({"items": [
+            _item(type="heuristic", based_on=["case-later"]), _item(type="case", key="case-later"),
+        ]}).knowledge_items
+        self.assertEqual(lesson.supported_by, [1])
+        self.assertEqual(case.supported_by, [])
+
+    def test_asks_again_with_the_validation_error_then_gives_up(self) -> None:
+        bad = {"items": [_item(based_on=["case-missing"])]}
+        client = FakeLLM(bad, EXTRACTION)
+        self.assertEqual(len(_extract(bad, client=client, validation_retries=1).knowledge_items), 3)
+        self.assertNotIn("Rejected response", client.prompts[0])
+        self.assertIn("unknown key 'case-missing'", client.prompts[1])
+        self.assertTrue(client.prompts[1].startswith(client.prompts[0]))
+
+        client = FakeLLM(bad)
+        with self.assertRaises(KnowledgeExtractionError):
+            _extract(bad, client=client, validation_retries=1)
+        self.assertEqual(len(client.prompts), 2)
+        with self.assertRaises(KnowledgeExtractionError):
+            _extract(bad)
+
+    def test_prompt_asks_for_the_speakers_language(self) -> None:
+        self.assertIn("language the speakers use", GENERAL.extract_prompt)
+        self.assertEqual(GENERAL.extraction_version, "general-items-v2")
 
     def test_empty_conversation_result_is_valid(self) -> None:
         self.assertEqual(_extract({"items": []}).knowledge_items, [])

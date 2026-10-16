@@ -670,11 +670,11 @@ class KnowledgeStore:
     async def list_conversations(
         self,
         *,
-        metadata_filter: Mapping[str, str],
+        metadata_filters: Sequence[Mapping[str, str]],
         metadata_keys: Sequence[str],
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """Newest conversations whose metadata matches `metadata_filter`.
+        """Newest conversations whose metadata contains any of `metadata_filters`.
 
         Rows carry only the requested metadata keys (not the transcript) and
         the number of knowledge records citing each conversation, by status.
@@ -692,7 +692,8 @@ class KnowledgeStore:
                                    WHERE k.evidence_id = c.id GROUP BY k.status) AS s),
                             '{{}}'::jsonb) AS knowledge_counts
             FROM {self._table(RAW_CONVERSATION_TABLE)} AS c
-            WHERE c.metadata @> CAST(:filter AS jsonb)
+            WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(CAST(:filters AS jsonb)) AS f
+                          WHERE c.metadata @> f.value)
             ORDER BY c.created_at DESC, c.id
             LIMIT :limit
             """
@@ -702,7 +703,9 @@ class KnowledgeStore:
                 rows = (
                     await conn.execute(statement, {
                         "keys": list(metadata_keys),
-                        "filter": json.dumps(dict(metadata_filter), ensure_ascii=False),
+                        "filters": json.dumps(
+                            [dict(item) for item in metadata_filters], ensure_ascii=False
+                        ),
                         "limit": max(1, min(limit, 200)),
                     })
                 ).mappings().all()

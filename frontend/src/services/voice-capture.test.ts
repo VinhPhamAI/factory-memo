@@ -4,9 +4,10 @@ import {
   emptyTranscript,
   serverErrorMessage,
 } from "@/hooks/voice-recording";
+import { kbNameProblem, suggestKbName } from "./knowledge-base-admin";
 import { encodeWav } from "./mic-recorder";
 import type { VoiceRecord } from "./voice-api";
-import { recordSocketUrl } from "./voice-api";
+import { recordSocketUrl, typedTextProblem } from "./voice-api";
 import {
   claimText,
   clock,
@@ -58,8 +59,36 @@ describe("live transcript", () => {
     });
     expect(state.partial).toBe("");
     expect(state.turns).toEqual([
-      { id: "T01", speaker: "A", text: "Trục Z kêu rè.", start: 0.5 },
-      { id: "T02", speaker: "B", text: "Từ khi nào? Sau ca đêm?", start: 2.2 },
+      { id: "T01", speaker: "A", text: "Trục Z kêu rè.", start: 0.5, end: 2 },
+      {
+        id: "T02",
+        speaker: "B",
+        text: "Từ khi nào? Sau ca đêm?",
+        start: 2.2,
+        end: 4,
+      },
+    ]);
+  });
+
+  it("starts a new turn after a long pause or a long monologue", () => {
+    const final = (start: number, end: number) =>
+      ({
+        type: "final",
+        turns: [{ speaker: "A", text: `câu ${start}`, start, end }],
+      }) as const;
+    let state = emptyTranscript;
+    for (const [start, end] of [
+      [0, 5],
+      [5.8, 12],
+      [15, 20],
+      [20.5, 40],
+      [40.5, 52],
+    ])
+      state = applyTranscriptEvent(state, final(start, end));
+    expect(state.turns.map((turn) => [turn.id, turn.text])).toEqual([
+      ["T01", "câu 0 câu 5.8"],
+      ["T02", "câu 15 câu 20.5"],
+      ["T03", "câu 40.5"],
     ]);
   });
 
@@ -85,6 +114,35 @@ describe("WAV encoding", () => {
     expect(view.getUint16(22, true)).toBe(1);
     expect(view.getUint32(40, true)).toBe(6);
     expect(view.getInt16(46, true)).toBe(-1);
+  });
+});
+
+describe("typed text", () => {
+  it("explains text the server would refuse", () => {
+    expect(typedTextProblem(" \n ", false)).toContain("Hãy nhập");
+    expect(typedTextProblem("Ghi chú tự do", false)).toBe("");
+    expect(typedTextProblem("Ghi chú tự do", true)).toContain("Tên: nội dung");
+    expect(typedTextProblem("\nAnh Minh: Trục Z kêu.\nthêm", true)).toBe("");
+    expect(typedTextProblem("[T01] Speaker A: x", true)).toBe("");
+    expect(typedTextProblem("x".repeat(100_001), false)).toContain("quá dài");
+  });
+});
+
+describe("knowledge base ids", () => {
+  it("suggests a database-safe id from a Vietnamese title", () => {
+    expect(suggestKbName("Bảo trì máy ép – Đà Nẵng")).toBe(
+      "bao_tri_may_ep_da_nang",
+    );
+    expect(suggestKbName("  2026 Kaizen ")).toBe("kb_2026_kaizen");
+    expect(suggestKbName("!!!")).toBe("");
+    expect(suggestKbName("a".repeat(80))).toHaveLength(60);
+  });
+
+  it("explains ids the server would refuse", () => {
+    expect(kbNameProblem("may_ep", ["general"])).toBe("");
+    expect(kbNameProblem("general", ["general"])).toContain("đã được dùng");
+    expect(kbNameProblem("May-ep", [])).toContain("chữ thường");
+    expect(kbNameProblem("", [])).toContain("Nhập mã");
   });
 });
 

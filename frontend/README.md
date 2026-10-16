@@ -5,7 +5,8 @@ selector, streaming answers and a sources panel. React, TypeScript, Vite, Tailwi
 CSS and shadcn/ui. No account is needed.
 
 `api` is the default mode. It offers QA (`/ask`) and live voice capture
-(`/capture`): microphone recording with live speaker-lettered transcript, then a
+(`/capture`): microphone recording with live speaker-lettered transcript, or a
+typed/pasted conversation (**Nhập văn bản**), then a
 review page with the transcript (raw or AI-cleaned, audio per turn) beside the
 extracted knowledge, which reviewers approve or reject. See
 [voice capture](../docs/voice-capture.md). Document uploads are not offered in API

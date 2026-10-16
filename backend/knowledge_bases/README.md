@@ -31,6 +31,25 @@ To add a KB, copy `maintenance/` to a new name, edit its prompts and the
 `general/` is the simplest starting point for knowledge retrieval: a typed
 extraction schema, prompts, and a `SPEC` without dataset, filters or ontology.
 
+### Knowledge bases created in the UI
+
+The capture page (`/capture`, KB list → **＋ Tạo knowledge base mới…**) calls
+`POST /v1/knowledge-bases` with `name` (id, same pattern as above), `title`,
+optional `description` and `template` (only `general`). The new KB copies the
+template's policy (`custom.py`: prompts, typed schema, embedding settings), gets
+its own `kb_<name>` database at once, and is recorded in the
+`knowledge_base_registry` table of the `DATABASE_URL` database
+(`backend/src/storage/kb_registry.py`). The API loads that table on start-up and
+serves created KBs for QA and capture without a restart; `GET /v1/knowledge-bases`
+lists built-in and created ones.
+
+Creation is refused for a taken name, for an existing but unregistered
+`kb_<name>` database (it may hold another KB's data), or beyond `KB_MAX_CREATED`
+(default 50). If registration fails, the new empty database is dropped. There is
+no rename, delete or authentication; the `kb` CLI does not know created KBs.
+Industrial QA and maintenance are not offered as templates because they depend
+on their catalogs, manuals and benchmarks.
+
 ## Retrieval modes
 
 `KnowledgeBaseSpec.retrieval` selects what the agent searches:

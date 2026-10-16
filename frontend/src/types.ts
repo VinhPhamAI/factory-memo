@@ -147,6 +147,8 @@ export interface ChatThread {
 
 export interface KnowledgeBase {
   name: string;
+  /** Display name of a knowledge base created in the UI; falls back to name. */
+  title?: string;
   description: string;
 }
 
