@@ -1,8 +1,10 @@
-import { Link, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
+import { MessagesSquare, Mic } from "lucide-react";
 import { BrandMark } from "./brand";
 import { useWorkspace } from "@/hooks/workspace";
+import { cn } from "@/utils/cn";
 
-/** Live QA has no capture, upload or approval controls. */
+/** Live mode: QA chat plus voice capture and review against the backend. */
 export function QaShell() {
   const workspace = useWorkspace();
   return (
@@ -12,7 +14,27 @@ export function QaShell() {
           <BrandMark small />
           <span>Factory memo</span>
         </Link>
-        <span className="qa-connection">QA agent</span>
+        <nav className="qa-nav" aria-label="Chức năng">
+          <NavLink
+            to="/ask"
+            className={({ isActive }) =>
+              cn("qa-nav-link", isActive && "active")
+            }
+          >
+            <MessagesSquare size={16} />
+            Hỏi đáp
+          </NavLink>
+          <NavLink
+            to="/capture"
+            className={({ isActive }) =>
+              cn("qa-nav-link", isActive && "active")
+            }
+            data-testid="nav-capture"
+          >
+            <Mic size={16} />
+            Ghi âm
+          </NavLink>
+        </nav>
       </header>
       {workspace.error && (
         <div className="workspace-error" role="alert">

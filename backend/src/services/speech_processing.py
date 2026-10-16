@@ -176,13 +176,40 @@ def merge_turns(utterances: Iterable[Utterance]) -> list[Utterance]:
     return merged
 
 
+def speaker_label(speaker: int | None) -> str | None:
+    """Letter for a diarizer label (1 -> A, 2 -> B, 27 -> AA); None when untagged.
+
+    Letters only name a voice within one recording; they say nothing about
+    who the person is.
+    """
+
+    if speaker is None or speaker < 1:
+        return None
+    label = ""
+    while speaker:
+        speaker, remainder = divmod(speaker - 1, 26)
+        label = chr(ord("A") + remainder) + label
+    return label
+
+
+def turn_id(number: int) -> str:
+    """Citable id of the n-th (1-based) turn: T01, T02, ..., T100."""
+
+    return f"T{number:02d}"
+
+
 def format_transcript(utterances: Iterable[Utterance]) -> str:
-    """`Speaker N: text` lines, the transcript form `backend.scripts.kb ingest` reads."""
+    """`[T01] Speaker A: text` lines, the transcript form ingestion stores.
+
+    Adjacent turns of one speaker are merged first; the [Tnn] ids let
+    extracted evidence quotes cite the turn they come from.
+    """
 
     lines = []
-    for utterance in merge_turns(utterances):
-        label = f"Speaker {utterance.speaker}" if utterance.speaker else "Speaker"
-        lines.append(f"{label}: {utterance.text}")
+    for number, utterance in enumerate(merge_turns(utterances), start=1):
+        letter = speaker_label(utterance.speaker)
+        label = f"Speaker {letter}" if letter else "Unknown speaker"
+        lines.append(f"[{turn_id(number)}] {label}: {utterance.text}")
     return "\n".join(lines)
 
 

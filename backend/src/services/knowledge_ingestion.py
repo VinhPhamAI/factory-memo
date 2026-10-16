@@ -185,7 +185,53 @@ class KnowledgeIngestionService:
             )
             seen[digest] = conversations[index].id
 
-        semaphore = asyncio.Semaphore(concurrency)
+        await self._process(
+            inputs, conversations, results, asyncio.Semaphore(concurrency)
+        )
+        return results  # type: ignore[return-value]  # every slot is filled
+
+    async def ingest_stored(
+        self,
+        conversation: RawConversation,
+        *,
+        stated_by: str | None = None,
+        context: dict[str, Any] | None = None,
+        progress: Callable[[str], None] | None = None,
+    ) -> IngestionResult:
+        """Extract and store knowledge for evidence that is already stored.
+
+        For sources saved before extraction (e.g. a recording the reviewer is
+        already reading) or a failed conversation that is retried. `progress`
+        is called with each stage: extracting, verifying, saving.
+        """
+
+        item = IngestionInput(conversation.transcript, stated_by, context=context)
+        results: list[IngestionResult | Exception | None] = [None]
+        await self._process(
+            [item], {0: conversation}, results, asyncio.Semaphore(1), progress=progress
+        )
+        (result,) = results
+        if isinstance(result, Exception):
+            raise result
+        assert result is not None
+        return result
+
+    async def _process(
+        self,
+        inputs: Sequence[IngestionInput],
+        conversations: dict[int, RawConversation],
+        results: list[IngestionResult | Exception | None],
+        semaphore: asyncio.Semaphore,
+        *,
+        progress: Callable[[str], None] | None = None,
+    ) -> None:
+        """Extract, verify, embed and store the records of stored conversations."""
+
+        def stage(name: str) -> None:
+            if progress is not None:
+                progress(name)
+
+        stage("extracting")
 
         async def extract(index: int) -> KnowledgeExtractionResult:
             async with semaphore:
@@ -228,11 +274,13 @@ class KnowledgeIngestionService:
                         record.revision = {**record.revision, "ontology": ontology_report}
 
         if self._verifier is not None:
+            stage("verifying")
             await asyncio.gather(*(
                 self._verify(conversations[index].transcript, group, semaphore)
                 for index, group in records.items()
             ))
 
+        stage("saving")
         # One embedding call for the whole batch; if it fails, add_knowledge
         # embeds each conversation's records on its own, isolating the failure.
         batch_records = [record for group in records.values() for record in group]
@@ -263,8 +311,6 @@ class KnowledgeIngestionService:
                 merged=tuple(record for record in group if record.id not in stored),
                 consolidation=plan.summary,
             )
-
-        return results  # type: ignore[return-value]  # every slot is filled
 
     async def _verify(
         self, transcript: str, records: list[KnowledgeRecord], semaphore: asyncio.Semaphore

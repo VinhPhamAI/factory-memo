@@ -28,6 +28,7 @@ from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import (
     ConversationStatus,
     KnowledgeRecord,
+    KnowledgeStatus,
     KnowledgeStore,
     StorageError,
     build_knowledge_filter,
@@ -466,6 +467,39 @@ class KnowledgeStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(StorageError):
             await wrong_size.reembed_knowledge()
         await self.store.init_schema()  # still vector(16)
+
+    async def test_voice_conversation_metadata_listing_and_review(self) -> None:
+        evidence_id, records = await self._seed()
+        voice = await self.store.add_conversation(
+            "[T01] Speaker A: x", metadata={"source_kind": "voice_recording", "name": "a",
+                                            "turns": [{"id": "T01"}]}
+        )
+        self.assertTrue(await self.store.update_conversation_metadata(
+            voice.id, {"speakers": {"A": {"name": "Minh"}}, "name": "b"}
+        ))
+        self.assertFalse(await self.store.update_conversation_metadata(uuid4(), {"x": 1}))
+        stored = await self.store.get_conversation(voice.id)
+        self.assertEqual(stored.metadata["name"], "b")
+        self.assertEqual(stored.metadata["turns"], [{"id": "T01"}])
+
+        (row,) = await self.store.list_conversations(
+            metadata_filter={"source_kind": "voice_recording"}, metadata_keys=("name", "speakers")
+        )
+        self.assertEqual(row["id"], voice.id)
+        self.assertEqual(row["metadata"], {"name": "b", "speakers": {"A": {"name": "Minh"}}})
+        self.assertEqual(row["knowledge_counts"], {})
+
+        cited = await self.store.knowledge_for_evidence(evidence_id)
+        self.assertEqual({record.id for record in cited}, {r.id for r in records.values()})
+        target = records["m01"].id
+        reviewed = await self.store.review_knowledge(
+            target, KnowledgeStatus.DEPRECATED, event={"decision": "reject", "note": "sai"}
+        )
+        self.assertEqual(reviewed.status, KnowledgeStatus.DEPRECATED)
+        self.assertEqual(reviewed.revision["history"][-1]["note"], "sai")
+        self.assertIsNone(await self.store.review_knowledge(
+            uuid4(), KnowledgeStatus.APPROVED, event={}
+        ))
 
     async def test_unknown_evidence_is_rejected(self) -> None:
         await self.store.init_schema()

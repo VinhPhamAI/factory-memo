@@ -26,8 +26,9 @@ The product vision includes multi-speaker voice conversations, documents,
 handwritten notes, images/video and contextual metadata. Location/map awareness
 and QR identification are proposed ways to resolve the equipment being discussed.
 This checkout primarily implements text-based knowledge capture, storage,
-retrieval, answering and evaluation. Do not claim that the full voice, multimodal,
-location or QR pipeline is implemented or validated.
+retrieval, answering and evaluation, plus live microphone capture in the React UI
+that feeds the same ingestion. Do not claim that the multimodal, location or QR
+pipeline is implemented, or that voice capture is validated on factory audio.
 
 ## Current Architecture
 
@@ -42,7 +43,7 @@ and [dependency manifest](pyproject.toml) for supporting details.
 | Storage and embeddings | `backend/src/storage/`: source conversations, knowledge records, lifecycle/link metadata, PostgreSQL + pgvector, embeddings and knowledge search. Each KB normally uses its own `kb_<name>` database on the configured server. |
 | Document retrieval | `backend/src/agents/rag/`: chunking, document indexes, vector/keyword hybrid retrieval and evaluation. In document mode, standard ingest indexes sources without LLM extraction. |
 | Knowledge agent | `backend/src/agents/agent/`: tools, evidence access, citations, conversation state and normalized stream events. Industrial QA supplies its specialized shared pipeline. |
-| Application | `backend/app.py` and `backend/api/knowledge_agent.py`: FastAPI API; `streamlit_app.py`: trace UI. Preserve the HTTP, SSE and citation contracts when changing either side. |
+| Application | `backend/app.py` and `backend/api/knowledge_agent.py`: FastAPI API; `backend/api/voice_capture.py`: voice capture API; `frontend/`: React UI; `streamlit_app.py`: trace UI. Preserve the HTTP, SSE, WebSocket and citation contracts when changing either side. |
 
 Available domain packages in this checkout:
 
@@ -60,11 +61,11 @@ Available domain packages in this checkout:
   quotes) on the shared tables, with no catalog, ontology or fixed answer
   workflow. It has no dataset or benchmark yet. See the
   [general guide](backend/knowledge_bases/general/README.md).
-- **EnterpriseRAG and AssetOpsBench:** the registry and documentation reference
+- **EnterpriseRAG and AssetOpsBench:** documentation and some tests reference
   `enterprise_rag` and `assetopsbench`, but their packages are absent in this
-  checkout. Registry imports currently fail, affecting dependent API, CLI and
-  tests. Treat these as documented integrations with missing implementation,
-  rather than working commands. Recheck this condition before starting work.
+  checkout and the registry (checked 2026-10-15) lists only `maintenance`,
+  `industrial_qa` and `general`. Treat these as documented integrations with
+  missing implementation, rather than working commands. Recheck before starting work.
 
 The scoped API is `POST /v1/knowledge-agent/<kb>/stream` with `query` and
 `thread_id`; the legacy `/v1/knowledge-agent/stream` also accepts `kb` in the body.
@@ -173,7 +174,6 @@ explicitly rather than inventing them.
 
 Run commands from the repository root with Python >= 3.12 and `uv`. Configure local
 services using [`.env.example`](.env.example); never commit populated credentials.
-The missing registry packages above currently block registry-dependent commands.
 These commands describe the intended entrypoints, not a passing startup check.
 
 Install dependencies and start local services (API and UI in separate terminals):
@@ -190,8 +190,13 @@ Nemotron 3 diarization with server-side endpointing) is built from a pinned
 source checkout; use `deployments/speech/setup.sh`, `up.sh` and `smoke_test.sh`
 (see the [speech guide](deployments/speech/README.md)). The client is
 `backend/src/services/speech_processing.py`.
-It produces speaker-turn transcripts but is not wired into automatic ingestion,
-and its accuracy on Vietnamese factory audio has not been evaluated.
+Voice capture (`backend/src/services/voice_capture.py`, `backend/api/voice_capture.py`,
+frontend `/capture`) streams microphone PCM over `WS /v1/voice/{kb}/record`, writes
+every frame to `data/audio/` before recognition, stores `[Tnn] Speaker X: text`
+transcripts in `raw_conversations` and extracts drafts in the background; optional
+LLM cleaning (`CLEANING_*`) is a reading aid and never replaces the evidence
+transcript. See [voice capture](docs/voice-capture.md). Accuracy on Vietnamese
+factory audio has not been evaluated.
 
 PostgreSQL is exposed on port 5434 by default. Backend clients use step-specific
 `EXTRACTION_*`, `VERIFY_*`, `CONSOLIDATION_*` and `ANSWER_*` settings with

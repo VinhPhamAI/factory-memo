@@ -61,7 +61,9 @@ Upstream reference: `deployments/NeMo-Speech.cpp/docs/server.md` and `docs/api.m
 [`backend/src/services/speech_processing.py`](../../backend/src/services/speech_processing.py)
 wraps both paths (`SpeechClient.atranscribe_file`, `SpeechClient.astream`) and
 groups words into speaker turns. `format_transcript` renders them as
-`Speaker N: text` lines, which `backend.scripts.kb ingest --file` reads;
+`[T01] Speaker A: text` lines (diarizer label 1 → A; untagged speech is
+`Unknown speaker`), which `backend.scripts.kb ingest --file` and the UI's voice
+capture ([docs/voice-capture.md](../../docs/voice-capture.md)) store;
 `Utterance.to_json` keeps word timings and speaker labels as provenance.
 
 ```python

@@ -12,6 +12,8 @@ export default defineConfig(({ mode }) => ({
           loadEnv(mode, process.cwd(), "").BACKEND_URL ||
           "http://127.0.0.1:8005",
         changeOrigin: true,
+        // Live voice capture streams microphone audio over a WebSocket.
+        ws: true,
       },
     },
   },

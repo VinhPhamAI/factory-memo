@@ -5,9 +5,11 @@
 This repository implements text-based knowledge extraction, storage, retrieval
 and evidence-grounded answers, with a synthetic benchmark, a React QA UI and a
 Streamlit trace UI.
-Voice capture has an optional ASR + diarization service (see below); full voice,
-multimodal capture, location awareness and QR identification are planned
-capabilities.
+Live voice capture (React UI tab **Ghi âm**) records the microphone, transcribes
+it with the optional ASR + diarization service, stores the transcript as evidence
+and extracts draft knowledge for side-by-side review (see
+[voice capture](docs/voice-capture.md)). Multimodal capture, location awareness and
+QR identification are planned capabilities.
 
 ## 1. Environment setup
 
@@ -15,7 +17,6 @@ Requirements: **Python 3.12+**, **uv**, and **Docker with Docker Compose**.
 Run all commands from the repository root.
 
 ```bash
-uv python install 3.12
 uv venv --python 3.12
 uv sync
 cp .env.example .env
@@ -59,7 +60,7 @@ Start PostgreSQL + pgvector and check readiness:
 
 ```bash
 docker compose -f deployments/docker-compose.yml up -d postgres
-docker compose -f deployments/docker-compose.yml exec postgres pg_isready -U voice_agent -d voice_agent
+docker compose -f deployments/docker-compose.yml exec postgres pg_isready -U voice_agent -d voice_agent # test db
 ```
 
 PostgreSQL is exposed on **localhost:5434**. The application creates each
@@ -95,7 +96,9 @@ bash deployments/speech/smoke_test.sh
 ```
 
 See the [speech service guide](deployments/speech/README.md). It transcribes
-audio into speaker turns; it is not yet wired into automatic ingestion.
+audio into speaker turns for the UI's voice capture, which saves the original
+audio to `data/audio/` and ingests the transcript into the selected knowledge
+base; see [voice capture](docs/voice-capture.md) for storage and schema.
 
 ## 3. API and QA UI
 
@@ -116,7 +119,9 @@ npx vite --host 127.0.0.1 --port 5180 --strictPort
 Open **http://127.0.0.1:5180**, select a knowledge base, and ask a question. The
 default `VITE_DATA_MODE=api` connects QA to FastAPI through the Vite `/v1` proxy.
 If you already have `.env.local`, set its data mode to `api` and restart Vite.
-Recording and document uploads are outside this integration. See the
+The **Ghi âm** tab records a conversation (needs the speech service and HTTPS or
+localhost for the microphone); after Stop it shows the transcript next to the
+extracted knowledge for approval. Document uploads are outside this integration. See the
 [frontend guide](frontend/README.md) for configuration, tests and optional mock demo.
 
 **Alternative — Streamlit trace UI:**

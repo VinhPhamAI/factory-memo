@@ -27,6 +27,7 @@ from backend.src.services.speech_processing import (
     iter_pcm_chunks,
     parse_transcription,
     read_wav_pcm16,
+    speaker_label,
     split_by_speaker,
 )
 
@@ -55,7 +56,13 @@ class SpeakerTurnTest(unittest.TestCase):
     def test_untagged_words_keep_no_speaker(self) -> None:
         (turn,) = split_by_speaker([word("hello", 0.0, None)])
         self.assertIsNone(turn.speaker)
-        self.assertEqual(format_transcript([turn]), "Speaker: hello")
+        self.assertEqual(format_transcript([turn]), "[T01] Unknown speaker: hello")
+
+    def test_speaker_letters_name_voices_not_people(self) -> None:
+        self.assertEqual(
+            [speaker_label(n) for n in (1, 2, 4, 26, 27, None, 0)],
+            ["A", "B", "D", "Z", "AA", None, None],
+        )
 
     def test_without_words_uses_text(self) -> None:
         self.assertEqual(split_by_speaker([], "  xin chào "), [Utterance(text="xin chào")])
@@ -66,7 +73,7 @@ class SpeakerTurnTest(unittest.TestCase):
             Utterance("A.", speaker=1), Utterance("B.", speaker=1),
             Utterance("C.", speaker=2), Utterance("", speaker=2),
         ])
-        self.assertEqual(text, "Speaker 1: A. B.\nSpeaker 2: C.")
+        self.assertEqual(text, "[T01] Speaker A: A. B.\n[T02] Speaker B: C.")
 
     def test_parses_verbose_json(self) -> None:
         turns = parse_transcription({
@@ -77,7 +84,7 @@ class SpeakerTurnTest(unittest.TestCase):
                 {"word": "Yes.", "start": 1.0, "end": 1.2, "confidence": 0.8, "speaker": 2},
             ],
         })
-        self.assertEqual(format_transcript(turns), "Speaker 1: Hi there.\nSpeaker 2: Yes.")
+        self.assertEqual(format_transcript(turns), "[T01] Speaker A: Hi there.\n[T02] Speaker B: Yes.")
 
     def test_rejects_malformed_response(self) -> None:
         with self.assertRaises(SpeechServiceError):
@@ -180,7 +187,7 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(socket.sent[-1]), {"type": "input_audio_buffer.commit"})
         self.assertEqual([e.kind for e in events], ["delta", "completed"])
         self.assertEqual(format_transcript(events[1].utterances),
-                         "Speaker 1: Rung.\nSpeaker 2: Kiểm tra.")
+                         "[T01] Speaker A: Rung.\n[T02] Speaker B: Kiểm tra.")
 
     async def test_server_error_raises(self) -> None:
         with self.assertRaisesRegex(SpeechServiceError, "bad audio"):

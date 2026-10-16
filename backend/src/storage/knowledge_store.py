@@ -644,6 +644,119 @@ class KnowledgeStore:
                 ).mappings().one_or_none()
         return RawConversation.model_validate(dict(row)) if row else None
 
+    async def update_conversation_metadata(
+        self, conversation_id: UUID, patch: Mapping[str, Any]
+    ) -> bool:
+        """Replace top-level metadata keys of a conversation; the transcript never changes.
+
+        Returns False when the conversation does not exist.
+        """
+
+        async with self._errors("update conversation metadata"):
+            async with self._engine.begin() as conn:
+                updated = await conn.scalar(
+                    text(
+                        f"UPDATE {self._table(RAW_CONVERSATION_TABLE)} "
+                        "SET metadata = metadata || CAST(:patch AS jsonb) "
+                        "WHERE id = :id RETURNING id"
+                    ),
+                    {
+                        "id": conversation_id,
+                        "patch": json.dumps(dict(patch), ensure_ascii=False, default=str),
+                    },
+                )
+        return updated is not None
+
+    async def list_conversations(
+        self,
+        *,
+        metadata_filter: Mapping[str, str],
+        metadata_keys: Sequence[str],
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Newest conversations whose metadata matches `metadata_filter`.
+
+        Rows carry only the requested metadata keys (not the transcript) and
+        the number of knowledge records citing each conversation, by status.
+        """
+
+        knowledge_table = self._table(KNOWLEDGE_TABLE)
+        statement = text(
+            f"""
+            SELECT c.id, c.status, c.error, c.created_at,
+                   COALESCE((SELECT jsonb_object_agg(key, value)
+                             FROM jsonb_each(c.metadata) WHERE key = ANY(:keys)),
+                            '{{}}'::jsonb) AS metadata,
+                   COALESCE((SELECT jsonb_object_agg(s.status, s.n)
+                             FROM (SELECT k.status, count(*) AS n FROM {knowledge_table} AS k
+                                   WHERE k.evidence_id = c.id GROUP BY k.status) AS s),
+                            '{{}}'::jsonb) AS knowledge_counts
+            FROM {self._table(RAW_CONVERSATION_TABLE)} AS c
+            WHERE c.metadata @> CAST(:filter AS jsonb)
+            ORDER BY c.created_at DESC, c.id
+            LIMIT :limit
+            """
+        )
+        async with self._errors("list conversations"):
+            async with self._engine.connect() as conn:
+                rows = (
+                    await conn.execute(statement, {
+                        "keys": list(metadata_keys),
+                        "filter": json.dumps(dict(metadata_filter), ensure_ascii=False),
+                        "limit": max(1, min(limit, 200)),
+                    })
+                ).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def knowledge_for_evidence(self, conversation_id: UUID) -> list[KnowledgeRecord]:
+        """Every record citing a conversation, deprecated ones included, oldest first."""
+
+        async with self._errors("read knowledge"):
+            async with self._engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            f"SELECT {_RECORD_SELECT_SQL} "
+                            f"FROM {self._table(KNOWLEDGE_TABLE)} AS k "
+                            "WHERE k.evidence_id = :id ORDER BY k.created_at, k.id"
+                        ),
+                        {"id": conversation_id},
+                    )
+                ).mappings().all()
+        return [KnowledgeRecord.model_validate(dict(row)) for row in rows]
+
+    async def review_knowledge(
+        self,
+        record_id: UUID,
+        status: KnowledgeStatus,
+        *,
+        event: Mapping[str, Any],
+    ) -> KnowledgeRecord | None:
+        """Record a reviewer's decision: new status plus an entry in revision["history"].
+
+        Content is never edited. A superseded record stays deprecated, so it
+        is not changed; None means the record is unknown or superseded.
+        """
+
+        async with self._errors("review knowledge"):
+            async with self._engine.begin() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            f"UPDATE {self._table(KNOWLEDGE_TABLE)} AS k SET status = :status, "
+                            "revision = jsonb_set(COALESCE(k.revision, '{}'::jsonb), '{history}', "
+                            "COALESCE(k.revision -> 'history', '[]'::jsonb) || CAST(:event AS jsonb)) "
+                            f"WHERE k.id = :id AND k.superseded_by IS NULL RETURNING {_RECORD_SELECT_SQL}"
+                        ),
+                        {
+                            "id": record_id,
+                            "status": KnowledgeStatus(status).value,
+                            "event": json.dumps([dict(event)], ensure_ascii=False, default=str),
+                        },
+                    )
+                ).mappings().one_or_none()
+        return KnowledgeRecord.model_validate(dict(row)) if row else None
+
     # ------------------------------------------------------------- knowledge
 
     async def embed_knowledge(self, records: Sequence[KnowledgeRecord]) -> None:

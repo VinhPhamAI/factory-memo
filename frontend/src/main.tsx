@@ -28,6 +28,23 @@ const router = createBrowserRouter([
           Component: (await import("@/pages/ask")).AskPage,
         }),
       },
+      ...(isLive
+        ? [
+            {
+              path: "/capture",
+              lazy: async () => ({
+                Component: (await import("@/pages/capture")).CapturePage,
+              }),
+            },
+            {
+              path: "/capture/:kb/:conversationId",
+              lazy: async () => ({
+                Component: (await import("@/pages/capture-review"))
+                  .CaptureReviewPage,
+              }),
+            },
+          ]
+        : []),
       ...(!isLive
         ? [
             {
