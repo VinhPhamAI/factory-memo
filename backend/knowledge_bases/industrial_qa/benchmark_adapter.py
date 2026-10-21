@@ -4,6 +4,7 @@ The shared retriever and writer never receive gold evidence or MC options.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 from typing import Literal
 
@@ -12,7 +13,6 @@ from pydantic import BaseModel
 from backend.knowledge_bases.industrial_qa import pilot
 from backend.knowledge_bases.industrial_qa.answering import IndustrialAnswerWriter
 from backend.knowledge_bases.industrial_qa.pipeline import build_retriever
-from backend.knowledge_bases.industrial_qa.retrieval import RetrievalConfig
 from backend.src.services import llm
 
 
@@ -54,13 +54,13 @@ class CompleteAnswer:
 
 
 class ScopedRetrieval:
-    def __init__(self, budgets=None, *, scope=None):
+    def __init__(self, budgets=None, *, scope=None, retriever=None):
         self.budgets, self.scope = budgets or {}, scope
-        self.retriever = build_retriever()
+        self.retriever = retriever if retriever is not None else build_retriever()
 
     async def __call__(self, question, store, documents, run, args, by_evidence, conversations, chunks):
         # These are explicit benchmark controls, not different retrieval policy.
-        config = RetrievalConfig(k=args.k, per_conversation=args.per_conversation)
+        config = replace(self.retriever.config, k=args.k, per_conversation=args.per_conversation)
         result = await self.retriever.retrieve(question, store, documents,
             scope=self.scope if self.scope is not None else benchmark_scope(run),
             context_characters=self.budgets.get(question), config=config)
@@ -80,5 +80,6 @@ class ScopedRetrieval:
                 'candidate_label': source.candidate_label,
                 'retrieval_trace': {'assets': list(result.assets), 'family': result.family,
                     'budget_characters': self.budgets.get(question, self.retriever.config.context_characters),
-                    'candidate_count': result.candidates, 'ranker_usage': result.usage}}
+                    'candidate_count': result.candidates, 'candidate_pool': result.pool,
+                    'ranker_usage': result.usage}}
         return selected, pilot.concatenate([s['items'] for s in selected.values()])

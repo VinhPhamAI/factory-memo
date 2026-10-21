@@ -15,7 +15,7 @@ from backend.knowledge_bases.industrial_qa import SPEC
 from backend.knowledge_bases.industrial_qa.answering import IndustrialAnswerWriter, WrittenAnswer
 from backend.knowledge_bases.industrial_qa.benchmark_adapter import ScopedRetrieval
 from backend.knowledge_bases.industrial_qa.pipeline import IndustrialQaPipeline, build_retriever
-from backend.knowledge_bases.industrial_qa.retrieval import RetrievalResult, Source
+from backend.knowledge_bases.industrial_qa.retrieval import RetrievalConfig, RetrievalResult, Source
 from backend.knowledge_bases.industrial_qa.service import IndustrialQaService, answer_with_citations
 from backend.src.agents.agent.service import (
     InvalidKnowledgeCitation, KnowledgeAgentService, KnowledgeAgentUnavailable, KnowledgeAgentUpstreamError,
@@ -106,6 +106,51 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             generic = await core.retrieve('MR-JE connector checks', knowledge, documents)
             exact = await core.retrieve('MR-JE-AX391 connector checks', knowledge, documents)
         self.assertEqual((len(generic.sources),len(exact.sources)),(3,4))
+
+    async def test_cross_encoder_prefilter_keeps_top_per_source_and_benchmark_quota(self):
+        recs = [record().model_copy(update={'claim': f'claim {i}'}) for i in range(3)]
+        chunks = [passage(f'melservo_je_p00{i}0_c01', text=f'manual {i}') for i in range(3)]
+        knowledge, documents = stores(recs, chunks)
+        scores = {'claim 0': .1, 'claim 1': .9, 'claim 2': .5, 'manual 0': .2, 'manual 1': .3, 'manual 2': .8}
+        prefilter = SimpleNamespace(score=AsyncMock(side_effect=lambda query, texts:
+            [scores[text.splitlines()[-1]] for text in texts]))
+        invoke = AsyncMock(return_value='{"labels":["K1","D1","K2"]}')
+        with patch.object(llm, 'ainvoke', invoke):
+            core = build_retriever(ranker=object(), prefilter=prefilter,
+                config=RetrievalConfig(prefilter_knowledge=2, prefilter_manual=1))
+            result = await core.retrieve('encoder', knowledge, documents)
+            await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
+                {'run_id': 'run'}, SimpleNamespace(k=8, per_conversation=3), {}, {}, {})
+        # The cross-encoder never sees the ephemeral labels it reorders.
+        self.assertFalse(any(text.startswith('[') for text in prefilter.score.call_args.args[1]))
+        self.assertEqual((result.pool, result.candidates), (6, 3))
+        self.assertEqual([s.text.splitlines()[-1] for s in result.sources], ['claim 1', 'manual 2', 'claim 2'])
+        for prompt in (call.args[1] for call in invoke.call_args_list):
+            self.assertEqual(prompt.count('[K'), 2)
+            self.assertEqual(prompt.count('[D'), 1)
+
+    async def test_hybrid_rerank_mode_cuts_in_search_order_but_keeps_procedure_neighbors(self):
+        recs = [record().model_copy(update={'claim': f'claim {i}'}) for i in range(3)]
+        chunks = [passage('melservo_je_p0000_c01', text='Connection procedure 0'),
+                  *(passage(f'melservo_je_p00{i}0_c01', text=f'manual {i}') for i in (1, 2))]
+        neighbor = passage('melservo_je_p0001_c01', text='procedure step 2')
+        knowledge, documents = stores(recs, chunks, [neighbor])
+        invoke = AsyncMock(return_value='{"labels":["K2","D2","D1"]}')
+        with patch.object(llm, 'ainvoke', invoke):
+            core = build_retriever(ranker=object(),
+                config=RetrievalConfig(rerank_mode='hybrid', prefilter_knowledge=2, prefilter_manual=1))
+            result = await core.retrieve('encoder', knowledge, documents)
+            await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
+                {'run_id': 'run'}, SimpleNamespace(k=8, per_conversation=3), {}, {}, {})
+        self.assertEqual((result.pool, result.candidates), (4, 4))
+        self.assertEqual([s.text.splitlines()[-1] for s in result.sources],
+                         ['claim 1', 'procedure step 2', 'Connection procedure 0'])
+        for prompt in (call.args[1] for call in invoke.call_args_list):
+            self.assertNotIn('claim 2', prompt)
+            self.assertNotIn('manual 1', prompt)
+            self.assertIn('procedure step 2', prompt)
+        with self.assertRaises(ValueError):
+            RetrievalConfig(rerank_mode='cross_encoder')
 
     async def test_unknown_labels_and_empty_rankings_fail(self):
         knowledge, documents = stores([record()])

@@ -6,10 +6,10 @@ from backend.knowledge_bases.industrial_qa.retrieval import IndustrialRetriever,
 from backend.src.services import llm
 
 
-def build_retriever(*, config=RetrievalConfig(), ranker=None):
+def build_retriever(*, config=RetrievalConfig(), ranker=None, prefilter=None):
     ranker = ranker if ranker is not None else llm.chat_client_from_env(
         "ANSWER", max_tokens=2048, response_format=llm.json_schema_format("source_ranking", Ranking))
-    return IndustrialRetriever(ranker, config=config,
+    return IndustrialRetriever(ranker, config=config, prefilter=prefilter,
         prompt=Path(__file__).with_name("rerank.md").read_text().strip())
 
 

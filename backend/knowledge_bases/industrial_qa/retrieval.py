@@ -22,6 +22,9 @@ DOCUMENT_QUERY_INSTRUCTION = (
     "Given a question from a factory maintenance engineer, retrieve the equipment manual passage that answers it"
 )
 UNSCOPED_CONTEXT = frozenset({"case_card", "steps", "source_turns", "benchmark_run_id"})
+# llm: the LLM reranks every scoped candidate. hybrid: only the top hybrid-search
+# candidates per source (plus procedure neighbours) reach the LLM, roughly halving its input.
+RERANK_MODES = ("llm", "hybrid")
 
 
 @dataclass(frozen=True)
@@ -32,10 +35,17 @@ class RetrievalConfig:
     knowledge_candidates: int = 20
     manual_candidates: int = 48
     manual_rerank_candidates: int = 16
+    rerank_mode: str = "llm"
+    # Kept per source by the hybrid cut or the optional cross-encoder prefilter.
+    prefilter_knowledge: int = 8
+    prefilter_manual: int = 8
 
     def __post_init__(self):
+        if self.rerank_mode not in RERANK_MODES:
+            raise ValueError(f"Unknown industrial QA rerank mode: {self.rerank_mode}")
         if min(self.k, self.context_characters, self.knowledge_candidates,
-               self.manual_candidates, self.manual_rerank_candidates) < 1 or self.per_conversation < 0:
+               self.manual_candidates, self.manual_rerank_candidates,
+               self.prefilter_knowledge, self.prefilter_manual) < 1 or self.per_conversation < 0:
             raise ValueError("Invalid industrial QA retrieval limits")
 
 
@@ -120,6 +130,7 @@ class RetrievalResult:
     family: str | None = None
     candidates: int = 0
     usage: dict[str, Any] | None = None
+    pool: int = 0
 
 
 class Ranking(BaseModel):
@@ -127,10 +138,11 @@ class Ranking(BaseModel):
 
 
 class IndustrialRetriever:
-    def __init__(self, ranker, *, config=RetrievalConfig(), prompt: str):
-        self.ranker, self.config, self.prompt = ranker, config, prompt
+    def __init__(self, ranker, *, config=RetrievalConfig(), prompt: str, prefilter=None):
+        self.ranker, self.config, self.prompt, self.prefilter = ranker, config, prompt, prefilter
 
-    async def retrieve(self, question, knowledge, documents, *, scope=None, context_characters=None, config=None):
+    async def candidates(self, question, knowledge, documents, *, scope=None, config=None):
+        """Scoped hybrid candidates from both stores, before any reranking."""
         cfg = config if config is not None else self.config
         assets, family = detected_scope(question)
         local = CATALOG.lookup_scope(assets, family)
@@ -153,11 +165,16 @@ class IndustrialRetriever:
             compatible = build_knowledge_filter(context={"machine_model": family})
             parts = [part for part in (scope, general, compatible) if part]
             hits = await knowledge.search_knowledge(question, k=cfg.knowledge_candidates, filters={"$and": parts})
+        hybrid = cfg.rerank_mode == "hybrid"
+        if hybrid:
+            hits = hits[:cfg.prefilter_knowledge]
         expected_manual = CATALOG.families[family].manual if family else None
         allowed = [p for p in passages if not expected_manual or reference_id(p) == expected_manual]
         if not allowed:
             allowed = passages
-        selected_passages = list({p.chunk_id: p for p in allowed}.values())[:cfg.manual_rerank_candidates]
+        # The hybrid cut precedes neighbour expansion so multi-chunk procedures stay whole.
+        limit = min(cfg.manual_rerank_candidates, cfg.prefilter_manual) if hybrid else cfg.manual_rerank_candidates
+        selected_passages = list({p.chunk_id: p for p in allowed}.values())[:limit]
         seeds = [p for p in selected_passages[:3] if re.search(r"procedure|steps?|connect|configur", p.text, re.I)]
         if seeds:
             neighbors = await documents.adjacent_chunks([p.chunk_id for p in seeds])
@@ -170,6 +187,27 @@ class IndustrialRetriever:
         selected_passages = list({p.chunk_id: p for p in selected_passages}.values())
         candidates = {f"K{i}": Source(f"K{i}", record=hit.record, confident=hit.confident) for i, hit in enumerate(hits, 1)}
         candidates.update({f"D{i}": Source(f"D{i}", passage=p) for i, p in enumerate(selected_passages, 1)})
+        return assets, family, candidates
+
+    async def prefiltered(self, question, candidates, cfg):
+        """Cross-encoder cut before the LLM. Quotas are per source because
+        scores of short records and long manual chunks are not comparable."""
+        items = list(candidates.values())
+        scores = await self.prefilter.score(question, [re.sub(r"^\[[KD]\d+\] ", "", s.text) for s in items])
+        kept = {}
+        for kind, limit in (("K", cfg.prefilter_knowledge), ("D", cfg.prefilter_manual)):
+            ranked = sorted((pair for pair in zip(scores, items) if pair[1].label[0] == kind),
+                            key=lambda pair: -pair[0])[:limit]
+            kept.update({f"{kind}{i}": Source(f"{kind}{i}", s.record, s.passage, confident=s.confident)
+                         for i, (_, s) in enumerate(ranked, 1)})
+        return kept
+
+    async def retrieve(self, question, knowledge, documents, *, scope=None, context_characters=None, config=None):
+        cfg = config if config is not None else self.config
+        assets, family, candidates = await self.candidates(question, knowledge, documents, scope=scope, config=cfg)
+        pool = len(candidates)
+        if self.prefilter is not None and candidates:
+            candidates = await self.prefiltered(question, candidates, cfg)
         if not candidates:
             return RetrievalResult((), tuple(assets), family)
         values = {"QUESTION": question, "SOURCES": "\n\n".join(s.text for s in candidates.values())}
@@ -190,4 +228,5 @@ class IndustrialRetriever:
             used += size
         if not sources:
             raise llm.LLMResponseError("Reranker selected no evidence within context budget")
-        return RetrievalResult(tuple(sources), tuple(assets), family, len(candidates), getattr(response, "usage_metadata", None))
+        return RetrievalResult(tuple(sources), tuple(assets), family, len(candidates),
+                               getattr(response, "usage_metadata", None), pool)
