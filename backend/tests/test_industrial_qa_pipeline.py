@@ -2,6 +2,9 @@
 import asyncio
 from dataclasses import replace
 import json
+import os
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -14,6 +17,7 @@ from backend.knowledge_bases import AnswerPipeline, get_kb
 from backend.knowledge_bases.industrial_qa import SPEC
 from backend.knowledge_bases.industrial_qa.answering import IndustrialAnswerWriter, WrittenAnswer
 from backend.knowledge_bases.industrial_qa.benchmark_adapter import ScopedRetrieval
+from backend.knowledge_bases.industrial_qa.config import DEFAULT_PATH, ENV_VAR, load_config, runner_config
 from backend.knowledge_bases.industrial_qa.pipeline import IndustrialQaPipeline, build_retriever
 from backend.knowledge_bases.industrial_qa.retrieval import RetrievalConfig, RetrievalResult, Source
 from backend.knowledge_bases.industrial_qa.service import IndustrialQaService, answer_with_citations
@@ -46,6 +50,92 @@ def stores(records=(), passages=(), neighbors=()):
 def written(sources=('K1','D1'), answer='Isolate power, then check CN2.'):
     return json.dumps({'answer': answer, 'sources': list(sources),
         'checklist': [{'point': 'Check connectors first', 'sources': list(sources)}] if sources else []})
+
+
+class PipelineConfigTests(unittest.TestCase):
+    def write(self, directory, text):
+        path = Path(directory) / 'config.toml'
+        path.write_text(DEFAULT_PATH.read_text().replace('"rerank.md"', json.dumps(str(DEFAULT_PATH.with_name('rerank.md'))))
+                        .replace('"answer.md"', json.dumps(str(DEFAULT_PATH.with_name('answer.md')))) + text)
+        return path
+
+    def test_packaged_config_matches_code_defaults(self):
+        with patch.dict(os.environ, {ENV_VAR: ''}):
+            config = load_config()
+        self.assertEqual(config.path, DEFAULT_PATH)
+        # The packaged file pins the frozen runs' settings that the code leaves to the environment.
+        self.assertEqual(config.retrieval, RetrievalConfig(min_vector_similarity=0.6))
+        self.assertEqual((config.rerank.max_tokens, config.answer.max_tokens, config.choice.max_tokens), (2048, 8192, 1024))
+        self.assertEqual((config.extraction.env_prefix, config.extraction.max_tokens, config.extraction.thinking),
+                         ('EXTRACTION', 8192, 'disabled'))
+        self.assertEqual((config.ingestion.verify, config.ingestion.consolidate), ('quotes', True))
+        self.assertEqual((config.conversation.history_characters, config.conversation.history_turns), (6000, 5))
+        self.assertEqual(config.prompts['rerank'], DEFAULT_PATH.with_name('rerank.md').read_text().strip())
+        provenance = config.provenance()
+        self.assertEqual(provenance['retrieval']['rerank_mode'], 'llm')
+        self.assertNotIn('api_key', json.dumps(provenance).lower())
+
+    def test_env_selects_file_and_unknown_or_invalid_settings_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(directory, '')
+            path.write_text(path.read_text().replace('rerank_mode = "llm"', 'rerank_mode = "hybrid"'))
+            with patch.dict(os.environ, {ENV_VAR: str(path)}):
+                self.assertEqual(load_config().retrieval.rerank_mode, 'hybrid')
+            for broken in ('\n[llm.judge]\nenv_prefix = "X"\nmax_tokens = 1\n', '\ntop_k = 3\n'):
+                with self.assertRaises(ValueError):
+                    load_config(self.write(directory, broken))
+            path.write_text(path.read_text().replace('k = 8', 'k = 8\nrerank_top = 4'))
+            with self.assertRaises(ValueError):
+                load_config(path)
+            path.write_text(path.read_text().replace('rerank_mode = "hybrid"', 'rerank_mode = "cross"'))
+            with self.assertRaises(ValueError):
+                load_config(path)
+
+    def test_toml_llm_settings_override_environment(self):
+        env = {'OPENROUTER_API_KEY': 'test', 'OPENROUTER_MODEL': 'env-model', 'ANSWER_THINKING': 'enabled',
+               'EXTRACTION_MODEL': 'env-extraction', 'EXTRACTION_THINKING': 'enabled'}
+        with patch.dict(os.environ, env):
+            config = load_config(DEFAULT_PATH)
+            client = config.answer.client('written_answer', WrittenAnswer)
+            service, provenance = config.ingestion_service(SPEC, object())
+            resolved = config.provenance()['llm']
+        self.assertEqual((client.model_name, client.extra_body), ('deepseek-v4.1-flash', {'thinking': {'type': 'disabled'}}))
+        self.assertEqual({key: provenance[key] for key in ('model', 'max_tokens', 'thinking')},
+                         {'model': 'deepseek-v4.1-flash', 'max_tokens': 8192, 'thinking': 'disabled'})
+        self.assertEqual(provenance['version'], SPEC.extraction_version)
+        self.assertEqual(service._verifier.method, 'quotes')
+        self.assertIsNotNone(service._consolidator)
+        self.assertEqual(resolved['verify']['thinking'], None)
+        self.assertNotIn('test', json.dumps(resolved))
+
+    def test_ingestion_settings_fall_back_to_voice_environment(self):
+        env = {'VOICE_VERIFY': 'off', 'VOICE_CONSOLIDATE': 'false'}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, env):
+            self.assertEqual((load_config(DEFAULT_PATH).ingestion.verify, load_config(DEFAULT_PATH).ingestion.consolidate),
+                             ('quotes', True))
+            path = self.write(directory, '')
+            path.write_text(path.read_text().replace('verify = "quotes"', '').replace('consolidate = true', ''))
+            ingestion = load_config(path).ingestion
+            self.assertEqual((ingestion.verify, ingestion.consolidate, ingestion.validation_retries), ('off', False, 0))
+            with patch.dict(os.environ, {'VOICE_VERIFY': '', 'VOICE_CONSOLIDATE': ''}):
+                self.assertEqual((load_config(path).ingestion.verify, load_config(path).ingestion.consolidate),
+                                 ('quotes', True))
+            for broken in ({'VOICE_VERIFY': 'maybe'}, {'VOICE_CONSOLIDATE': 'perhaps'}):
+                with patch.dict(os.environ, broken), self.assertRaises(ValueError):
+                    load_config(path)
+
+    def test_voice_capture_uses_the_industrial_ingestion_settings(self):
+        from backend.api.voice_capture import default_ingestion_factory
+        with patch('backend.knowledge_bases.industrial_qa.config.PipelineConfig.ingestion_service',
+                   return_value=('service', {'version': 'v'})) as built:
+            self.assertEqual(default_ingestion_factory(SPEC, 'store'), ('service', {'version': 'v'}))
+        built.assert_called_once_with(SPEC, 'store')
+
+    def test_runner_flags_override_only_when_given(self):
+        args = SimpleNamespace(config=DEFAULT_PATH, k=None, per_conversation=0)
+        config = runner_config(args)
+        self.assertEqual((args.k, config.retrieval.k, config.retrieval.per_conversation), (8, 8, 0))
+        self.assertEqual(load_config(DEFAULT_PATH).retrieval.per_conversation, 3)
 
 
 class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -94,6 +184,11 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             result = await build_retriever(ranker=object()).retrieve('MR-JE connections', knowledge, documents)
         self.assertEqual([s.passage.doc_id for s in result.sources], [main.doc_id, good.doc_id])
         self.assertNotIn(fx.doc_id, '\n'.join(s.text for s in result.sources))
+        self.assertEqual(knowledge.search_knowledge.call_args.kwargs['min_vector_similarity'], 0.6)
+        unset = load_config(DEFAULT_PATH).with_retrieval(min_vector_similarity=None)
+        with patch.object(llm, 'ainvoke', AsyncMock(return_value='{"labels":["D1"]}')):
+            await build_retriever(unset, ranker=object()).retrieve('MR-JE connections', knowledge, documents)
+        self.assertNotIn('min_vector_similarity', knowledge.search_knowledge.call_args.kwargs)
 
     async def test_generic_queries_cap_conversations_but_exact_asset_retains_complementary_records(self):
         recs = [record(machine_id='MR-JE-AX391', machine_model='MR-JE') for _ in range(4)]
@@ -116,8 +211,8 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             [scores[text.splitlines()[-1]] for text in texts]))
         invoke = AsyncMock(return_value='{"labels":["K1","D1","K2"]}')
         with patch.object(llm, 'ainvoke', invoke):
-            core = build_retriever(ranker=object(), prefilter=prefilter,
-                config=RetrievalConfig(prefilter_knowledge=2, prefilter_manual=1))
+            core = build_retriever(load_config().with_retrieval(prefilter_knowledge=2, prefilter_manual=1),
+                ranker=object(), prefilter=prefilter)
             result = await core.retrieve('encoder', knowledge, documents)
             await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
                 {'run_id': 'run'}, SimpleNamespace(k=8, per_conversation=3), {}, {}, {})
@@ -137,8 +232,8 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         knowledge, documents = stores(recs, chunks, [neighbor])
         invoke = AsyncMock(return_value='{"labels":["K2","D2","D1"]}')
         with patch.object(llm, 'ainvoke', invoke):
-            core = build_retriever(ranker=object(),
-                config=RetrievalConfig(rerank_mode='hybrid', prefilter_knowledge=2, prefilter_manual=1))
+            core = build_retriever(load_config().with_retrieval(
+                rerank_mode='hybrid', prefilter_knowledge=2, prefilter_manual=1), ranker=object())
             result = await core.retrieve('encoder', knowledge, documents)
             await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
                 {'run_id': 'run'}, SimpleNamespace(k=8, per_conversation=3), {}, {}, {})

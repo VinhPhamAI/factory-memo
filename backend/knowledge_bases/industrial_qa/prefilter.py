@@ -28,16 +28,17 @@ from dotenv import load_dotenv
 
 from backend.knowledge_bases.industrial_qa import SPEC, pilot
 from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, ScopedRetrieval, benchmark_scope, sha
+from backend.knowledge_bases.industrial_qa.config import add_runner_arguments, runner_config
 from backend.knowledge_bases.industrial_qa.pipeline import build_retriever
 from backend.knowledge_bases.industrial_qa.retrieval import (
-    DOCUMENT_QUERY_INSTRUCTION, RERANK_MODES, IndustrialRetriever, RetrievalConfig,
+    DOCUMENT_QUERY_INSTRUCTION, RERANK_MODES, IndustrialRetriever,
 )
 from backend.knowledge_bases.stores import open_document_store
 from backend.src.agents.rag.cross_encoder import CrossEncoderScorer
 
 INSTRUCTION = ("Given a question from a factory maintenance engineer, retrieve the expert knowledge record "
                "or equipment manual passage that answers it")
-SOURCES = ("benchmark_adapter.py", "retrieval.py", "answering.py", "pipeline.py", "rerank.md", "answer.md",
+SOURCES = ("benchmark_adapter.py", "retrieval.py", "answering.py", "pipeline.py", "config.py", "rerank.md", "answer.md",
            "prefilter.py")
 SOURCE_GROUPS = ("expert_only", "docs_only", "expert_and_docs")
 
@@ -218,7 +219,8 @@ def prepare(args):
         "database": SPEC.database, "split": "train", "run_id": run["run_id"],
         "reused_run_ids": run.get("reused_run_ids", []), "from_run_dir": str(args.from_run_dir.resolve()),
         "retrieval_scope": benchmark_scope(run), "k": args.k, "per_conversation": args.per_conversation,
-        "context_characters": RetrievalConfig().context_characters, "concurrency": args.concurrency,
+        "context_characters": args.config.retrieval.context_characters, "concurrency": args.concurrency,
+        "config": args.config.provenance(),
         "prefilter": cross_encoder and {**cross_encoder.provenance, "knowledge": args.keep_knowledge,
                                         "manual": args.keep_manual},
         "models": {key: os.getenv(key) for key in ("OPENROUTER_MODEL", "ANSWER_MODEL", "ANSWER_THINKING",
@@ -237,14 +239,12 @@ def prepare(args):
 
 async def answer(args):
     run, cross_encoder = prepare(args)
-    config = RetrievalConfig(rerank_mode=args.rerank_mode, prefilter_knowledge=args.keep_knowledge,
-                             prefilter_manual=args.keep_manual)
     path = args.run_dir / "timings.json"
     saved = json.loads(path.read_text()) if path.exists() else {}
     timings = defaultdict(dict, saved)
-    retrieval = TimedRetrieval(build_retriever(config=config, prefilter=cross_encoder), timings)
+    retrieval = TimedRetrieval(build_retriever(args.config, prefilter=cross_encoder), timings)
     try:
-        code = await pilot.answer(args, run, retrieve=retrieval, generate=CompleteAnswer(),
+        code = await pilot.answer(args, run, retrieve=retrieval, generate=CompleteAnswer(args.config),
                                   init_schema=False, checkpoint_every=4)
     finally:
         pilot.save(path, dict(timings))
@@ -316,11 +316,10 @@ def main():
                                           default=[4, 6, 8, 10, 12])
     answer_parser = commands.choices["answer"]
     answer_parser.add_argument("--model", help=f"cross-encoder or {HybridOrder.model}; omit for the unchanged H1 baseline")
-    answer_parser.add_argument("--rerank-mode", choices=RERANK_MODES, default="llm")
-    answer_parser.add_argument("--keep-knowledge", type=int, default=RetrievalConfig.prefilter_knowledge)
-    answer_parser.add_argument("--keep-manual", type=int, default=RetrievalConfig.prefilter_manual)
-    answer_parser.add_argument("--k", type=int, default=8)
-    answer_parser.add_argument("--per-conversation", type=int, default=3)
+    add_runner_arguments(answer_parser)
+    answer_parser.add_argument("--rerank-mode", choices=RERANK_MODES, help="override [retrieval] rerank_mode")
+    answer_parser.add_argument("--keep-knowledge", type=int, help="override [retrieval] prefilter_knowledge")
+    answer_parser.add_argument("--keep-manual", type=int, help="override [retrieval] prefilter_manual")
     answer_parser.add_argument("--concurrency", type=int, default=4)
     answer_parser.add_argument("--skip-llm", action="store_true", help="score retrieval and MC only")
     compare_parser = commands.add_parser("compare")
@@ -329,6 +328,17 @@ def main():
     args = parser.parse_args()
     if args.command == "compare":
         return compare(args)
+    if args.command == "answer":
+        try:
+            config = runner_config(args)
+            overrides = {"rerank_mode": args.rerank_mode, "prefilter_knowledge": args.keep_knowledge,
+                         "prefilter_manual": args.keep_manual}
+            args.config = config.with_retrieval(**{k: v for k, v in overrides.items() if v is not None})
+        except ValueError as exc:
+            parser.error(str(exc))
+        retrieval = args.config.retrieval
+        args.rerank_mode = retrieval.rerank_mode
+        args.keep_knowledge, args.keep_manual = retrieval.prefilter_knowledge, retrieval.prefilter_manual
     load_dotenv(pilot.PROJECT_ROOT / ".env")
     args.run_dir.mkdir(parents=True, exist_ok=True)
     return asyncio.run(pool(args) if args.command == "pool" else answer(args))

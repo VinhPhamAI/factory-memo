@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.knowledge_bases.stores import open_document_store
+from backend.knowledge_bases.industrial_qa.config import load_config
 from backend.knowledge_bases.industrial_qa.pipeline import IndustrialQaPipeline
 from backend.knowledge_bases.industrial_qa.retrieval import DOCUMENT_QUERY_INSTRUCTION, detected_scope
 from backend.src.agents.agent.config import RUN_TIMEOUT_SECONDS
@@ -74,6 +75,7 @@ class IndustrialQaService(KnowledgeAgentService):
         self._documents, self._owns_documents = documents, documents is None
         self._document_lock = asyncio.Lock()
         self.pipeline = pipeline if pipeline is not None else IndustrialQaPipeline()
+        self._conversation = (getattr(self.pipeline, "config", None) or load_config()).conversation
         self._timeout_seconds = timeout_seconds
         self._threads: dict[str, _Thread] = {}
 
@@ -118,12 +120,14 @@ class IndustrialQaService(KnowledgeAgentService):
                         "assets": list(retrieved.assets), "family": retrieved.family,
                         "knowledge_ids": [str(s.record.id) for s in retrieved.sources if s.record],
                         "document_ids": [s.passage.doc_id for s in retrieved.sources if s.passage]}})
-                history = "\n\n".join(f"User: {q}\nAssistant: {a}" for q, a in thread.history)[-6000:]
+                limit = self._conversation.history_characters
+                history = "\n\n".join(f"User: {q}\nAssistant: {a}" for q, a in thread.history)[-limit:] if limit else ""
                 written, _ = await self.pipeline.write(query, retrieved, history=history)
                 answer, citations = answer_with_citations(written, retrieved)
                 # Labels (K1, D2) only mean something within their own turn.
                 history_answer = re.sub(r"\s*\[[KD]\d+\]", "", written.answer)
-                thread.history = [*thread.history, (query, history_answer)][-5:]
+                turns = self._conversation.history_turns
+                thread.history = [*thread.history, (query, history_answer)][-turns:] if turns else []
                 yield events.create("answer.delta", {"text": answer})
                 yield events.create("answer.citations", {"citations": [asdict(c) for c in citations]})
                 yield events.create("run.completed", {"duration_ms": int((monotonic()-started)*1000),

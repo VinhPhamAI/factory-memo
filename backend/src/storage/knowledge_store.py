@@ -1077,12 +1077,14 @@ class KnowledgeStore:
         *,
         filters: dict[str, Any] | None = None,
         k: int = DEFAULT_SEARCH_K,
+        min_vector_similarity: float | None = None,
     ) -> list[KnowledgeSearchHit]:
         """Fuse vector and PostgreSQL full-text ranks with RRF.
 
         The nearest vector candidates are always kept. Each hit is labelled
-        ``confident`` when its cosine similarity reaches the configured
-        threshold or it shares enough query terms; confident hits come first.
+        ``confident`` when its cosine similarity reaches the threshold (the
+        store's, unless given here) or it shares enough query terms; confident
+        hits come first.
         """
 
         result_k = max(1, min(k, MAX_SEARCH_K))
@@ -1205,7 +1207,10 @@ class KnowledgeStore:
             "candidate_k": candidate_k,
             "result_k": result_k,
             "rrf_k": RRF_RANK_CONSTANT,
-            "max_vector_distance": 1.0 - self._min_vector_similarity,
+            "max_vector_distance": 1.0 - (
+                self._min_vector_similarity if min_vector_similarity is None
+                else _validate_min_vector_similarity(min_vector_similarity)
+            ),
             "lexical_min_terms": LEXICAL_CONFIDENT_MIN_TERMS,
             "lexical_term_fraction": LEXICAL_CONFIDENT_TERM_FRACTION,
         }

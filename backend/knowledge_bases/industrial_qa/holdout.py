@@ -25,13 +25,14 @@ from sqlalchemy import text
 
 from backend.knowledge_bases.industrial_qa import SPEC, pilot
 from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, ScopedRetrieval, benchmark_scope, sha
+from backend.knowledge_bases.industrial_qa.config import add_runner_arguments, runner_config
 from backend.knowledge_bases.industrial_qa.train import ingest_missing
 
 
 SPLIT = "test"
 SOURCES = ("holdout.py", "pilot.py", "runs.py", "train.py", "schema.py", "extract.md", "catalog_types.yaml",
            "catalog_assets.yaml", "ontology.yaml", "benchmark_adapter.py", "retrieval.py", "answering.py",
-           "pipeline.py", "rerank.md", "answer.md")
+           "pipeline.py", "config.py", "rerank.md", "answer.md")
 
 
 def make_run(questions, reused):
@@ -71,7 +72,8 @@ def prepare(args):
         "conversation_ids": run["conversation_ids"], "reused_run_ids": reused,
         "reuse_run_dir": str(args.reuse_run_dir.resolve()), "manual_index_rebuilt": False,
         "retrieval_scope": benchmark_scope(run), "consolidation_scope": pilot.run_filter(run),
-        "k": args.k, "per_conversation": args.per_conversation, "context_default_characters": 24000,
+        "k": args.k, "per_conversation": args.per_conversation, "context_default_characters": args.config.retrieval.context_characters,
+        "config": args.config.provenance(),
         "concurrency": args.concurrency, "batch_size": args.batch_size, "verify": args.verify,
         "models": {key: os.getenv(key) for key in
                    ("OPENROUTER_MODEL", "EXTRACTION_MODEL", "ANSWER_MODEL", "EMBEDDING_MODEL",
@@ -86,6 +88,7 @@ def prepare(args):
         raise ValueError("Test configuration changed; preserve this run and use a new run directory")
     snapshot = args.run_dir / "snapshot"
     snapshot.mkdir(exist_ok=True)
+    shutil.copyfile(args.config.path, snapshot / f"config_{args.config.path.name}")
     for source in sources:
         shutil.copyfile(source, snapshot / source.name)
     pilot.save(manifest_path, manifest)
@@ -144,8 +147,8 @@ async def execute(args):
     ):
         raise ValueError("All test conversations must be ingested before evaluation")
     if args.command in ("answer", "all"):
-        if code := await pilot.answer(args, run, retrieve=ScopedRetrieval(scope=benchmark_scope(run)),
-                                      generate=CompleteAnswer(), init_schema=False, checkpoint_every=4):
+        if code := await pilot.answer(args, run, retrieve=ScopedRetrieval(scope=benchmark_scope(run), config=args.config),
+                                      generate=CompleteAnswer(args.config), init_schema=False, checkpoint_every=4):
             return code
     if args.command in ("evaluate", "all"):
         if code := pilot.evaluate(args, run):
@@ -166,15 +169,18 @@ def main():
     parser.add_argument("command", choices=("select", "ingest", "answer", "evaluate", "all"))
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--reuse-run-dir", type=Path, required=True, help="train run whose corpus stays searchable")
-    parser.add_argument("--k", type=int, default=8)
-    parser.add_argument("--per-conversation", type=int, default=3)
+    add_runner_arguments(parser)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--verify", choices=("quotes", "llm"), default="quotes")
+    parser.add_argument("--verify", choices=("quotes", "llm"), help="override [ingestion] verify")
     parser.add_argument("--skip-llm", action="store_true")
     args = parser.parse_args()
-    if min(args.k, args.concurrency, args.batch_size) < 1 or args.per_conversation < 0:
-        parser.error("Invalid retrieval or batching options")
+    try:
+        args.config = runner_config(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if min(args.concurrency, args.batch_size) < 1:
+        parser.error("Invalid batching options")
     load_dotenv(pilot.PROJECT_ROOT / ".env")
     return asyncio.run(execute(args))
 

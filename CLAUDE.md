@@ -56,6 +56,9 @@ Available domain packages in this checkout:
   answers. API, CLI and benchmark adapters must use the shared retrieval/answer
   implementation in `backend/knowledge_bases/industrial_qa/pipeline.py`; do not
   introduce a benchmark-only version of the answer policy.
+  Its retrieval, rerank mode, LLM step and prompt settings live in
+  `industrial_qa/config.toml` (or `INDUSTRIAL_QA_CONFIG` / runner `--config`);
+  runner manifests record the resolved values and file hash.
 - **General:** a general-purpose ReAct knowledge agent over conversations on any
   topic: a flat typed item schema (type, certainty, scope, speaker, verbatim
   quotes) on the shared tables, with no catalog, ontology or fixed answer

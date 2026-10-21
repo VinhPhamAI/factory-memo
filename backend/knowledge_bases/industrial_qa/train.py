@@ -24,6 +24,7 @@ from sqlalchemy import text
 from backend.knowledge_bases.industrial_qa import SPEC, pilot
 from backend.knowledge_bases.industrial_qa.runs import overwrite_run
 from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, ScopedRetrieval, benchmark_scope, sha
+from backend.knowledge_bases.industrial_qa.config import add_runner_arguments, runner_config
 
 
 def make_run(questions, baseline, directory):
@@ -113,7 +114,8 @@ def prepare(args):
     sources = [Path(__file__), Path(pilot.__file__), Path(__file__).with_name("runs.py"),
                *(Path(__file__).with_name(name) for name in
                  ("schema.py", "extract.md", "catalog_types.yaml", "catalog_assets.yaml", "ontology.yaml")),
-               *(Path(__file__).with_name(n) for n in ("benchmark_adapter.py", "retrieval.py", "answering.py", "pipeline.py", "rerank.md", "answer.md"))]
+               *(Path(__file__).with_name(n) for n in ("benchmark_adapter.py", "retrieval.py", "answering.py", "pipeline.py", "config.py",
+                                                    "rerank.md", "answer.md"))]
     manifest = {
         "policy": "H1+H3", "database": database, "source_database": previous.get("database"),
         "corpus_policy": "replace previous runs in the official database", "run_id": run["run_id"], "split": "train",
@@ -123,7 +125,8 @@ def prepare(args):
         "new_conversations": len(run["new_conversation_ids"]), "manual_index_rebuilt": False,
         "retrieval_scope": search_scope(run), "consolidation_scope": pilot.run_filter(run),
         "k": args.k, "per_conversation": args.per_conversation,
-        "context_default_characters": 24000, "concurrency": args.concurrency, "batch_size": args.batch_size,
+        "context_default_characters": args.config.retrieval.context_characters, "config": args.config.provenance(),
+        "concurrency": args.concurrency, "batch_size": args.batch_size,
         "verify": args.verify,
         "models": {key: os.getenv(key) for key in
                    ("OPENROUTER_MODEL", "EXTRACTION_MODEL", "ANSWER_MODEL", "EMBEDDING_MODEL",
@@ -138,6 +141,7 @@ def prepare(args):
         raise ValueError("Full-train configuration changed; preserve this run and use a new run directory")
     snapshot = args.run_dir / "snapshot"
     snapshot.mkdir(exist_ok=True)
+    shutil.copyfile(args.config.path, snapshot / f"config_{args.config.path.name}")
     for source in sources:
         shutil.copyfile(source, snapshot / ("experiment_" + source.name if source.parent.name == "experiments" else source.name))
     pilot.save(manifest_path, manifest)
@@ -179,13 +183,7 @@ async def _ingest_missing(args, run):
         print("All train conversations already processed; no ingestion repeated")
         return 0
     conversations = pilot.public_conversations()
-    extractor = pilot.KnowledgeExtractionService.from_env(
-        SPEC.extract_prompt,
-        max_tokens=pilot.extraction_max_tokens_from_env(),
-        json_schema=True,
-        output_model=SPEC.extraction_output_model,
-        ontology=SPEC.ontology,
-    )
+    extractor = args.config.extractor(SPEC)
     run["extraction"] = extractor.provenance
     store = await pilot.KnowledgeStore.for_kb(SPEC, init_schema=False)
     try:
@@ -194,8 +192,9 @@ async def _ingest_missing(args, run):
         service = pilot.KnowledgeIngestionService(
             extractor, store, extraction_metadata={"version": SPEC.extraction_version, **extractor.provenance},
             ontology=SPEC.ontology, normalizer=SPEC.record_normalizer,
-            verifier=pilot.KnowledgeVerifier.from_env(args.verify),
-            consolidator=pilot.KnowledgeConsolidator.from_env(store, scope=pilot.run_filter(run)),
+            verifier=args.config.verifier(args.verify),
+            consolidator=args.config.consolidator(store, scope=pilot.run_filter(run))
+                         if args.config.ingestion.consolidate else None,
         )
         for start in range(0, len(remaining), args.batch_size):
             batch = remaining[start:start + args.batch_size]
@@ -262,7 +261,8 @@ async def execute(args):
         old = json.loads((args.from_run_dir / "answers.json").read_text())
         budgets = {answer["question"]: answer["context_characters"] for answer in old}
         if code := await pilot.answer(args, run,
-            retrieve=ScopedRetrieval(budgets, scope=search_scope(run)), generate=CompleteAnswer(),
+            retrieve=ScopedRetrieval(budgets, scope=search_scope(run), config=args.config),
+            generate=CompleteAnswer(args.config),
             init_schema=False, checkpoint_every=4,
         ):
             return code
@@ -285,15 +285,18 @@ def main():
     parser.add_argument("command", choices=("select", "ingest", "answer", "evaluate", "all"))
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--from-run-dir", type=Path, required=True)
-    parser.add_argument("--k", type=int, default=8)
-    parser.add_argument("--per-conversation", type=int, default=3)
+    add_runner_arguments(parser)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--verify", choices=("quotes", "llm"), default="quotes")
+    parser.add_argument("--verify", choices=("quotes", "llm"), help="override [ingestion] verify")
     parser.add_argument("--skip-llm", action="store_true")
     args = parser.parse_args()
-    if min(args.k, args.concurrency, args.batch_size) < 1 or args.per_conversation < 0:
-        parser.error("Invalid retrieval or batching options")
+    try:
+        args.config = runner_config(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if min(args.concurrency, args.batch_size) < 1:
+        parser.error("Invalid batching options")
     load_dotenv(pilot.PROJECT_ROOT / ".env")
     return asyncio.run(execute(args))
 

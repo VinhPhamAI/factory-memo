@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from backend.knowledge_bases.industrial_qa import pilot
 from backend.knowledge_bases.industrial_qa.answering import IndustrialAnswerWriter
+from backend.knowledge_bases.industrial_qa.config import load_config
 from backend.knowledge_bases.industrial_qa.pipeline import build_retriever
 from backend.src.services import llm
 
@@ -32,10 +33,11 @@ class Choice(BaseModel):
 
 
 class CompleteAnswer:
-    def __init__(self):
-        self.writer = IndustrialAnswerWriter()
-        self.chooser = llm.chat_client_from_env('ANSWER', max_tokens=1024,
-            response_format=llm.json_schema_format('choice', Choice))
+    def __init__(self, config=None):
+        config = config if config is not None else load_config()
+        self.writer = IndustrialAnswerWriter(config=config)
+        self.chooser = config.choice.client('choice', Choice)
+        self.env_prefix = config.choice.env_prefix
 
     async def __call__(self, question, sources, _client):
         texts = {label: source['text'] for label, source in sources.items()}
@@ -47,16 +49,16 @@ class CompleteAnswer:
             + '\nIndependently written answer:\n' + written.answer + '\nOptions:\n' + options
             + '\nSources:\n' + '\n\n'.join(texts.values()))
         choice = llm.validated(Choice,
-            llm.response_json(response, task='choice', env_prefix='ANSWER'), task='choice')
+            llm.response_json(response, task='choice', env_prefix=self.env_prefix), task='choice')
         return pilot.AnswerOutput(answer=written.answer, choice=choice.choice, sources=written.sources), {
             'options_seen_by_writer': False, 'checklist': [p.model_dump() for p in written.checklist],
             'usage': [usage, getattr(response, 'usage_metadata', None)]}
 
 
 class ScopedRetrieval:
-    def __init__(self, budgets=None, *, scope=None, retriever=None):
+    def __init__(self, budgets=None, *, scope=None, retriever=None, config=None):
         self.budgets, self.scope = budgets or {}, scope
-        self.retriever = retriever if retriever is not None else build_retriever()
+        self.retriever = retriever if retriever is not None else build_retriever(config)
 
     async def __call__(self, question, store, documents, run, args, by_evidence, conversations, chunks):
         # These are explicit benchmark controls, not different retrieval policy.

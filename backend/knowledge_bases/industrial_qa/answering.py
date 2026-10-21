@@ -1,11 +1,11 @@
 """H3 evidence-grounded answer writing, shared by runtime and benchmarks."""
 from __future__ import annotations
 
-from pathlib import Path
 import re
 
 from pydantic import BaseModel, Field, field_validator
 
+from backend.knowledge_bases.industrial_qa.config import load_config
 from backend.src.services import llm
 
 
@@ -30,12 +30,10 @@ class WrittenAnswer(BaseModel):
 
 
 class IndustrialAnswerWriter:
-    def __init__(self, client=None):
-        self.client = client if client is not None else llm.chat_client_from_env(
-            "ANSWER", max_tokens=8192,
-            response_format=llm.json_schema_format("written_answer", WrittenAnswer),
-        )
-        self.prompt = Path(__file__).with_name("answer.md").read_text().strip()
+    def __init__(self, client=None, *, config=None):
+        config = config if config is not None else load_config()
+        self.client = client if client is not None else config.answer.client("written_answer", WrittenAnswer)
+        self.prompt, self.env_prefix = config.prompts["answer"], config.answer.env_prefix
 
     async def write(self, question: str, sources: dict[str, str], *, history: str = ""):
         # One pass prevents braces/placeholders in untrusted evidence from
@@ -45,7 +43,7 @@ class IndustrialAnswerWriter:
         prompt = re.sub(r"\{(QUESTION|SOURCES|HISTORY)\}", lambda m: values[m[1]], self.prompt)
         response = await llm.ainvoke(self.client, prompt)
         written = llm.validated(WrittenAnswer,
-            llm.response_json(response, task="written answer", env_prefix="ANSWER"), task="written answer")
+            llm.response_json(response, task="written answer", env_prefix=self.env_prefix), task="written answer")
         if set(written.sources) - sources.keys() or any(
             set(point.sources) - sources.keys() for point in written.checklist
         ):

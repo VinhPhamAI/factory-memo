@@ -60,20 +60,20 @@ from pydantic import BaseModel, Field
 
 from backend.knowledge_bases.base import PROJECT_ROOT
 from backend.knowledge_bases.industrial_qa import CATALOG, SPEC
+from backend.knowledge_bases.industrial_qa.config import config_from
 from backend.knowledge_bases.industrial_qa.runs import overwrite_run, require_official_database
 from backend.knowledge_bases.stores import open_document_store
-from backend.scripts.kb import extraction_max_tokens_from_env, review_notes
+from backend.scripts.kb import review_notes
 from backend.src.agents.rag.chunking import Document
 from backend.src.agents.rag.indexing import index_documents
 from backend.src.services import llm
-from backend.src.services.knowledge_consolidation import KnowledgeConsolidator
-from backend.src.services.knowledge_extraction import KnowledgeExtractionService, KnowledgeType
+from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.services.knowledge_ingestion import (
     IngestionInput,
     IngestionResult,
     KnowledgeIngestionService,
 )
-from backend.src.services.knowledge_verification import KnowledgeVerifier, VerifyMode
+from backend.src.services.knowledge_verification import VerifyMode
 from backend.src.storage import KnowledgeRecord, KnowledgeStore
 
 
@@ -308,19 +308,14 @@ async def _ingest(args: argparse.Namespace, run: dict[str, Any], *, extractor=No
     if not remaining:
         print("All sampled conversations already extracted")
         return 0
-    extractor = extractor or KnowledgeExtractionService.from_env(
-        SPEC.extract_prompt,
-        max_tokens=extraction_max_tokens_from_env(),
-        json_schema=True,
-        output_model=SPEC.extraction_output_model,
-        ontology=SPEC.ontology,
-    )
+    config = config_from(args)
+    extractor = extractor or config.extractor(SPEC)
     run["extraction"] = extractor.provenance
     store = await KnowledgeStore.for_kb(require_official_database(SPEC))
     try:
         # Scoped: a run must not merge into, or link, other runs' records.
         consolidator = (
-            KnowledgeConsolidator.from_env(store, scope=run_filter(run))
+            config.consolidator(store, scope=run_filter(run))
             if run.get("consolidate") else None
         )
         service = KnowledgeIngestionService(
@@ -328,7 +323,7 @@ async def _ingest(args: argparse.Namespace, run: dict[str, Any], *, extractor=No
             extraction_metadata={"version": SPEC.extraction_version, **extractor.provenance},
             ontology=SPEC.ontology,
             normalizer=SPEC.record_normalizer,
-            verifier=KnowledgeVerifier.from_env(args.verify),
+            verifier=config.verifier(args.verify),
             consolidator=consolidator,
         )
         results = await service.ingest_batch(
@@ -641,8 +636,9 @@ async def answer(
 ) -> int:
     if official:
         from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, ScopedRetrieval
-        retrieve = retrieve if retrieve is not None else ScopedRetrieval()
-        generate = generate if generate is not None else CompleteAnswer()
+        config = config_from(args)
+        retrieve = retrieve if retrieve is not None else ScopedRetrieval(config=config)
+        generate = generate if generate is not None else CompleteAnswer(config)
     processed = {cid: c for cid, c in run["conversations"].items() if c["status"] == "processed"}
     if missing := [cid for cid in run["conversation_ids"] if cid not in processed]:
         print(f"Warning: {len(missing)} conversations not extracted: {', '.join(missing)}",
@@ -979,6 +975,7 @@ def build_parser() -> argparse.ArgumentParser:
              "conversations are not the only knowledge searched",
     )
     parser.add_argument("--verify", choices=[m.value for m in VerifyMode], default="quotes")
+    parser.add_argument("--config", type=Path, help="industrial QA pipeline settings (default: config.toml)")
     parser.add_argument("--k", type=int, default=8, help="records and chunks searched per question")
     parser.add_argument(
         "--per-conversation", type=int, default=3,

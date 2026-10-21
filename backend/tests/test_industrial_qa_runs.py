@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from backend.knowledge_bases.industrial_qa import SPEC, pilot, rewrite, train
 from backend.knowledge_bases.industrial_qa.benchmark_adapter import sha
+from backend.knowledge_bases.industrial_qa.config import DEFAULT_PATH, load_config
 from backend.knowledge_bases.industrial_qa.runs import overwrite_run, replace_previous_runs, require_official_database
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import KnowledgeRecord, KnowledgeStore
@@ -61,7 +62,7 @@ class RunnerDatabaseTests(unittest.TestCase):
                 'source_sha256':{str(p.relative_to(pilot.PROJECT_ROOT)):sha(p.read_text()) for p in files}}
             (source/'manifest.json').write_text(json.dumps(manifest))
             args = SimpleNamespace(from_run_dir=source,run_dir=target,k=8,per_conversation=3,
-                concurrency=4,batch_size=4,verify='quotes')
+                concurrency=4,batch_size=4,verify='quotes',config=load_config(DEFAULT_PATH))
             questions=[{'question_id':'q','conversation_id':'c'}]
             with patch.object(pilot,'gold_questions',side_effect=lambda split: questions if split=='train' else []), \
                     patch.object(pilot,'public_questions',return_value={'q':questions[0]}):

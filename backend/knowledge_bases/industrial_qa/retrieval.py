@@ -39,6 +39,9 @@ class RetrievalConfig:
     # Kept per source by the hybrid cut or the optional cross-encoder prefilter.
     prefilter_knowledge: int = 8
     prefilter_manual: int = 8
+    # Cosine similarity that marks a knowledge hit confident (confident hits rank
+    # first); None keeps the store's KNOWLEDGE_MIN_VECTOR_SIMILARITY.
+    min_vector_similarity: float | None = None
 
     def __post_init__(self):
         if self.rerank_mode not in RERANK_MODES:
@@ -47,6 +50,8 @@ class RetrievalConfig:
                self.manual_candidates, self.manual_rerank_candidates,
                self.prefilter_knowledge, self.prefilter_manual) < 1 or self.per_conversation < 0:
             raise ValueError("Invalid industrial QA retrieval limits")
+        if self.min_vector_similarity is not None and not 0 <= self.min_vector_similarity <= 1:
+            raise ValueError("min_vector_similarity must be between 0 and 1")
 
 
 def detected_scope(question: str):
@@ -138,8 +143,9 @@ class Ranking(BaseModel):
 
 
 class IndustrialRetriever:
-    def __init__(self, ranker, *, config=RetrievalConfig(), prompt: str, prefilter=None):
+    def __init__(self, ranker, *, config=RetrievalConfig(), prompt: str, prefilter=None, env_prefix="ANSWER"):
         self.ranker, self.config, self.prompt, self.prefilter = ranker, config, prompt, prefilter
+        self.env_prefix = env_prefix
 
     async def candidates(self, question, knowledge, documents, *, scope=None, config=None):
         """Scoped hybrid candidates from both stores, before any reranking."""
@@ -147,8 +153,9 @@ class IndustrialRetriever:
         assets, family = detected_scope(question)
         local = CATALOG.lookup_scope(assets, family)
         filters = {"$and": [scope, local]} if scope and local else scope or local
+        threshold = {} if cfg.min_vector_similarity is None else {"min_vector_similarity": cfg.min_vector_similarity}
         hits, passages = await asyncio.gather(
-            knowledge.search_knowledge(question, k=cfg.knowledge_candidates, filters=filters),
+            knowledge.search_knowledge(question, k=cfg.knowledge_candidates, filters=filters, **threshold),
             documents.search(manual_query(question, family), k=cfg.manual_candidates),
         )
         if not assets and cfg.per_conversation:
@@ -164,7 +171,8 @@ class IndustrialRetriever:
             general = {"context.machine_id": {"$exists": False}}
             compatible = build_knowledge_filter(context={"machine_model": family})
             parts = [part for part in (scope, general, compatible) if part]
-            hits = await knowledge.search_knowledge(question, k=cfg.knowledge_candidates, filters={"$and": parts})
+            hits = await knowledge.search_knowledge(question, k=cfg.knowledge_candidates, filters={"$and": parts},
+                                                    **threshold)
         hybrid = cfg.rerank_mode == "hybrid"
         if hybrid:
             hits = hits[:cfg.prefilter_knowledge]
@@ -213,7 +221,7 @@ class IndustrialRetriever:
         values = {"QUESTION": question, "SOURCES": "\n\n".join(s.text for s in candidates.values())}
         response = await llm.ainvoke(self.ranker,
             re.sub(r"\{(QUESTION|SOURCES)\}", lambda m: values[m[1]], self.prompt))
-        ranking = llm.validated(Ranking, llm.response_json(response, task="source ranking", env_prefix="ANSWER"), task="source ranking")
+        ranking = llm.validated(Ranking, llm.response_json(response, task="source ranking", env_prefix=self.env_prefix), task="source ranking")
         if set(ranking.labels) - candidates.keys():
             raise llm.LLMResponseError("Reranker returned unknown source labels")
         counts, used, sources = {"K": 0, "D": 0}, 0, []

@@ -47,11 +47,15 @@ def chat_client_from_env(
     api_key: str | None = None,
     model: str | None = None,
     base_url: str | None = None,
+    thinking: str | None = None,
+    service_tier: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> ChatOpenAI:
     """Deterministic chat client configured by <prefix>_* or OPENROUTER_* settings.
 
     <prefix>_THINKING (enabled/disabled) is a ModelArk/DeepSeek request field;
-    leave it unset for endpoints that do not accept it.
+    leave it unset for endpoints that do not accept it. Explicit arguments
+    override the matching environment settings.
     """
 
     def setting(name: str) -> str | None:
@@ -70,13 +74,13 @@ def chat_client_from_env(
     options: dict[str, Any] = {}
     if response_format:
         options["model_kwargs"] = {"response_format": response_format}
-    if thinking := os.getenv(f"{prefix}_THINKING", "").strip():
+    if thinking := (thinking or os.getenv(f"{prefix}_THINKING", "")).strip():
         if thinking not in {"enabled", "disabled"}:
             raise ValueError(f"{prefix}_THINKING must be enabled or disabled")
         options["extra_body"] = {"thinking": {"type": thinking}}
-    if service_tier := os.getenv(f"{prefix}_SERVICE_TIER"):
+    if service_tier := service_tier or os.getenv(f"{prefix}_SERVICE_TIER"):
         options["service_tier"] = service_tier
-    if timeout := os.getenv(f"{prefix}_TIMEOUT_SECONDS"):
+    if timeout := timeout_seconds or os.getenv(f"{prefix}_TIMEOUT_SECONDS"):
         try:
             options["timeout"] = float(timeout)
         except ValueError as exc:
