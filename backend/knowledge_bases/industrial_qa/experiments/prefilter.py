@@ -1,16 +1,16 @@
-"""Train-only experiment: a local cross-encoder before the H1 LLM reranker.
+"""Train-only experiment: a local cross-encoder before the LLM reranker.
 
-`pool` makes no LLM calls: it rebuilds each train question's H1 candidates
+`pool` makes no LLM calls: it rebuilds each train question's rerank candidates
 from the existing train records and manuals, then measures how much gold
 evidence survives keeping the top N per source by hybrid order or by each
-cross-encoder. `answer` runs the full H1+H3 benchmark path on the train split
+cross-encoder. `answer` runs the full official benchmark path on the train split
 with or without the prefilter or the `--rerank-mode hybrid` cut, then judges
 answers. `compare` tabulates runs.
 Test questions and labels are never read.
 
-python -m backend.knowledge_bases.industrial_qa.prefilter pool --run-dir OUT --from-run-dir TRAIN [--model M] [--config C]
-python -m backend.knowledge_bases.industrial_qa.prefilter answer --run-dir OUT --from-run-dir TRAIN [--model M | --rerank-mode hybrid]
-python -m backend.knowledge_bases.industrial_qa.prefilter compare RUN_DIR...
+python -m backend.knowledge_bases.industrial_qa.experiments.prefilter pool --run-dir OUT --from-run-dir TRAIN [--model M] [--config C]
+python -m backend.knowledge_bases.industrial_qa.experiments.prefilter answer --run-dir OUT --from-run-dir TRAIN [--model M | --rerank-mode hybrid]
+python -m backend.knowledge_bases.industrial_qa.experiments.prefilter compare RUN_DIR...
 """
 from __future__ import annotations
 
@@ -26,8 +26,14 @@ from time import monotonic
 
 from dotenv import load_dotenv
 
-from backend.knowledge_bases.industrial_qa import SPEC, pilot
-from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, ScopedRetrieval, benchmark_scope, sha
+from backend.knowledge_bases.base import PROJECT_ROOT
+from backend.knowledge_bases.industrial_qa import SPEC
+from backend.knowledge_bases.industrial_qa.benchmark import data, evaluation, predictions
+from backend.knowledge_bases.industrial_qa.benchmark.adapter import CompleteAnswer, ScopedRetrieval, benchmark_scope
+from backend.knowledge_bases.industrial_qa.benchmark.evidence import record_turns
+from backend.knowledge_bases.industrial_qa.benchmark.manifest import (
+    PIPELINE_SOURCES, RUNNER_SOURCES, file_hashes, source_paths, write_manifest,
+)
 from backend.knowledge_bases.industrial_qa.config import add_runner_arguments, load_config, runner_config
 from backend.knowledge_bases.industrial_qa.pipeline import build_retriever, build_rewriter
 from backend.knowledge_bases.industrial_qa.retrieval import (
@@ -35,11 +41,11 @@ from backend.knowledge_bases.industrial_qa.retrieval import (
 )
 from backend.knowledge_bases.stores import open_document_store
 from backend.src.agents.rag.cross_encoder import CrossEncoderScorer
+from backend.src.storage import KnowledgeStore
 
 INSTRUCTION = ("Given a question from a factory maintenance engineer, retrieve the expert knowledge record "
                "or equipment manual passage that answers it")
-SOURCES = ("benchmark_adapter.py", "retrieval.py", "answering.py", "pipeline.py", "config.py", "rerank.md", "answer.md",
-           "query.py", "query.md", "prefilter.py")
+SOURCES = ("experiments/prefilter.py", *RUNNER_SOURCES, *PIPELINE_SOURCES)
 SOURCE_GROUPS = ("expert_only", "docs_only", "expert_and_docs")
 
 
@@ -72,7 +78,7 @@ def candidate_items(source, by_evidence, conversations, question):
     if source.passage is not None:
         return [{"type": "document", "id": source.passage.doc_id}]
     cid = by_evidence.get(str(source.record.evidence_id))
-    turns = pilot.record_turns(source.record, pilot.expert_turns(conversations[cid]), question) if cid else []
+    turns = record_turns(source.record, data.expert_turns(conversations[cid]), question) if cid else []
     return [{"type": "conversation", "id": cid, "turn_id": turn} for turn in turns]
 
 
@@ -94,12 +100,12 @@ def top(candidates, kind, limit, scores=None):
 async def pool(args):
     run = train_run(args.from_run_dir)
     by_evidence = {c["evidence_id"]: cid for cid, c in run["conversations"].items()}
-    conversations = pilot.public_conversations()
-    gold = {q["question_id"]: q for q in pilot.gold_questions("train")}
-    questions = pilot.public_questions("train")
+    conversations = data.public_conversations()
+    gold = {q["question_id"]: q for q in data.gold_questions("train")}
+    questions = data.public_questions("train")
     scorers = [CrossEncoderScorer(model, batch_size=args.batch_size, max_length=args.max_length,
                                   instruction=INSTRUCTION) for model in args.model]
-    store = await pilot.KnowledgeStore.for_kb(SPEC, init_schema=False)
+    store = await KnowledgeStore.for_kb(SPEC, init_schema=False)
     documents = await open_document_store(SPEC, query_instruction=DOCUMENT_QUERY_INSTRUCTION, init_schema=False)
     config = load_config(args.config)
     retriever = IndustrialRetriever(None, prompt="", config=config.retrieval, rewriter=build_rewriter(config))
@@ -107,7 +113,8 @@ async def pool(args):
     try:
         for qid in run["question_ids"]:
             question = questions[qid]["question"]
-            _, _, candidates, plan = await retriever.candidates(question, store, documents, scope=benchmark_scope(run))
+            found = await retriever.candidates(question, store, documents, scope=benchmark_scope(run))
+            candidates, plan = found.sources, found.plan
             texts = {label: source.text.split(" ", 1)[1] for label, source in candidates.items()}
             row = {"question_id": qid, "knowledge_source": gold[qid]["knowledge_source"],
                    "difficulty": gold[qid]["difficulty"], "gold": gold[qid]["required_evidence"],
@@ -125,11 +132,11 @@ async def pool(args):
     finally:
         await store.aclose()
         await documents.aclose()
-    pilot.save(args.run_dir / "pool.json", {"from_run_dir": str(args.from_run_dir.resolve()),
+    data.save(args.run_dir / "pool.json", {"from_run_dir": str(args.from_run_dir.resolve()),
         "run_id": run["run_id"], "config": config.provenance(),
         "cross_encoders": [model.provenance for model in scorers], "questions": rows})
     summary = summarize_pool(rows, [model.model for model in scorers], args.keep)
-    pilot.save(args.run_dir / "pool_summary.json", summary)
+    data.save(args.run_dir / "pool_summary.json", summary)
     print_pool(summary)
     return 0
 
@@ -211,10 +218,9 @@ def prepare(args):
     shutil.copyfile(args.from_run_dir / "run.json", args.run_dir / "run.json")
     args.question_ids = args.run_dir / "question_ids.txt"
     args.question_ids.write_text("\n".join(run["question_ids"]) + "\n")
-    here = Path(__file__).parent
     cross_encoder = scorer(args)
     manifest = {
-        "policy": "H1+H3" + (" with cross-encoder prefilter" if cross_encoder else "")
+        "policy": args.config.name + (" with cross-encoder prefilter" if cross_encoder else "")
                   + (" with hybrid cut" if args.rerank_mode == "hybrid" else ""),
         "rerank_mode": args.rerank_mode,
         "hybrid_cut": {"knowledge": args.keep_knowledge, "manual": args.keep_manual}
@@ -228,15 +234,10 @@ def prepare(args):
                                         "manual": args.keep_manual},
         "models": {key: os.getenv(key) for key in ("OPENROUTER_MODEL", "ANSWER_MODEL", "ANSWER_THINKING",
                                                    "EXTRACTION_MODEL", "MODELARK_MODELNAME", "EMBEDDING_MODEL")},
-        "input_sha256": {str(path.relative_to(pilot.PROJECT_ROOT)): sha(path.read_text()) for path in
-                         [pilot.PUBLIC_DIR / "corpus_chunks.jsonl", pilot.PUBLIC_DIR / "questions_train.jsonl"]},
-        "source_sha256": {str(path.relative_to(pilot.PROJECT_ROOT)): sha(path.read_text()) for path in
-                          [*(here / name for name in SOURCES), pilot.PROJECT_ROOT / "backend/src/agents/rag/cross_encoder.py"]},
+        "input_sha256": file_hashes([data.PUBLIC_DIR / "corpus_chunks.jsonl", data.PUBLIC_DIR / "questions_train.jsonl"]),
+        "source_sha256": file_hashes([*source_paths(*SOURCES), PROJECT_ROOT / "backend/src/agents/rag/cross_encoder.py"]),
     }
-    path = args.run_dir / "manifest.json"
-    if path.exists() and json.loads(path.read_text()) != manifest:
-        raise ValueError("Experiment configuration changed; use a new --run-dir")
-    pilot.save(path, manifest)
+    write_manifest(args.run_dir, manifest, changed="Experiment configuration changed; use a new --run-dir")
     return run, cross_encoder
 
 
@@ -247,13 +248,13 @@ async def answer(args):
     timings = defaultdict(dict, saved)
     retrieval = TimedRetrieval(build_retriever(args.config, prefilter=cross_encoder), timings)
     try:
-        code = await pilot.answer(args, run, retrieve=retrieval, generate=CompleteAnswer(args.config),
+        code = await predictions.answer(args, run, retrieve=retrieval, generate=CompleteAnswer(args.config),
                                   init_schema=False, checkpoint_every=4)
     finally:
-        pilot.save(path, dict(timings))
+        data.save(path, dict(timings))
     if code:
         return code
-    return pilot.evaluate(args, run, facts=False)
+    return evaluation.evaluate(args, run, facts=False)
 
 
 def run_row(directory: Path):
@@ -301,7 +302,7 @@ def compare(args):
         print(f"{row['run']:44}" + "".join(
             f"{row['cost'][n]:22.2f}" if row["cost"][n] is not None else f"{'-':>22}" for n in names))
     if args.out:
-        pilot.save(args.out, rows)
+        data.save(args.out, rows)
     return 0
 
 
@@ -319,7 +320,7 @@ def main():
     commands.choices["pool"].add_argument("--keep", type=lambda v: [int(x) for x in v.split(",")],
                                           default=[4, 6, 8, 10, 12])
     answer_parser = commands.choices["answer"]
-    answer_parser.add_argument("--model", help=f"cross-encoder or {HybridOrder.model}; omit for the unchanged H1 baseline")
+    answer_parser.add_argument("--model", help=f"cross-encoder or {HybridOrder.model}; omit for the unchanged baseline")
     add_runner_arguments(answer_parser)
     answer_parser.add_argument("--rerank-mode", choices=RERANK_MODES, help="override [retrieval] rerank_mode")
     answer_parser.add_argument("--keep-knowledge", type=int, help="override [retrieval] prefilter_knowledge")
@@ -343,7 +344,7 @@ def main():
         retrieval = args.config.retrieval
         args.rerank_mode = retrieval.rerank_mode
         args.keep_knowledge, args.keep_manual = retrieval.prefilter_knowledge, retrieval.prefilter_manual
-    load_dotenv(pilot.PROJECT_ROOT / ".env")
+    load_dotenv(PROJECT_ROOT / ".env")
     args.run_dir.mkdir(parents=True, exist_ok=True)
     return asyncio.run(pool(args) if args.command == "pool" else answer(args))
 

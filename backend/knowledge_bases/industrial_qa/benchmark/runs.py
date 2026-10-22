@@ -1,4 +1,4 @@
-"""Single-database policy for industrial QA benchmark writes.
+"""Run checkpoints (run.json) and the single-database policy for benchmark writes.
 
 Every new ingestion replaces the previous corpus in kb_industrial_qa.
 Checkpoint resumes and explicitly reused extractions stay intact; manuals
@@ -12,6 +12,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 from backend.knowledge_bases.industrial_qa import SPEC
+from backend.src.storage import KnowledgeRecord
 
 
 WRITER_LOCK = 914273510
@@ -21,6 +22,23 @@ def require_official_database(spec):
     if spec.database != SPEC.database:
         raise ValueError(f"Industrial QA runs must use {SPEC.database}, not {spec.database}")
     return spec
+
+
+def run_filter(run):
+    """Records of this run only: the consolidation scope of its ingestion."""
+    return {"context.benchmark_run_id": {"$eq": run["run_id"]}}
+
+
+def unprocessed(run):
+    """Conversation IDs of the run not extracted yet, in run order."""
+    return [cid for cid in run["conversation_ids"]
+            if run["conversations"].get(cid, {}).get("status") != "processed"]
+
+
+def extracted(conversation):
+    """Every record extracted from a processed conversation, merged ones included."""
+    return [KnowledgeRecord.model_validate(record)
+            for record in [*conversation["records"], *conversation.get("merged", [])]]
 
 
 def run_ids(run):

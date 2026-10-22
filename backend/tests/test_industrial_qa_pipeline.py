@@ -16,10 +16,10 @@ from backend.app import create_app
 from backend.knowledge_bases import AnswerPipeline, get_kb
 from backend.knowledge_bases.industrial_qa import SPEC
 from backend.knowledge_bases.industrial_qa.answering import IndustrialAnswerWriter, WrittenAnswer
-from backend.knowledge_bases.industrial_qa.benchmark_adapter import ScopedRetrieval
+from backend.knowledge_bases.industrial_qa.benchmark.adapter import ScopedRetrieval
 from backend.knowledge_bases.industrial_qa.config import DEFAULT_PATH, ENV_VAR, load_config, runner_config
 from backend.knowledge_bases.industrial_qa.pipeline import IndustrialQaPipeline, build_retriever, build_rewriter
-from backend.knowledge_bases.industrial_qa.query import RewrittenQuery, check
+from backend.knowledge_bases.industrial_qa.query_rewrite import RewrittenQuery, check
 from backend.knowledge_bases.industrial_qa.retrieval import RetrievalConfig, RetrievalResult, Source
 from backend.knowledge_bases.industrial_qa.service import IndustrialQaService, answer_with_citations
 from backend.src.agents.agent.service import (
@@ -74,22 +74,22 @@ class PipelineConfigTests(unittest.TestCase):
         self.assertEqual((config.conversation.history_characters, config.conversation.history_turns), (6000, 5))
         self.assertEqual(config.prompts['rerank'], DEFAULT_PATH.with_name('rerank.md').read_text().strip())
         provenance = config.provenance()
-        self.assertEqual(provenance['retrieval']['rerank_mode'], 'llm')
+        self.assertEqual(provenance['retrieval']['rerank_mode'], 'hybrid')
         self.assertNotIn('api_key', json.dumps(provenance).lower())
 
     def test_env_selects_file_and_unknown_or_invalid_settings_fail(self):
         with tempfile.TemporaryDirectory() as directory:
             path = self.write(directory, '')
-            path.write_text(path.read_text().replace('rerank_mode = "llm"', 'rerank_mode = "hybrid"'))
+            path.write_text(path.read_text().replace('rerank_mode = "hybrid"', 'rerank_mode = "llm"'))
             with patch.dict(os.environ, {ENV_VAR: str(path)}):
-                self.assertEqual(load_config().retrieval.rerank_mode, 'hybrid')
+                self.assertEqual(load_config().retrieval.rerank_mode, 'llm')
             for broken in ('\n[llm.judge]\nenv_prefix = "X"\nmax_tokens = 1\n', '\ntop_k = 3\n'):
                 with self.assertRaises(ValueError):
                     load_config(self.write(directory, broken))
             path.write_text(path.read_text().replace('k = 8', 'k = 8\nrerank_top = 4'))
             with self.assertRaises(ValueError):
                 load_config(path)
-            path.write_text(path.read_text().replace('rerank_mode = "hybrid"', 'rerank_mode = "cross"'))
+            path.write_text(path.read_text().replace('rerank_mode = "llm"', 'rerank_mode = "cross"'))
             with self.assertRaises(ValueError):
                 load_config(path)
 
@@ -213,14 +213,14 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             [scores[text.splitlines()[-1]] for text in texts]))
         invoke = AsyncMock(return_value='{"labels":["K1","D1","K2"]}')
         with patch.object(llm, 'ainvoke', invoke):
-            core = build_retriever(load_config().with_retrieval(prefilter_knowledge=2, prefilter_manual=1),
+            core = build_retriever(load_config().with_retrieval(rerank_mode='llm', prefilter_knowledge=2, prefilter_manual=1),
                 ranker=object(), prefilter=prefilter)
             result = await core.retrieve('encoder', knowledge, documents)
             await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
                 {'run_id': 'run'}, SimpleNamespace(k=8, per_conversation=3), {}, {}, {})
         # The cross-encoder never sees the ephemeral labels it reorders.
         self.assertFalse(any(text.startswith('[') for text in prefilter.score.call_args.args[1]))
-        self.assertEqual((result.pool, result.candidates), (6, 3))
+        self.assertEqual((result.candidate_pool, result.candidate_count), (6, 3))
         self.assertEqual([s.text.splitlines()[-1] for s in result.sources], ['claim 1', 'manual 2', 'claim 2'])
         for prompt in (call.args[1] for call in invoke.call_args_list):
             self.assertEqual(prompt.count('[K'), 2)
@@ -239,7 +239,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             result = await core.retrieve('encoder', knowledge, documents)
             await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
                 {'run_id': 'run'}, SimpleNamespace(k=8, per_conversation=3), {}, {}, {})
-        self.assertEqual((result.pool, result.candidates), (4, 4))
+        self.assertEqual((result.candidate_pool, result.candidate_count), (4, 4))
         self.assertEqual([s.text.splitlines()[-1] for s in result.sources],
                          ['claim 1', 'procedure step 2', 'Connection procedure 0'])
         for prompt in (call.args[1] for call in invoke.call_args_list):
@@ -266,13 +266,13 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         knowledge, documents = stores(recs)
         documents.search = AsyncMock(side_effect=search)
         core = build_retriever(ranker=object())
-        _, _, candidates, _ = await core.candidates(question, knowledge, documents)
+        candidates = (await core.candidates(question, knowledge, documents)).sources
         self.assertEqual(documents.search.await_count, 1)
         self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [first.doc_id])
 
         documents.search.reset_mock()
         enabled = replace(load_config().retrieval, second_hop_records=2, second_hop_per_record=3, second_hop_manual=4)
-        _, _, candidates, _ = await core.candidates(question, knowledge, documents, config=enabled)
+        candidates = (await core.candidates(question, knowledge, documents, config=enabled)).sources
         hops = [call.args[0] for call in documents.search.await_args_list[1:]]
         self.assertEqual(len(hops), 2)
         self.assertEqual({call.kwargs['k'] for call in documents.search.await_args_list[1:]}, {3})
@@ -285,7 +285,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
                          {'D1': first.doc_id, 'D2': station.doc_id, 'D3': latch.doc_id})
 
         capped = replace(enabled, second_hop_manual=1)
-        _, _, candidates, _ = await core.candidates(question, knowledge, documents, config=capped)
+        candidates = (await core.candidates(question, knowledge, documents, config=capped)).sources
         self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [first.doc_id, station.doc_id])
         for invalid in ({'second_hop_records': -1}, {'second_hop_per_record': 0}, {'second_hop_manual': 0}):
             with self.assertRaises(ValueError):
@@ -308,8 +308,8 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         documents.search = AsyncMock(side_effect=search)
         hybrid = replace(load_config().retrieval, rerank_mode='hybrid', prefilter_knowledge=1, prefilter_manual=1,
                          second_hop_records=2)
-        _, _, candidates, _ = await build_retriever(ranker=object()).candidates(
-            question, knowledge, documents, config=hybrid)
+        candidates = (await build_retriever(ranker=object()).candidates(
+            question, knowledge, documents, config=hybrid)).sources
         # Only the record kept by the hybrid cut steers a second hop.
         self.assertEqual(documents.search.await_count, 2)
         self.assertEqual([s.record.claim for s in candidates.values() if s.record], [recs[0].claim])
@@ -364,7 +364,8 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         config, rewriter = self.rewriting('auto')
         core = build_retriever(config, ranker=object(), rewriter=rewriter)
         with patch.object(llm, 'ainvoke', AsyncMock(return_value=json.dumps(rewritten))):
-            assets, family, candidates, plan = await core.candidates(question, knowledge, documents)
+            found = await core.candidates(question, knowledge, documents)
+        assets, family, candidates, plan = found.assets, found.family, found.sources, found.plan
         self.assertEqual((plan.reason, plan.status), ('language', 'used'))
         # Scope comes from the catalog on the user's own words.
         self.assertEqual((list(assets), family), (['MR-JE-AX391'], 'MR-JE'))
@@ -381,7 +382,8 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         for response, detail in ((dropped, 'manual_query dropped 16.3'), (invented, 'invented asset MR-JE-AX392')):
             knowledge.search_knowledge.reset_mock()
             with patch.object(llm, 'ainvoke', AsyncMock(return_value=json.dumps(response))):
-                _, _, candidates, plan = await core.candidates(question, knowledge, documents)
+                found = await core.candidates(question, knowledge, documents)
+            candidates, plan = found.sources, found.plan
             self.assertEqual((plan.status, plan.detail), ('rejected', detail))
             self.assertEqual(knowledge.search_knowledge.await_count, 1)
             self.assertEqual([s.record.claim for s in candidates.values() if s.record], ['claim 0', 'claim 1'])

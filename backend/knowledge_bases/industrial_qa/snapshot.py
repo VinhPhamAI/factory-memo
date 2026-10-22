@@ -560,7 +560,7 @@ async def _restore_conversations(
 ) -> tuple[dict[str, UUID], list[UUID]]:
     """Recreate only evidence rows referenced by the extracted knowledge."""
 
-    from backend.knowledge_bases.industrial_qa.pilot import render_transcript
+    from backend.knowledge_bases.industrial_qa.benchmark.data import render_transcript
 
     public = _public_conversations()
     conversation_ids = list(dict.fromkeys(row["source_conversation_id"] for row in rows))
@@ -639,11 +639,8 @@ async def _insert_records(store: KnowledgeStore, records: Sequence[KnowledgeReco
 
 
 async def _index_manuals() -> tuple[int, int]:
-    from backend.knowledge_bases.industrial_qa.pilot import (
-        DOCUMENT_QUERY_INSTRUCTION,
-        chunk_document,
-        corpus_chunks,
-    )
+    from backend.knowledge_bases.industrial_qa.benchmark.data import chunk_document, corpus_chunks
+    from backend.knowledge_bases.industrial_qa.retrieval import DOCUMENT_QUERY_INSTRUCTION
     from backend.knowledge_bases.stores import open_document_store
     from backend.src.agents.rag.indexing import index_documents
 

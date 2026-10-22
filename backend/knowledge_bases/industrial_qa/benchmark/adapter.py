@@ -1,24 +1,20 @@
-"""Benchmark-only provenance mapping and MC choice around the official H1/H3.
+"""Benchmark-only provenance mapping and MC choice around the official pipeline.
 
 The shared retriever and writer never receive gold evidence or MC options.
 """
 from __future__ import annotations
 
 from dataclasses import replace
-import hashlib
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from backend.knowledge_bases.industrial_qa import pilot
 from backend.knowledge_bases.industrial_qa.answering import IndustrialAnswerWriter
+from backend.knowledge_bases.industrial_qa.benchmark.data import expert_turns
+from backend.knowledge_bases.industrial_qa.benchmark.evidence import concatenate, record_turns
 from backend.knowledge_bases.industrial_qa.config import load_config
 from backend.knowledge_bases.industrial_qa.pipeline import build_retriever
 from backend.src.services import llm
-
-
-def sha(text):
-    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def benchmark_scope(run):
@@ -26,6 +22,12 @@ def benchmark_scope(run):
     ids = list(dict.fromkeys([run["run_id"], *run.get("reused_run_ids", [])]))
     filters = [{"context.benchmark_run_id": {"$eq": value}} for value in ids]
     return filters[0] if len(filters) == 1 else {"$or": filters}
+
+
+class AnswerOutput(BaseModel):
+    answer: str = Field(min_length=1)
+    choice: Literal["A", "B", "C", "D"]
+    sources: list[str] = Field(default_factory=list)
 
 
 class Choice(BaseModel):
@@ -39,7 +41,7 @@ class CompleteAnswer:
         self.chooser = config.choice.client('choice', Choice)
         self.env_prefix = config.choice.env_prefix
 
-    async def __call__(self, question, sources, _client):
+    async def __call__(self, question, sources):
         texts = {label: source['text'] for label, source in sources.items()}
         written, usage = await self.writer.write(question['question'], texts)
         options = '\n'.join(f'{letter}. {value}' for letter, value in sorted(question['options'].items()))
@@ -50,7 +52,7 @@ class CompleteAnswer:
             + '\nSources:\n' + '\n\n'.join(texts.values()))
         choice = llm.validated(Choice,
             llm.response_json(response, task='choice', env_prefix=self.env_prefix), task='choice')
-        return pilot.AnswerOutput(answer=written.answer, choice=choice.choice, sources=written.sources), {
+        return AnswerOutput(answer=written.answer, choice=choice.choice, sources=written.sources), {
             'options_seen_by_writer': False, 'checklist': [p.model_dump() for p in written.checklist],
             'usage': [usage, getattr(response, 'usage_metadata', None)]}
 
@@ -71,7 +73,7 @@ class ScopedRetrieval:
             if source.record is not None:
                 record = source.record
                 cid = by_evidence.get(str(record.evidence_id))
-                turns = pilot.record_turns(record, pilot.expert_turns(conversations[cid]), question) if cid else []
+                turns = record_turns(record, expert_turns(conversations[cid]), question) if cid else []
                 details = {'items': [{'type': 'conversation', 'id': cid, 'turn_id': t} for t in turns],
                     'knowledge_id': str(record.id), 'type': record.type.value,
                     'subject': record.subject, 'conversation_id': cid, 'confident': source.confident}
@@ -82,7 +84,7 @@ class ScopedRetrieval:
                 'candidate_label': source.candidate_label,
                 'retrieval_trace': {'assets': list(result.assets), 'family': result.family,
                     'budget_characters': self.budgets.get(question, self.retriever.config.context_characters),
-                    'candidate_count': result.candidates, 'candidate_pool': result.pool,
+                    'candidate_count': result.candidate_count, 'candidate_pool': result.candidate_pool,
                     'ranker_usage': result.usage,
-                    'query_rewrite': result.query.trace() if result.query else None}}
-        return selected, pilot.concatenate([s['items'] for s in selected.values()])
+                    'query_rewrite': result.query_plan.trace() if result.query_plan else None}}
+        return selected, concatenate([s['items'] for s in selected.values()])

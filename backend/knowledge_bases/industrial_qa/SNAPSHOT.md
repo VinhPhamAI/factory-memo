@@ -156,7 +156,7 @@ This is intentional: an implicit merge could silently corrupt consolidation
 links or mix benchmark runs. A repeated pull of the exact same snapshot is
 safe and resumes manual indexing if it was interrupted. `--skip-manuals` is
 available for a knowledge-only restore, but that database is not complete for
-the combined H1/H3 benchmark.
+the combined knowledge and manual benchmark.
 
 For an offline/local transfer, use the same format without Hugging Face:
 

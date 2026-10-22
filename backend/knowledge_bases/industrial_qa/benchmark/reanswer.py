@@ -1,4 +1,4 @@
-"""Re-answer a completed run from its frozen sources with the current H3 writer.
+"""Re-answer a completed run from its frozen sources with the current answer writer.
 
 Retrieval and reranking are not repeated: each question gets exactly the
 sources the --from-run-dir answers were written from, re-read from the same
@@ -6,7 +6,7 @@ database by record/chunk ID and rendered again. A writer change is then
 measured without reranker variance. Extraction is unchanged, so only answers
 are judged (no fact judge).
 
-python -m backend.knowledge_bases.industrial_qa.rewrite --from-run-dir OLD --run-dir NEW
+python -m backend.knowledge_bases.industrial_qa.benchmark.reanswer --from-run-dir OLD --run-dir NEW
 """
 from __future__ import annotations
 
@@ -20,8 +20,14 @@ from uuid import UUID
 
 from dotenv import load_dotenv
 
-from backend.knowledge_bases.industrial_qa import SPEC, pilot
-from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, sha
+from backend.knowledge_bases.base import PROJECT_ROOT
+from backend.knowledge_bases.industrial_qa import SPEC
+from backend.knowledge_bases.industrial_qa.benchmark.adapter import CompleteAnswer
+from backend.knowledge_bases.industrial_qa.benchmark.evaluation import evaluate
+from backend.knowledge_bases.industrial_qa.benchmark.manifest import (
+    PIPELINE_SOURCES, RUNNER_SOURCES, file_hashes, source_paths, write_manifest,
+)
+from backend.knowledge_bases.industrial_qa.benchmark.predictions import answer
 from backend.knowledge_bases.industrial_qa.retrieval import Source
 
 
@@ -60,34 +66,29 @@ def prepare(args):
     source = args.from_run_dir
     manifest = json.loads((source / "manifest.json").read_text())
     database = SPEC.database
-    pilot.SPEC = SPEC
     args.run_dir.mkdir(parents=True, exist_ok=True)
     for name in ("run.json", "question_ids.txt"):
         if not (args.run_dir / name).exists():
             shutil.copyfile(source / name, args.run_dir / name)
-    here = Path(__file__).parent
-    files = [here / name for name in ("answer.md", "answering.py", "benchmark_adapter.py", "retrieval.py", "rewrite.py")]
+    files = source_paths("benchmark/reanswer.py", *RUNNER_SOURCES, *PIPELINE_SOURCES)
     record = {
-        "policy": "frozen H1 sources + current H3 writer", "from_run_dir": str(source.resolve()),
+        "policy": "frozen sources + current answer writer", "from_run_dir": str(source.resolve()),
         "database": database, "source_database": manifest.get("database"), "run_id": manifest["run_id"],
         "models": {key: os.getenv(key) for key in ("OPENROUTER_MODEL", "ANSWER_MODEL", "ANSWER_THINKING",
                                                    "EXTRACTION_MODEL", "MODELARK_MODELNAME")},
-        "source_sha256": {str(path.relative_to(pilot.PROJECT_ROOT)): sha(path.read_text()) for path in files},
+        "source_sha256": file_hashes(files),
     }
-    path = args.run_dir / "manifest.json"
-    if path.exists() and json.loads(path.read_text()) != record:
-        raise ValueError("Writer or source run changed; use a new --run-dir")
-    pilot.save(path, record)
+    write_manifest(args.run_dir, record, changed="Writer or source run changed; use a new --run-dir")
     return json.loads((args.run_dir / "run.json").read_text())
 
 
 async def execute(args):
     run = prepare(args)
     answers = json.loads((args.from_run_dir / "answers.json").read_text())
-    if code := await pilot.answer(args, run, retrieve=FrozenRetrieval(answers), generate=CompleteAnswer(),
+    if code := await answer(args, run, retrieve=FrozenRetrieval(answers), generate=CompleteAnswer(),
                                   init_schema=False, checkpoint_every=4):
         return code
-    return pilot.evaluate(args, run, facts=False)
+    return evaluate(args, run, facts=False)
 
 
 def main():
@@ -99,7 +100,7 @@ def main():
     args = parser.parse_args()
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
-    load_dotenv(pilot.PROJECT_ROOT / ".env")
+    load_dotenv(PROJECT_ROOT / ".env")
     return asyncio.run(execute(args))
 
 

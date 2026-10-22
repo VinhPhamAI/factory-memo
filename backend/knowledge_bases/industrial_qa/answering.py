@@ -1,11 +1,10 @@
-"""H3 evidence-grounded answer writing, shared by runtime and benchmarks."""
+"""Evidence-grounded answer writing, shared by runtime and benchmarks."""
 from __future__ import annotations
-
-import re
 
 from pydantic import BaseModel, Field, field_validator
 
 from backend.knowledge_bases.industrial_qa.config import load_config
+from backend.knowledge_bases.industrial_qa.prompts import fill_prompt
 from backend.src.services import llm
 
 
@@ -38,9 +37,8 @@ class IndustrialAnswerWriter:
     async def write(self, question: str, sources: dict[str, str], *, history: str = ""):
         # One pass prevents braces/placeholders in untrusted evidence from
         # substituting other sections of the prompt.
-        values = {"QUESTION": question, "SOURCES": "\n\n".join(sources.values()) or "(no evidence)",
-                  "HISTORY": history or "(none)"}
-        prompt = re.sub(r"\{(QUESTION|SOURCES|HISTORY)\}", lambda m: values[m[1]], self.prompt)
+        prompt = fill_prompt(self.prompt, QUESTION=question,
+                             SOURCES="\n\n".join(sources.values()) or "(no evidence)", HISTORY=history or "(none)")
         response = await llm.ainvoke(self.client, prompt)
         written = llm.validated(WrittenAnswer,
             llm.response_json(response, task="written answer", env_prefix=self.env_prefix), task="written answer")

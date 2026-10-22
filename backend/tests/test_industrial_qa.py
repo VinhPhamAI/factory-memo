@@ -11,15 +11,10 @@ from pydantic import ValidationError
 
 from backend.knowledge_bases.industrial_qa import CATALOG, SPEC
 from backend.knowledge_bases.industrial_qa.catalog import Asset, Catalog
-from backend.knowledge_bases.industrial_qa import pilot
-from backend.knowledge_bases.industrial_qa.pilot import (
-    build_parser,
-    cap_per_conversation,
-    cited_ranking,
-    gold_questions,
-    record_turns,
-    select,
-)
+from backend.knowledge_bases.industrial_qa.benchmark import renormalize
+from backend.knowledge_bases.industrial_qa.benchmark.data import gold_questions
+from backend.knowledge_bases.industrial_qa.benchmark.evidence import cited_ranking, record_turns
+from backend.knowledge_bases.industrial_qa.benchmark.pilot import build_parser, select
 from backend.knowledge_bases.industrial_qa.schema import CaseEvidence, IndustrialQaExtraction
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import KnowledgeRecord
@@ -338,13 +333,6 @@ class IndustrialQaPilotTests(unittest.TestCase):
         self.assertEqual(cited_ranking(sources, ["D1"], uncited),
                          [{"type": "document", "id": "d1"}, {"id": "c", "turn_id": 1}])
 
-    def test_caps_records_per_conversation(self):
-        a, b = uuid4(), uuid4()
-        hits = [SimpleNamespace(record=SimpleNamespace(evidence_id=e)) for e in (a, a, a, b, a, b)]
-        kept = cap_per_conversation(hits, 2, 3)
-        self.assertEqual([h.record.evidence_id for h in kept], [a, a, b])
-        self.assertEqual(len(cap_per_conversation(hits, 0, 10)), 6)
-
     def test_reruns_listed_question_ids(self):
         with tempfile.TemporaryDirectory() as directory:
             ids = [q["question_id"] for q in gold_questions("train")[:3]][::-1]
@@ -421,8 +409,8 @@ class RenormalizeTests(unittest.TestCase):
         rule = record(machine_model="melsec iq-f", failure_mode="Electrical fault")
         rule.revision = {"ontology": {"normalized": {"failure_mode": "electrical"},
                                       "unknown": {"machine_model": "melsec iq-f"}}}
-        with mock.patch.object(pilot, "SPEC", SPEC):
-            pilot.normalize_scope("", [rule])
+        with mock.patch.object(renormalize, "SPEC", SPEC):
+            renormalize.normalize_scope("", [rule])
         self.assertEqual(rule.context["machine_model"], "FX5")
         report = rule.revision["ontology"]
         self.assertEqual(report["normalized"]["failure_mode"], "Electrical fault")
@@ -447,17 +435,17 @@ class RenormalizeTests(unittest.TestCase):
                    "conversation_ids": ["c1"], "conversations": {"c1": conversation}}
             (old / "run.json").write_text(json.dumps(run))
             args = SimpleNamespace(run_dir=new, from_run_dir=old)
-            pilot.start_renormalized_run(args)
+            renormalize.start_renormalized_run(args)
             copied = json.loads((new / "run.json").read_text())
             self.assertEqual(copied["renormalized_from"], str(old))
             with (
-                mock.patch.object(pilot.KnowledgeStore, "for_kb", mock.AsyncMock(return_value=store)),
-                mock.patch.object(pilot, "public_conversations", return_value={"c1": {}}),
-                mock.patch.object(pilot, "render_transcript", return_value=self.TRANSCRIPT),
-                mock.patch.object(pilot, "CATALOG", catalog()),
-                mock.patch.object(pilot, "SPEC", SPEC),
+                mock.patch.object(renormalize.KnowledgeStore, "for_kb", mock.AsyncMock(return_value=store)),
+                mock.patch.object(renormalize, "public_conversations", return_value={"c1": {}}),
+                mock.patch.object(renormalize, "render_transcript", return_value=self.TRANSCRIPT),
+                mock.patch.object(renormalize, "CATALOG", catalog()),
+                mock.patch.object(renormalize, "SPEC", SPEC),
             ):
-                self.assertEqual(asyncio.run(pilot.renormalize(args, copied)), 0)
+                self.assertEqual(asyncio.run(renormalize.renormalize(args, copied)), 0)
             saved = json.loads((new / "run.json").read_text())
             # The old run's checkpoint is left alone.
             self.assertNotIn("renormalized", json.loads((old / "run.json").read_text()))

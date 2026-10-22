@@ -4,22 +4,24 @@ Cập nhật: 10/10/2026
 
 ## 1. Tổng quan
 
-industrial_qa là knowledge base trả lời câu hỏi bảo trì thiết bị công nghiệp. Nó kết hợp hai nguồn tri thức: kinh nghiệm chuyên gia rút ra từ hội thoại, và manual thiết bị. Cùng một pipeline (gọi là H1/H3) được dùng cho API/CLI lúc runtime và cho benchmark, nên điểm đo được phản ánh đúng code chạy thật.
+industrial_qa là knowledge base trả lời câu hỏi bảo trì thiết bị công nghiệp. Nó kết hợp hai nguồn tri thức: kinh nghiệm chuyên gia rút ra từ hội thoại, và manual thiết bị. Cùng một pipeline được dùng cho API/CLI lúc runtime và cho benchmark, nên điểm đo được phản ánh đúng code chạy thật.
 
 Pipeline có hai pha:
 
 - **Ingest (offline):** LLM trích xuất *case* (sự cố cụ thể) và *lesson* (bài học tổng quát) từ hội thoại, chuẩn hoá phạm vi theo catalog thiết bị, kiểm chứng lại với transcript, gộp trùng, rồi lưu vào Postgres. Manual được chia chunk và index embedding trong cùng database.
-- **Trả lời (online):** H1 = truy xuất có giới hạn phạm vi theo asset/family + LLM rerank; H3 = LLM writer lập checklist rồi viết câu trả lời ngắn (≤200 từ) có trích nguồn.
+- **Trả lời (online):** truy xuất có giới hạn phạm vi theo asset/family + LLM rerank, rồi answer writer (LLM) lập checklist rồi viết câu trả lời ngắn (≤200 từ) có trích nguồn.
 
 | Thành phần | File chính | Vai trò |
 | --- | --- | --- |
 | Spec của KB | `__init__.py` | Đăng ký KB, context filter, extraction model, normalizer |
 | Catalog thiết bị | `catalog.py`, `catalog_types.yaml`, `catalog_assets.yaml`, `ontology.yaml` | Tên chuẩn của family, asset, component; luật lọc phạm vi |
 | Trích xuất | `schema.py`, `extract.md` | Schema case/lesson và prompt trích xuất |
-| H1 retrieval | `retrieval.py`, `rerank.md` | Lọc theo phạm vi, tìm kiếm, rerank, cắt theo ngân sách ký tự |
-| H3 writer | `answering.py`, `answer.md` | Checklist + câu trả lời + nhãn nguồn |
-| Pipeline / service | `pipeline.py`, `service.py` | Ghép H1+H3; stream sự kiện, lịch sử hội thoại, đổi nhãn thành citation |
-| Benchmark | `benchmark_adapter.py`, `pilot.py`, `train.py`, `train_report.py`, `rewrite.py`, `snapshot.py` | Chạy, đo và lưu snapshot trên `benchmark/` |
+| Truy xuất + rerank | `retrieval.py`, `rerank.md` | Lọc theo phạm vi, tìm kiếm, rerank, cắt theo ngân sách ký tự |
+| Answer writer | `answering.py`, `answer.md` | Checklist + câu trả lời + nhãn nguồn |
+| Pipeline / service | `pipeline.py`, `service.py` | Ghép truy xuất + writer; stream sự kiện, lịch sử hội thoại, đổi nhãn thành citation |
+| Phạm vi + prompt | `scope.py`, `query_rewrite.py`, `prompts.py`, `query.md` | Nhận diện family trong câu hỏi, kế thừa phạm vi follow-up, viết lại truy vấn, điền template prompt |
+| Benchmark | `benchmark/` (`adapter.py`, `pilot.py`, `train.py`, `holdout.py`, `reanswer.py`, `runner.py`, cùng data/runs/manifest/ingest/renormalize/evidence/predictions/evaluation), `snapshot.py` | Chạy, đo và lưu snapshot trên `benchmark/` (thư mục dữ liệu ở gốc repo) |
+| Thử nghiệm | `experiments/` (`prefilter.py`, `train_report.py`) | Thí nghiệm chỉ trên train, không thuộc runner chính thức |
 
 ## 2. Dữ liệu đầu vào
 
@@ -74,11 +76,11 @@ Hai nhánh chạy độc lập. Chỉ hội thoại đi qua LLM; manual được
 
 **Vận hành.**
 
-- `pilot.py ingest` xử lý một mẫu. `train.py` tái dùng record của run baseline và chỉ extract các hội thoại còn thiếu, dưới một run ID mới; retrieval đọc hợp của hai run.
-- `pilot.py renormalize` áp catalog/ontology mới lên record cũ mà không extract lại.
+- `benchmark/pilot.py ingest` xử lý một mẫu. `benchmark/train.py` tái dùng record của run baseline và chỉ extract các hội thoại còn thiếu, dưới một run ID mới; retrieval đọc hợp của hai run.
+- `benchmark/pilot.py renormalize` áp catalog/ontology mới lên record cũ mà không extract lại.
 - `snapshot.py` (xem `SNAPSHOT.md`) export/import riêng bảng `knowledge_items`, phần đắt để tái tạo. Manual, hội thoại thô và embedding được dựng lại từ `benchmark/public/`.
 
-## 4. Flow trả lời: H1 retrieval → H3 writer
+## 4. Flow trả lời: truy xuất → answer writer
 
 ```mermaid
 flowchart TD
@@ -88,16 +90,16 @@ flowchart TD
     ks --> rr["LLM rerank (rerank.md)"]
     ms --> rr
     rr --> bud["Budget: ≤8 K + ≤8 D, ≤24000 ký tự, đánh lại nhãn"]
-    bud --> w["H3 writer<br/>checklist → answer ≤200 từ → sources"]
+    bud --> w["Answer writer<br/>checklist → answer ≤200 từ → sources"]
     w --> rt["Runtime (service.py)<br/>answer.delta, citation [K:uuid] / [D:doc_id]"]
-    w --> bm["Benchmark (benchmark_adapter.py)<br/>chooser chọn MC; writer không thấy options"]
+    w --> bm["Benchmark (benchmark/adapter.py)<br/>chooser chọn MC; writer không thấy options"]
 ```
 
-*H1 (retrieval) → H3 (writer), dùng chung cho runtime và benchmark.*
+*Truy xuất → answer writer, dùng chung cho runtime và benchmark.*
 
-Runtime (`service.py`) và benchmark (`benchmark_adapter.py`) gọi **cùng một** `IndustrialRetriever` và `IndustrialAnswerWriter` (qua `pipeline.py`). Hai bên chỉ khác ở đầu vào và đầu ra. Vì vậy số đo benchmark phản ánh đúng logic production.
+Runtime (`service.py`) và benchmark (`benchmark/adapter.py`) gọi **cùng một** `IndustrialRetriever` và `IndustrialAnswerWriter` (qua `pipeline.py`). Hai bên chỉ khác ở đầu vào và đầu ra. Vì vậy số đo benchmark phản ánh đúng logic production.
 
-**H1: chọn bằng chứng** (`retrieval.py`, `RetrievalConfig`)
+**Truy xuất: chọn bằng chứng** (`retrieval.py`, `RetrievalConfig`)
 
 - **Scope trước, ngữ nghĩa sau.** Asset ID hoặc family nhận ra từ câu hỏi thành filter cứng trên `machine_id` / `machine_model` / `machine_model_specific`. Nhờ đó kinh nghiệm của máy khác không lọt vào. Nếu phát hiện nhiều hơn một family thì không lọc theo family.
 - **Hai nguồn chạy song song.** Knowledge records (20 ứng viên) và manual chunks (48 ứng viên). Query cho manual bỏ các chi tiết cục bộ của nhà máy (asset ID, site, line, cell) và thêm tên family, vì manual không biết các tên đó.
@@ -105,7 +107,7 @@ Runtime (`service.py`) và benchmark (`benchmark_adapter.py`) gọi **cùng mộ
 - **Thủ tục không bị cắt giữa chừng.** Chunk nằm trong top 3 có dạng procedure/steps/connect/configure được bổ sung các chunk kề cùng section, cách không quá 2 trang.
 - **Rerank bằng LLM rồi cắt theo budget.** Một lần gọi LLM xếp hạng toàn bộ ứng viên. Sau đó lấy lần lượt theo thứ hạng cho đến khi hết 8 slot mỗi loại hoặc hết 24 000 ký tự. Record được render gọn thành `[K1] case|lesson: subject {scope}` + claim, không kèm case_card/quote. Passage được render thành `[D1] manual <doc_id>, p. N, <section>` + text.
 
-**H3: viết câu trả lời** (`answering.py`, `answer.md`)
+**Answer writer: viết câu trả lời** (`answering.py`, `answer.md`)
 
 - Một lần gọi `ANSWER_MODEL` với JSON schema. Thứ tự field là thứ tự sinh: **checklist** (tối đa 8 điểm bắt buộc, mỗi điểm kèm nhãn nguồn) → **answer** (viết cho tai nghe, tối đa khoảng 200 từ, không list/heading, nêu đủ mọi điểm của checklist) → **sources**. Checklist đóng vai trò kế hoạch nên answer ít bị sót ý.
 - Các quy tắc trung thực: kết hợp thực hành của chuyên gia với ý nghĩa/remedy trong manual; không biến đề xuất thành việc đã làm; không tự dựng thứ tự cho các bước có điều kiện; nói rõ khi thiếu bằng chứng; không điền từ trí nhớ.
@@ -130,7 +132,7 @@ Về độ khó: **easy** là một sự kiện nói gần như thẳng. **mediu
 
 **Luật công bằng.** Hệ thống chỉ đọc `benchmark/public/`. Gold chỉ dùng để chọn mẫu và chấm. Writer không thấy options.
 
-**Metric** (`benchmark/evaluate.py`, `benchmark/metrics.py`, cộng phần bổ sung trong `pilot.py`)
+**Metric** (`benchmark/evaluate.py`, `benchmark/metrics.py`, cộng phần bổ sung trong `industrial_qa/benchmark/evaluation.py`)
 
 | Metric | Đo gì |
 | --- | --- |
@@ -143,15 +145,16 @@ Về độ khó: **easy** là một sự kiện nói gần như thẳng. **mediu
 
 Judge là `MODELARK_*`, nếu không có thì dùng `EXTRACTION_*` / `OPENROUTER_*`. Hiện judge là `deepseek-v4.1-flash`, **cùng model với answer model**.
 
-**Công cụ chạy.** Mỗi bước đều resume được từ `run.json`; kết quả nằm trong `data/industrial_qa_runs/<run>/`.
+**Công cụ chạy.** Chạy bằng `python -m backend.knowledge_bases.industrial_qa.benchmark.<lệnh>` (hoặc `.experiments.<lệnh>`). Mỗi bước đều resume được từ `run.json`; kết quả nằm trong `data/industrial_qa_runs/<run>/`.
 
 | Lệnh | Dùng khi |
 | --- | --- |
 | `pilot.py all` (select → ingest → answer → evaluate) | Chạy nhanh trên một mẫu nhỏ câu hỏi train, rải đều các ô source × difficulty |
 | `pilot.py renormalize` | Chỉ đo tác động của catalog/ontology mới |
 | `train.py all` | Đánh giá đầy đủ 100 câu train, tái dùng record baseline |
-| `rewrite.py` | Giữ nguyên nguồn H1 của một run cũ và chỉ viết lại bằng H3 hiện tại. Đo thay đổi writer mà không chịu nhiễu của reranker; chỉ chấm answer |
-| `train_report.py` | Báo cáo từ artifact của một run, không gọi API |
+| `holdout.py all` | Đánh giá 400 câu test của một cấu hình đã đóng băng, cạnh corpus train tái dùng (chung các bước với `train.py` qua `runner.py`) |
+| `reanswer.py` | Giữ nguyên nguồn truy xuất của một run cũ và chỉ viết lại bằng writer hiện tại. Đo thay đổi writer mà không chịu nhiễu của reranker; chỉ chấm answer |
+| `experiments/train_report.py` | Báo cáo từ artifact của một run, không gọi API |
 
 `manifest.json` của mỗi run ghi model và sha256 của các file prompt/code. Nếu writer đã đổi thì không resume vào run dir cũ được.
 
@@ -166,7 +169,7 @@ Judge là `MODELARK_*`, nếu không có thì dùng `EXTRACTION_*` / `OPENROUTER
 
 Extraction không phải điểm nghẽn.
 
-**Trả lời.** Các run writer dùng `rewrite.py`, tức giữ cùng nguồn H1 với baseline. `answer_correct` theo từng nhóm nguồn:
+**Trả lời.** Các run writer dùng `reanswer.py` (trước đây tên `rewrite.py`), tức giữ cùng nguồn truy xuất với baseline. `answer_correct` theo từng nhóm nguồn:
 
 | Run | answer_correct | answer_score | expert_only | docs_only | expert_and_docs | Số từ (median) | > 200 từ |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -194,15 +197,15 @@ Các số khác gần như không đổi giữa các run: `mc_accuracy` 0.98–1
 - Đang sửa dở, chưa commit:
   - Chính sách một database (`runs.py`): mỗi lần ingest mới sẽ thay corpus trong `kb_industrial_qa`, và có lock để các tiến trình ghi không chạy song song.
   - Snapshot `knowledge_items` lên Hugging Face (`snapshot.py`, `SNAPSHOT.md`, `HF_*` trong `.env.example`).
-  - `rewrite.py`/`train.py` được chỉnh theo hai thay đổi trên.
+  - `rewrite.py` (nay là `reanswer.py`)/`train.py` được chỉnh theo hai thay đổi trên.
 - Test: các bộ `test_industrial_qa*` đều pass. Còn 6 test cũ lỗi vì vẫn gọi KB `enterprise_rag`/`assetopsbench`, hai KB đã bị gỡ.
 
 **Điểm tốt của thiết kế**
 
-- Runtime và benchmark dùng chung H1/H3, nên số đo benchmark là số của production.
+- Runtime và benchmark dùng chung truy xuất và writer, nên số đo benchmark là số của production.
 - Scope được xác định trước bằng catalog, nên kinh nghiệm của máy khác và manual của family khác bị chặn từ gốc.
 - Writer không thấy options, nên MC accuracy không bị thổi phồng.
-- Có thể tái lập: mỗi run có manifest kèm sha của prompt/code, resume theo từng bước, và `rewrite.py` cho phép tách riêng hiệu ứng của writer khỏi nhiễu của retrieval.
+- Có thể tái lập: mỗi run có manifest kèm sha của prompt/code, resume theo từng bước, và `reanswer.py` cho phép tách riêng hiệu ứng của writer khỏi nhiễu của retrieval.
 
 **Rủi ro và lỗ hổng**, sắp theo mức độ quan trọng:
 
@@ -218,11 +221,11 @@ Các số khác gần như không đổi giữa các run: `mc_accuracy` 0.98–1
    - Chỉ có 3 family. `catalog_assets.yaml` được sinh từ chính các hội thoại benchmark.
    - Máy mới phải chạy lại `catalog build` / `renormalize`.
    - Câu hỏi nhắc nhiều family sẽ không được lọc theo family.
-6. **Một database cho mọi run.** Ingest mới ghi đè corpus, nên `rewrite.py` trên run cũ chỉ chạy được sau khi restore snapshot (nay đã có check báo lỗi rõ).
+6. **Một database cho mọi run.** Ingest mới ghi đè corpus, nên `reanswer.py` trên run cũ chỉ chạy được sau khi restore snapshot (nay đã có check báo lỗi rõ).
 7. **Nợ kỹ thuật nhỏ.**
-   - `rewrite.py` gán `pilot.SPEC = SPEC`, tức sửa biến global của module khác.
-   - `train.py` còn nhánh đặt tên `experiment_*` cho thư mục `experiments/` không còn tồn tại.
-   - Thiếu unit test cho `render_record`.
+   - ~~`rewrite.py` gán `pilot.SPEC = SPEC`~~: đã bỏ (22/10/2026, cùng lúc đổi tên thành `reanswer.py`).
+   - ~~`train.py` còn nhánh đặt tên `experiment_*`~~: đã bỏ (22/10/2026).
+   - Thiếu unit test cho `render_record` (bản trong `retrieval.py`; bản trùng trong `pilot.py` cũ đã xoá).
    - Còn tham chiếu cũ tới `enterprise_rag`/`assetopsbench` trong `test_knowledge_bases.py`, `test_script_entrypoints.py`, `test_assetopsbench.py`, `test_enterprise_rag.py`, `scripts/kb.py`, `knowledge_bases/README.md`.
 8. **Chưa đo latency/chi phí.** Mỗi câu tốn hai lần gọi LLM nối tiếp (rerank, rồi writer), cộng embedding search. Điều này quan trọng với voice agent.
 

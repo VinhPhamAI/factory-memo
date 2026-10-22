@@ -1,11 +1,11 @@
-# Industrial QA H1/H3 pipeline settings, shared by the API, CLI and benchmark runners.
+# Industrial QA pipeline settings, shared by the API, CLI and benchmark runners.
 # Select another file with INDUSTRIAL_QA_CONFIG=path (API) or --config path (runners).
 # Benchmark run manifests record the resolved values and this file's SHA-256.
 # API keys and base URLs stay in the environment (.env), as do the embedding
 # model and dimension, which must match the vectors already indexed.
 
 # Recorded in run manifests; change it whenever a setting below changes.
-name = "h1-h3"
+name = "scoped-rerank-grounded-answer"
 
 [retrieval]
 # Sources kept per kind (knowledge K, manual D) after reranking, and per conversation.
@@ -21,7 +21,7 @@ min_vector_similarity = 0.6
 # "llm": the LLM reranks every scoped candidate (about 35).
 # "hybrid": only the first prefilter_* candidates per kind in hybrid-search order,
 # plus procedure neighbour chunks, reach the LLM reranker.
-rerank_mode = "llm"
+rerank_mode = "hybrid"
 prefilter_knowledge = 8
 prefilter_manual = 8
 # Second-hop manual search: the top second_hop_records knowledge hits (subject +
@@ -32,7 +32,7 @@ prefilter_manual = 8
 second_hop_records = 0
 second_hop_per_record = 4
 second_hop_manual = 4
-# R2 query rewriting ([llm.query], query.md): "off"; "auto" rewrites only API
+# Query rewriting ([llm.query], query.md): "off"; "auto" rewrites only API
 # follow-ups (no scope of their own, scoped history) and non-English questions;
 # "always" rewrites every question (benchmark arm). The original question stays
 # one search branch, rewritten queries only add candidates, scope still comes
@@ -91,7 +91,7 @@ env_prefix = "CONSOLIDATION"
 model = "deepseek-v4.1-flash"
 max_tokens = 8192
 
-# R2 query rewriting; called only when [retrieval] query_rewrite is not "off".
+# Query rewriting; called only when [retrieval] query_rewrite is not "off".
 [llm.query]
 env_prefix = "ANSWER"
 model = "deepseek-v4.1-flash"
