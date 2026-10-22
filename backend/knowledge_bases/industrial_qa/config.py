@@ -19,8 +19,8 @@ from backend.src.services import llm
 
 DEFAULT_PATH = Path(__file__).with_name("config.toml")
 ENV_VAR = "INDUSTRIAL_QA_CONFIG"
-LLM_STEPS = ("rerank", "answer", "choice", "extraction", "verify", "consolidation")
-PROMPTS = ("rerank", "answer")
+LLM_STEPS = ("rerank", "answer", "choice", "extraction", "verify", "consolidation", "query")
+PROMPTS = ("rerank", "answer", "query")
 SECTIONS = ("name", "retrieval", "conversation", "ingestion", "llm", "prompts")
 VERIFY_MODES = ("off", "quotes", "llm")
 THINKING = ("enabled", "disabled")
@@ -104,6 +104,7 @@ class PipelineConfig:
     extraction: LlmSettings
     verify: LlmSettings
     consolidation: LlmSettings
+    query: LlmSettings
     prompts: dict[str, str]
     path: Path
     sha256: str

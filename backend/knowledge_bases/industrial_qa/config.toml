@@ -24,6 +24,21 @@ min_vector_similarity = 0.6
 rerank_mode = "llm"
 prefilter_knowledge = 8
 prefilter_manual = 8
+# Second-hop manual search: the top second_hop_records knowledge hits (subject +
+# claim) each query the manual for second_hop_per_record chunks; up to
+# second_hop_manual new chunks of the expected manual join the candidates.
+# 0 records disables it. Records only steer the search; the reranker and writer
+# still see the original question.
+second_hop_records = 0
+second_hop_per_record = 4
+second_hop_manual = 4
+# R2 query rewriting ([llm.query], query.md): "off"; "auto" rewrites only API
+# follow-ups (no scope of their own, scoped history) and non-English questions;
+# "always" rewrites every question (benchmark arm). The original question stays
+# one search branch, rewritten queries only add candidates, scope still comes
+# from the catalog, and a rewrite that drops a code or number or names a new
+# asset is discarded.
+query_rewrite = "off"
 
 # API threads only: prior turns given to the answer writer.
 [conversation]
@@ -76,7 +91,15 @@ env_prefix = "CONSOLIDATION"
 model = "deepseek-v4.1-flash"
 max_tokens = 8192
 
+# R2 query rewriting; called only when [retrieval] query_rewrite is not "off".
+[llm.query]
+env_prefix = "ANSWER"
+model = "deepseek-v4.1-flash"
+thinking = "disabled"
+max_tokens = 1024
+
 # Paths relative to this file.
 [prompts]
 rerank = "rerank.md"
 answer = "answer.md"
+query = "query.md"

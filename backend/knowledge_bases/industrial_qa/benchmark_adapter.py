@@ -83,5 +83,6 @@ class ScopedRetrieval:
                 'retrieval_trace': {'assets': list(result.assets), 'family': result.family,
                     'budget_characters': self.budgets.get(question, self.retriever.config.context_characters),
                     'candidate_count': result.candidates, 'candidate_pool': result.pool,
-                    'ranker_usage': result.usage}}
+                    'ranker_usage': result.usage,
+                    'query_rewrite': result.query.trace() if result.query else None}}
         return selected, pilot.concatenate([s['items'] for s in selected.values()])

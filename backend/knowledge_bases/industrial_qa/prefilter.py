@@ -8,7 +8,7 @@ with or without the prefilter or the `--rerank-mode hybrid` cut, then judges
 answers. `compare` tabulates runs.
 Test questions and labels are never read.
 
-python -m backend.knowledge_bases.industrial_qa.prefilter pool --run-dir OUT --from-run-dir TRAIN --model M
+python -m backend.knowledge_bases.industrial_qa.prefilter pool --run-dir OUT --from-run-dir TRAIN [--model M] [--config C]
 python -m backend.knowledge_bases.industrial_qa.prefilter answer --run-dir OUT --from-run-dir TRAIN [--model M | --rerank-mode hybrid]
 python -m backend.knowledge_bases.industrial_qa.prefilter compare RUN_DIR...
 """
@@ -28,8 +28,8 @@ from dotenv import load_dotenv
 
 from backend.knowledge_bases.industrial_qa import SPEC, pilot
 from backend.knowledge_bases.industrial_qa.benchmark_adapter import CompleteAnswer, ScopedRetrieval, benchmark_scope, sha
-from backend.knowledge_bases.industrial_qa.config import add_runner_arguments, runner_config
-from backend.knowledge_bases.industrial_qa.pipeline import build_retriever
+from backend.knowledge_bases.industrial_qa.config import add_runner_arguments, load_config, runner_config
+from backend.knowledge_bases.industrial_qa.pipeline import build_retriever, build_rewriter
 from backend.knowledge_bases.industrial_qa.retrieval import (
     DOCUMENT_QUERY_INSTRUCTION, RERANK_MODES, IndustrialRetriever,
 )
@@ -39,7 +39,7 @@ from backend.src.agents.rag.cross_encoder import CrossEncoderScorer
 INSTRUCTION = ("Given a question from a factory maintenance engineer, retrieve the expert knowledge record "
                "or equipment manual passage that answers it")
 SOURCES = ("benchmark_adapter.py", "retrieval.py", "answering.py", "pipeline.py", "config.py", "rerank.md", "answer.md",
-           "prefilter.py")
+           "query.py", "query.md", "prefilter.py")
 SOURCE_GROUPS = ("expert_only", "docs_only", "expert_and_docs")
 
 
@@ -101,18 +101,20 @@ async def pool(args):
                                   instruction=INSTRUCTION) for model in args.model]
     store = await pilot.KnowledgeStore.for_kb(SPEC, init_schema=False)
     documents = await open_document_store(SPEC, query_instruction=DOCUMENT_QUERY_INSTRUCTION, init_schema=False)
-    retriever = IndustrialRetriever(None, prompt="")
+    config = load_config(args.config)
+    retriever = IndustrialRetriever(None, prompt="", config=config.retrieval, rewriter=build_rewriter(config))
     rows = []
     try:
         for qid in run["question_ids"]:
             question = questions[qid]["question"]
-            _, _, candidates = await retriever.candidates(question, store, documents, scope=benchmark_scope(run))
+            _, _, candidates, plan = await retriever.candidates(question, store, documents, scope=benchmark_scope(run))
             texts = {label: source.text.split(" ", 1)[1] for label, source in candidates.items()}
             row = {"question_id": qid, "knowledge_source": gold[qid]["knowledge_source"],
                    "difficulty": gold[qid]["difficulty"], "gold": gold[qid]["required_evidence"],
                    "characters": {label: len(source.text) for label, source in candidates.items()},
                    "items": {label: candidate_items(source, by_evidence, conversations, question)
-                             for label, source in candidates.items()}, "scores": {}, "seconds": {}}
+                             for label, source in candidates.items()}, "scores": {}, "seconds": {},
+                   "query_rewrite": plan.trace()}
             for model in scorers:
                 started = monotonic()
                 values = await model.score(question, list(texts.values()))
@@ -124,7 +126,8 @@ async def pool(args):
         await store.aclose()
         await documents.aclose()
     pilot.save(args.run_dir / "pool.json", {"from_run_dir": str(args.from_run_dir.resolve()),
-        "run_id": run["run_id"], "cross_encoders": [model.provenance for model in scorers], "questions": rows})
+        "run_id": run["run_id"], "config": config.provenance(),
+        "cross_encoders": [model.provenance for model in scorers], "questions": rows})
     summary = summarize_pool(rows, [model.model for model in scorers], args.keep)
     pilot.save(args.run_dir / "pool_summary.json", summary)
     print_pool(summary)
@@ -311,7 +314,8 @@ def main():
         command.add_argument("--from-run-dir", type=Path, required=True)
         command.add_argument("--batch-size", type=int, default=8)
         command.add_argument("--max-length", type=int, default=1024)
-    commands.choices["pool"].add_argument("--model", action="append", required=True)
+    commands.choices["pool"].add_argument("--model", action="append", default=[])
+    commands.choices["pool"].add_argument("--config", type=Path, help="pipeline settings for the candidate pool")
     commands.choices["pool"].add_argument("--keep", type=lambda v: [int(x) for x in v.split(",")],
                                           default=[4, 6, 8, 10, 12])
     answer_parser = commands.choices["answer"]

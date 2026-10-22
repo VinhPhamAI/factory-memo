@@ -18,7 +18,8 @@ from backend.knowledge_bases.industrial_qa import SPEC
 from backend.knowledge_bases.industrial_qa.answering import IndustrialAnswerWriter, WrittenAnswer
 from backend.knowledge_bases.industrial_qa.benchmark_adapter import ScopedRetrieval
 from backend.knowledge_bases.industrial_qa.config import DEFAULT_PATH, ENV_VAR, load_config, runner_config
-from backend.knowledge_bases.industrial_qa.pipeline import IndustrialQaPipeline, build_retriever
+from backend.knowledge_bases.industrial_qa.pipeline import IndustrialQaPipeline, build_retriever, build_rewriter
+from backend.knowledge_bases.industrial_qa.query import RewrittenQuery, check
 from backend.knowledge_bases.industrial_qa.retrieval import RetrievalConfig, RetrievalResult, Source
 from backend.knowledge_bases.industrial_qa.service import IndustrialQaService, answer_with_citations
 from backend.src.agents.agent.service import (
@@ -56,7 +57,8 @@ class PipelineConfigTests(unittest.TestCase):
     def write(self, directory, text):
         path = Path(directory) / 'config.toml'
         path.write_text(DEFAULT_PATH.read_text().replace('"rerank.md"', json.dumps(str(DEFAULT_PATH.with_name('rerank.md'))))
-                        .replace('"answer.md"', json.dumps(str(DEFAULT_PATH.with_name('answer.md')))) + text)
+                        .replace('"answer.md"', json.dumps(str(DEFAULT_PATH.with_name('answer.md'))))
+                        .replace('"query.md"', json.dumps(str(DEFAULT_PATH.with_name('query.md')))) + text)
         return path
 
     def test_packaged_config_matches_code_defaults(self):
@@ -247,6 +249,173 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             RetrievalConfig(rerank_mode='cross_encoder')
 
+    async def test_second_hop_searches_manual_with_record_wording_and_is_off_by_default(self):
+        question = 'MR-JE-AX391 servo will not respond and shows no alarm'
+        recs = [record(machine_id='MR-JE-AX391').model_copy(update={'subject': 'MR-JE amplifier',
+                    'claim': 'On MR-JE-AX391 at Line 4, copy the rotary switch and Pr. PC70 before power-up.'}),
+                record(machine_id='MR-JE-AX391').model_copy(update={'claim': 'Check the CN2 latch.'})]
+        first, station, latch = (passage(f'melservo_je_p00{page}_c01', text=f'manual {page}') for page in (21, 77, 78))
+        other_manual = passage('fx5_p0001_c01', text='fx5 manual')
+
+        async def search(query, k):
+            if 'PC70' in query:
+                return [station, first, other_manual]
+            if 'CN2' in query:
+                return [latch, station]
+            return [first]
+        knowledge, documents = stores(recs)
+        documents.search = AsyncMock(side_effect=search)
+        core = build_retriever(ranker=object())
+        _, _, candidates, _ = await core.candidates(question, knowledge, documents)
+        self.assertEqual(documents.search.await_count, 1)
+        self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [first.doc_id])
+
+        documents.search.reset_mock()
+        enabled = replace(load_config().retrieval, second_hop_records=2, second_hop_per_record=3, second_hop_manual=4)
+        _, _, candidates, _ = await core.candidates(question, knowledge, documents, config=enabled)
+        hops = [call.args[0] for call in documents.search.await_args_list[1:]]
+        self.assertEqual(len(hops), 2)
+        self.assertEqual({call.kwargs['k'] for call in documents.search.await_args_list[1:]}, {3})
+        # Record wording, scoped like the first-hop manual query: family kept, asset and line removed.
+        self.assertTrue(hops[0].startswith('MR-JE ') and 'PC70' in hops[0])
+        self.assertNotIn('AX391', hops[0])
+        self.assertNotIn('Line 4', hops[0])
+        # First-hop order is kept; new chunks interleave by rank, skip duplicates and other manuals.
+        self.assertEqual({label: s.passage.doc_id for label, s in candidates.items() if s.passage},
+                         {'D1': first.doc_id, 'D2': station.doc_id, 'D3': latch.doc_id})
+
+        capped = replace(enabled, second_hop_manual=1)
+        _, _, candidates, _ = await core.candidates(question, knowledge, documents, config=capped)
+        self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [first.doc_id, station.doc_id])
+        for invalid in ({'second_hop_records': -1}, {'second_hop_per_record': 0}, {'second_hop_manual': 0}):
+            with self.assertRaises(ValueError):
+                RetrievalConfig(**invalid)
+
+    async def test_second_hop_in_hybrid_mode_uses_cut_records_and_adds_past_the_manual_cut(self):
+        question = 'MR-JE-AX391 servo will not respond and shows no alarm'
+        recs = [record(machine_id='MR-JE-AX391').model_copy(update={'claim': 'Copy Pr. PC70 before power-up.'}),
+                record(machine_id='MR-JE-AX391').model_copy(update={'claim': 'Check the CN2 latch.'})]
+        first, cut, station, latch = (passage(f'melservo_je_p00{page}_c01', text=f'manual {page}')
+                                      for page in (21, 22, 77, 78))
+
+        async def search(query, k):
+            if 'PC70' in query:
+                return [station]
+            if 'CN2' in query:
+                return [latch]
+            return [first, cut]
+        knowledge, documents = stores(recs)
+        documents.search = AsyncMock(side_effect=search)
+        hybrid = replace(load_config().retrieval, rerank_mode='hybrid', prefilter_knowledge=1, prefilter_manual=1,
+                         second_hop_records=2)
+        _, _, candidates, _ = await build_retriever(ranker=object()).candidates(
+            question, knowledge, documents, config=hybrid)
+        # Only the record kept by the hybrid cut steers a second hop.
+        self.assertEqual(documents.search.await_count, 2)
+        self.assertEqual([s.record.claim for s in candidates.values() if s.record], [recs[0].claim])
+        # The hybrid cut drops the second first-hop chunk; the second-hop chunk joins after it.
+        self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [first.doc_id, station.doc_id])
+
+    def rewriting(self, mode):
+        config = load_config()
+        config = replace(config, retrieval=replace(config.retrieval, query_rewrite=mode))
+        return config, build_rewriter(config, client=object())
+
+    async def test_query_rewrite_is_off_by_default_and_auto_fires_only_on_follow_ups_and_other_languages(self):
+        self.assertEqual(load_config().retrieval.query_rewrite, 'off')
+        self.assertIsNone(build_retriever(ranker=object()).rewriter)
+        with self.assertRaises(ValueError):
+            RetrievalConfig(query_rewrite='sometimes')
+        _, rewriter = self.rewriting('auto')
+        history = [('MR-JE-AX391 CN2 checks', 'Isolate power, then check CN2.')]
+        with patch.object(llm, 'ainvoke', AsyncMock(return_value='not json')) as invoke:
+            english = await rewriter.plan('MR-JE-AX391 shows AL. 16.3', history, mode='auto')
+            scoped = await rewriter.plan('What about FX5U-32MT?', history, mode='auto')
+            self.assertEqual(invoke.await_count, 0)
+            follow_up = await rewriter.plan('Why first?', history, mode='auto')
+            language = await rewriter.plan('Máy MR-JE-AX391 báo lỗi AL. 16.3 thì kiểm tra gì?', (), mode='auto')
+        self.assertEqual((english.status, scoped.status), ('skipped', 'skipped'))
+        self.assertEqual((english.base, scoped.base), ('MR-JE-AX391 shows AL. 16.3', 'What about FX5U-32MT?'))
+        self.assertEqual(follow_up.base, 'MR-JE-AX391 CN2 checks\nFollow-up question: Why first?')
+        # A failed rewrite falls back to the original branch.
+        self.assertEqual([(p.reason, p.status, p.rewritten) for p in (follow_up, language)],
+                         [('follow-up', 'failed', None), ('language', 'failed', None)])
+        self.assertEqual(follow_up.rerank_question, follow_up.base)
+        self.assertIn('User: MR-JE-AX391 CN2 checks', invoke.await_args_list[0].args[1])
+        self.assertIn('## History\n(none)', invoke.await_args_list[1].args[1])
+
+    async def test_rewrite_adds_interleaved_candidates_and_keeps_the_original_branch(self):
+        question = 'Máy MR-JE-AX391 báo AL. 16.3 sau khi cắm lại CN2, kiểm tra gì?'
+        rewritten = {'standalone_question': 'What should be checked when MR-JE-AX391 shows AL.16.3 after reconnecting CN2?',
+                     'knowledge_query': 'MR-JE-AX391 AL.16.3 after CN2 reconnection check',
+                     'manual_query': 'MR-JE alarm 16.3 encoder cable CN2 reconnection check'}
+        recs = [record(machine_id='MR-JE-AX391').model_copy(update={'claim': f'claim {n}'}) for n in range(3)]
+        chunks = [passage(f'melservo_je_p00{n}_c01', text=f'manual {n}') for n in (21, 22, 23)]
+
+        async def search_knowledge(query, **_):
+            hits = [recs[1], recs[2]] if query == rewritten['knowledge_query'] else [recs[0], recs[1]]
+            return [SimpleNamespace(record=r, confident=True) for r in hits]
+
+        async def search(query, k):
+            return [chunks[1], chunks[2]] if 'encoder cable' in query else [chunks[0], chunks[1]]
+        knowledge, documents = stores()
+        knowledge.search_knowledge = AsyncMock(side_effect=search_knowledge)
+        documents.search = AsyncMock(side_effect=search)
+        config, rewriter = self.rewriting('auto')
+        core = build_retriever(config, ranker=object(), rewriter=rewriter)
+        with patch.object(llm, 'ainvoke', AsyncMock(return_value=json.dumps(rewritten))):
+            assets, family, candidates, plan = await core.candidates(question, knowledge, documents)
+        self.assertEqual((plan.reason, plan.status), ('language', 'used'))
+        # Scope comes from the catalog on the user's own words.
+        self.assertEqual((list(assets), family), (['MR-JE-AX391'], 'MR-JE'))
+        self.assertEqual([c.args[0] for c in knowledge.search_knowledge.await_args_list],
+                         [question, rewritten['knowledge_query']])
+        self.assertEqual([s.record.claim for s in candidates.values() if s.record], ['claim 0', 'claim 1', 'claim 2'])
+        self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [c.doc_id for c in chunks])
+        # The language trigger keeps the reranker on the user's question.
+        self.assertEqual(plan.rerank_question, question)
+        self.assertNotIn('AX391', documents.search.await_args_list[1].args[0])
+
+        dropped = {**rewritten, 'manual_query': 'MR-JE encoder cable CN2 reconnection check'}
+        invented = {**rewritten, 'knowledge_query': rewritten['knowledge_query'] + ' MR-JE-AX392'}
+        for response, detail in ((dropped, 'manual_query dropped 16.3'), (invented, 'invented asset MR-JE-AX392')):
+            knowledge.search_knowledge.reset_mock()
+            with patch.object(llm, 'ainvoke', AsyncMock(return_value=json.dumps(response))):
+                _, _, candidates, plan = await core.candidates(question, knowledge, documents)
+            self.assertEqual((plan.status, plan.detail), ('rejected', detail))
+            self.assertEqual(knowledge.search_knowledge.await_count, 1)
+            self.assertEqual([s.record.claim for s in candidates.values() if s.record], ['claim 0', 'claim 1'])
+        # The manual search adds the detected family itself, so the rewrite may omit it.
+        family_only = RewrittenQuery(standalone_question='How do we recover when our FX5 PLC cannot reach the SD card?',
+            knowledge_query='FX5 PLC cannot reach SD card recovery', manual_query='SD memory card access failure recovery')
+        self.assertIsNone(check(family_only, 'Our FX5 PLC cannot reach the SD card. How do we recover?', ()))
+
+    async def test_follow_up_rewrite_steers_reranker_but_writer_keeps_the_user_question(self):
+        rec = record(machine_id='MR-JE-AX391', machine_model='MR-JE')
+        knowledge, documents = stores([rec])
+        rewritten = {'standalone_question': 'Why should CN2 on MR-JE-AX391 be checked first?',
+                     'knowledge_query': 'MR-JE-AX391 why check CN2 first',
+                     'manual_query': 'MR-JE why check CN2 connector first'}
+        config, rewriter = self.rewriting('auto')
+        with patch.object(llm, 'ainvoke', AsyncMock(side_effect=[
+                '{"labels":["K1"]}', written(('K1',)),
+                json.dumps(rewritten), '{"labels":["K1"]}', written(('K1',))])) as invoke:
+            service = IndustrialQaService(SPEC, knowledge, documents=documents,
+                pipeline=IndustrialQaPipeline(retriever=build_retriever(config, ranker=object(), rewriter=rewriter),
+                                              writer=IndustrialAnswerWriter(object())))
+            [e async for e in service.start_stream('MR-JE-AX391 CN2 checks', thread_id='a').events]
+            second = [e async for e in service.start_stream('Why first?', thread_id='a').events]
+        self.assertEqual(rewriter.calls, 1)
+        self.assertEqual([c.args[0] for c in knowledge.search_knowledge.await_args_list[1:]],
+                         ['MR-JE-AX391 CN2 checks\nFollow-up question: Why first?', rewritten['knowledge_query']])
+        self.assertIn(rewritten['standalone_question'], invoke.await_args_list[3].args[1])
+        self.assertNotIn(rewritten['standalone_question'], invoke.await_args_list[4].args[1])
+        self.assertIn('Why first?', invoke.await_args_list[4].args[1])
+        started, completed = (next(e.data for e in second if e.event == kind) for kind in ('tool.started', 'tool.completed'))
+        self.assertEqual(started['input'], {'query': 'MR-JE-AX391 CN2 checks\nFollow-up question: Why first?'})
+        self.assertEqual(completed['output']['query_rewrite'], {'reason': 'follow-up', 'status': 'used'})
+        self.assertNotIn(rewritten['knowledge_query'], json.dumps([e.data for e in second]))
+
     async def test_unknown_labels_and_empty_rankings_fail(self):
         knowledge, documents = stores([record()])
         for response in ('{"labels":["K99"]}', '{"labels":[]}'):
@@ -399,7 +568,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         entered, release = asyncio.Event(), asyncio.Event()
         queries = []
         histories = []
-        async def retrieve(question, *_args):
+        async def retrieve(question, *_args, **_kwargs):
             queries.append(question)
             if question == 'first':
                 entered.set()

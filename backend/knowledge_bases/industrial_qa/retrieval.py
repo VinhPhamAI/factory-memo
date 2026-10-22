@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from backend.knowledge_bases.industrial_qa import CATALOG
 from backend.knowledge_bases.industrial_qa.catalog import _spelling_re
+from backend.knowledge_bases.industrial_qa.query import QUERY_REWRITE_MODES, QueryPlan, folded
 from backend.src.agents.rag.store import ChunkHit
 from backend.src.services import llm
 from backend.src.storage import KnowledgeRecord
@@ -25,6 +26,8 @@ UNSCOPED_CONTEXT = frozenset({"case_card", "steps", "source_turns", "benchmark_r
 # llm: the LLM reranks every scoped candidate. hybrid: only the top hybrid-search
 # candidates per source (plus procedure neighbours) reach the LLM, roughly halving its input.
 RERANK_MODES = ("llm", "hybrid")
+# A record's subject and claim, cut to this length, form one second-hop manual query.
+SECOND_HOP_QUERY_CHARACTERS = 600
 
 
 @dataclass(frozen=True)
@@ -42,13 +45,23 @@ class RetrievalConfig:
     # Cosine similarity that marks a knowledge hit confident (confident hits rank
     # first); None keeps the store's KNOWLEDGE_MIN_VECTOR_SIMILARITY.
     min_vector_similarity: float | None = None
+    # Second-hop manual search from the top knowledge records; 0 disables it.
+    second_hop_records: int = 0
+    second_hop_per_record: int = 4
+    second_hop_manual: int = 4
+    # R2 query rewriting (query.py): off, auto (follow-ups, non-English) or always.
+    query_rewrite: str = "off"
 
     def __post_init__(self):
         if self.rerank_mode not in RERANK_MODES:
             raise ValueError(f"Unknown industrial QA rerank mode: {self.rerank_mode}")
+        if self.query_rewrite not in QUERY_REWRITE_MODES:
+            raise ValueError(f"Unknown industrial QA query_rewrite mode: {self.query_rewrite}")
         if min(self.k, self.context_characters, self.knowledge_candidates,
                self.manual_candidates, self.manual_rerank_candidates,
-               self.prefilter_knowledge, self.prefilter_manual) < 1 or self.per_conversation < 0:
+               self.prefilter_knowledge, self.prefilter_manual,
+               self.second_hop_per_record, self.second_hop_manual) < 1 or min(
+               self.per_conversation, self.second_hop_records) < 0:
             raise ValueError("Invalid industrial QA retrieval limits")
         if self.min_vector_similarity is not None and not 0 <= self.min_vector_similarity <= 1:
             raise ValueError("min_vector_similarity must be between 0 and 1")
@@ -67,6 +80,18 @@ def detected_scope(question: str):
         families.add(variant[0])
     families.discard(None)
     return assets, next(iter(families)) if len(families) == 1 else None
+
+
+def interleaved(first, second, key, limit):
+    """Alternate two rankings, best ranks first, without duplicates."""
+    merged = {}
+    for pair in zip(first, second):
+        for item in pair:
+            merged.setdefault(key(item), item)
+    longer = first if len(first) > len(second) else second
+    for item in longer[min(len(first), len(second)):]:
+        merged.setdefault(key(item), item)
+    return list(merged.values())[:limit]
 
 
 def manual_query(question, family):
@@ -136,6 +161,7 @@ class RetrievalResult:
     candidates: int = 0
     usage: dict[str, Any] | None = None
     pool: int = 0
+    query: QueryPlan | None = None
 
 
 class Ranking(BaseModel):
@@ -143,21 +169,43 @@ class Ranking(BaseModel):
 
 
 class IndustrialRetriever:
-    def __init__(self, ranker, *, config=RetrievalConfig(), prompt: str, prefilter=None, env_prefix="ANSWER"):
+    def __init__(self, ranker, *, config=RetrievalConfig(), prompt: str, prefilter=None, env_prefix="ANSWER",
+                 rewriter=None):
         self.ranker, self.config, self.prompt, self.prefilter = ranker, config, prompt, prefilter
-        self.env_prefix = env_prefix
+        self.env_prefix, self.rewriter = env_prefix, rewriter
 
-    async def candidates(self, question, knowledge, documents, *, scope=None, config=None):
-        """Scoped hybrid candidates from both stores, before any reranking."""
+    async def plan(self, question, history, cfg):
+        if cfg.query_rewrite == "off":
+            return QueryPlan(question, folded(question, history))
+        if self.rewriter is None:
+            raise ValueError("query_rewrite needs a query rewriter")
+        return await self.rewriter.plan(question, history, mode=cfg.query_rewrite)
+
+    async def candidates(self, question, knowledge, documents, *, scope=None, config=None, history=()):
+        """Scoped hybrid candidates from both stores, before any reranking.
+        `question` is the user's own words; `history` holds prior (question,
+        answer) turns of an API thread. Returns the query plan last."""
         cfg = config if config is not None else self.config
-        assets, family = detected_scope(question)
+        # The original branch: a follow-up without scope inherits the latest scoped prior question.
+        base = folded(question, history)
+        assets, family = detected_scope(base)
         local = CATALOG.lookup_scope(assets, family)
         filters = {"$and": [scope, local]} if scope and local else scope or local
         threshold = {} if cfg.min_vector_similarity is None else {"min_vector_similarity": cfg.min_vector_similarity}
-        hits, passages = await asyncio.gather(
-            knowledge.search_knowledge(question, k=cfg.knowledge_candidates, filters=filters, **threshold),
-            documents.search(manual_query(question, family), k=cfg.manual_candidates),
+        hits, passages, plan = await asyncio.gather(
+            knowledge.search_knowledge(base, k=cfg.knowledge_candidates, filters=filters, **threshold),
+            documents.search(manual_query(base, family), k=cfg.manual_candidates),
+            self.plan(question, history, cfg),
         )
+        if plan.rewritten is not None:
+            # Rewritten queries only add candidates, alternating with the original ranks.
+            extra_hits, extra_passages = await asyncio.gather(
+                knowledge.search_knowledge(plan.rewritten.knowledge_query, k=cfg.knowledge_candidates,
+                                           filters=filters, **threshold),
+                documents.search(manual_query(plan.rewritten.manual_query, family), k=cfg.manual_candidates),
+            )
+            hits = interleaved(hits, extra_hits, lambda hit: hit.record.id, cfg.knowledge_candidates)
+            passages = interleaved(passages, extra_passages, lambda p: p.chunk_id, cfg.manual_candidates)
         if not assets and cfg.per_conversation:
             counts = defaultdict(int)
             kept = []
@@ -171,7 +219,7 @@ class IndustrialRetriever:
             general = {"context.machine_id": {"$exists": False}}
             compatible = build_knowledge_filter(context={"machine_model": family})
             parts = [part for part in (scope, general, compatible) if part]
-            hits = await knowledge.search_knowledge(question, k=cfg.knowledge_candidates, filters={"$and": parts},
+            hits = await knowledge.search_knowledge(base, k=cfg.knowledge_candidates, filters={"$and": parts},
                                                     **threshold)
         hybrid = cfg.rerank_mode == "hybrid"
         if hybrid:
@@ -183,6 +231,9 @@ class IndustrialRetriever:
         # The hybrid cut precedes neighbour expansion so multi-chunk procedures stay whole.
         limit = min(cfg.manual_rerank_candidates, cfg.prefilter_manual) if hybrid else cfg.manual_rerank_candidates
         selected_passages = list({p.chunk_id: p for p in allowed}.values())[:limit]
+        if cfg.second_hop_records and hits:
+            selected_passages += await self.second_hop([hit.record for hit in hits[:cfg.second_hop_records]],
+                family, expected_manual, {p.chunk_id for p in selected_passages}, documents, cfg)
         seeds = [p for p in selected_passages[:3] if re.search(r"procedure|steps?|connect|configur", p.text, re.I)]
         if seeds:
             neighbors = await documents.adjacent_chunks([p.chunk_id for p in seeds])
@@ -195,7 +246,24 @@ class IndustrialRetriever:
         selected_passages = list({p.chunk_id: p for p in selected_passages}.values())
         candidates = {f"K{i}": Source(f"K{i}", record=hit.record, confident=hit.confident) for i, hit in enumerate(hits, 1)}
         candidates.update({f"D{i}": Source(f"D{i}", passage=p) for i, p in enumerate(selected_passages, 1)})
-        return assets, family, candidates
+        return assets, family, candidates, plan
+
+    async def second_hop(self, records, family, manual, seen, documents, cfg):
+        """Manual passages found with the top records' wording, which bridges a
+        symptom-style question to manual vocabulary (e.g. a station number
+        parameter). Records only steer the search; the reranker and writer
+        still judge every passage against the original question."""
+        queries = [manual_query(f"{r.subject}: {r.claim}"[:SECOND_HOP_QUERY_CHARACTERS], family) for r in records]
+        results = await asyncio.gather(*(documents.search(q, k=cfg.second_hop_per_record) for q in queries))
+        found = {}
+        # Interleave by rank so the first record cannot fill every slot.
+        for rank in range(cfg.second_hop_per_record):
+            for passages in results:
+                if rank < len(passages):
+                    p = passages[rank]
+                    if p.chunk_id not in seen and (not manual or reference_id(p) == manual):
+                        found.setdefault(p.chunk_id, p)
+        return list(found.values())[:cfg.second_hop_manual]
 
     async def prefiltered(self, question, candidates, cfg):
         """Cross-encoder cut before the LLM. Quotas are per source because
@@ -210,14 +278,17 @@ class IndustrialRetriever:
                          for i, (_, s) in enumerate(ranked, 1)})
         return kept
 
-    async def retrieve(self, question, knowledge, documents, *, scope=None, context_characters=None, config=None):
+    async def retrieve(self, question, knowledge, documents, *, scope=None, context_characters=None, config=None,
+                       history=()):
         cfg = config if config is not None else self.config
-        assets, family, candidates = await self.candidates(question, knowledge, documents, scope=scope, config=cfg)
+        assets, family, candidates, plan = await self.candidates(question, knowledge, documents, scope=scope,
+                                                                 config=cfg, history=history)
         pool = len(candidates)
+        question = plan.rerank_question
         if self.prefilter is not None and candidates:
             candidates = await self.prefiltered(question, candidates, cfg)
         if not candidates:
-            return RetrievalResult((), tuple(assets), family)
+            return RetrievalResult((), tuple(assets), family, query=plan)
         values = {"QUESTION": question, "SOURCES": "\n\n".join(s.text for s in candidates.values())}
         response = await llm.ainvoke(self.ranker,
             re.sub(r"\{(QUESTION|SOURCES)\}", lambda m: values[m[1]], self.prompt))
@@ -237,4 +308,4 @@ class IndustrialRetriever:
         if not sources:
             raise llm.LLMResponseError("Reranker selected no evidence within context budget")
         return RetrievalResult(tuple(sources), tuple(assets), family, len(candidates),
-                               getattr(response, "usage_metadata", None), pool)
+                               getattr(response, "usage_metadata", None), pool, plan)
