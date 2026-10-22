@@ -117,7 +117,11 @@ def default_ingestion_factory(spec: KnowledgeBaseSpec, store: KnowledgeStore):
     VOICE_VERIFY (off|quotes|llm, default quotes) and VOICE_CONSOLIDATE
     (default true) tune the advisory steps. A response that fails the output
     schema is asked for once more, so one bad field does not lose a recording.
+    A knowledge base with its own `ingestion_factory` uses that instead.
     """
+
+    if spec.ingestion_factory is not None:
+        return spec.ingestion_factory(spec, store)
 
     from backend.scripts.kb import extraction_max_tokens_from_env
 

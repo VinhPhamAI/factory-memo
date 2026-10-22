@@ -1,0 +1,105 @@
+# Industrial QA pipeline settings, shared by the API, CLI and benchmark runners.
+# Select another file with INDUSTRIAL_QA_CONFIG=path (API) or --config path (runners).
+# Benchmark run manifests record the resolved values and this file's SHA-256.
+# API keys and base URLs stay in the environment (.env), as do the embedding
+# model and dimension, which must match the vectors already indexed.
+
+# Recorded in run manifests; change it whenever a setting below changes.
+name = "scoped-rerank-grounded-answer"
+
+[retrieval]
+# Sources kept per kind (knowledge K, manual D) after reranking, and per conversation.
+k = 8
+per_conversation = 3
+context_characters = 24000
+knowledge_candidates = 20
+manual_candidates = 48
+manual_rerank_candidates = 16
+# Cosine similarity that marks a knowledge hit confident; confident hits rank first.
+# Omit to use KNOWLEDGE_MIN_VECTOR_SIMILARITY.
+min_vector_similarity = 0.6
+# "llm": the LLM reranks every scoped candidate (about 35).
+# "hybrid": only the first prefilter_* candidates per kind in hybrid-search order,
+# plus procedure neighbour chunks, reach the LLM reranker.
+rerank_mode = "hybrid"
+prefilter_knowledge = 8
+prefilter_manual = 8
+# Second-hop manual search: the top second_hop_records knowledge hits (subject +
+# claim) each query the manual for second_hop_per_record chunks; up to
+# second_hop_manual new chunks of the expected manual join the candidates.
+# 0 records disables it. Records only steer the search; the reranker and writer
+# still see the original question.
+second_hop_records = 0
+second_hop_per_record = 4
+second_hop_manual = 4
+# Query rewriting ([llm.query], query.md): "off"; "auto" rewrites only API
+# follow-ups (no scope of their own, scoped history) and non-English questions;
+# "always" rewrites every question (benchmark arm). The original question stays
+# one search branch, rewritten queries only add candidates, scope still comes
+# from the catalog, and a rewrite that drops a code or number or names a new
+# asset is discarded.
+query_rewrite = "off"
+
+# API threads only: prior turns given to the answer writer.
+[conversation]
+history_characters = 6000
+history_turns = 5
+
+# Voice capture / pasted text in the API, and benchmark extraction. An omitted
+# verify or consolidate falls back to VOICE_VERIFY / VOICE_CONSOLIDATE, then quotes / true.
+[ingestion]
+verify = "quotes"          # off | quotes | llm (uses [llm.verify]); advisory only
+consolidate = true         # benchmark runners always consolidate within their run scope
+validation_retries = 0     # re-ask once per retry when output fails the schema
+
+# env_prefix selects <PREFIX>_API_KEY/_BASE_URL with OPENROUTER_* fallbacks.
+# model, thinking ("enabled"/"disabled"), service_tier and timeout_seconds are
+# optional; an omitted one falls back to <PREFIX>_* then OPENROUTER_* in the
+# environment. An omitted thinking sends no thinking field (endpoint default).
+[llm.rerank]
+env_prefix = "ANSWER"
+model = "deepseek-v4.1-flash"
+thinking = "disabled"
+max_tokens = 2048
+
+[llm.answer]
+env_prefix = "ANSWER"
+model = "deepseek-v4.1-flash"
+thinking = "disabled"
+max_tokens = 8192
+
+# Benchmark-only multiple-choice step; it never affects the free-text answer.
+[llm.choice]
+env_prefix = "ANSWER"
+model = "deepseek-v4.1-flash"
+thinking = "disabled"
+max_tokens = 1024
+
+[llm.extraction]
+env_prefix = "EXTRACTION"
+model = "deepseek-v4.1-flash"
+thinking = "disabled"
+max_tokens = 20000
+
+[llm.verify]
+env_prefix = "VERIFY"
+model = "deepseek-v4.1-flash"
+max_tokens = 4096
+
+[llm.consolidation]
+env_prefix = "CONSOLIDATION"
+model = "deepseek-v4.1-flash"
+max_tokens = 8192
+
+# Query rewriting; called only when [retrieval] query_rewrite is not "off".
+[llm.query]
+env_prefix = "ANSWER"
+model = "deepseek-v4.1-flash"
+thinking = "disabled"
+max_tokens = 1024
+
+# Paths relative to this file.
+[prompts]
+rerank = "rerank.md"
+answer = "answer.md"
+query = "query.md"

@@ -13,6 +13,12 @@ DIRECTORY = Path(__file__).parent
 CATALOG = Catalog.from_files()
 
 
+def ingestion_factory(spec, store):
+    """API ingestion with the extraction, verify and consolidation settings of config.toml."""
+    from backend.knowledge_bases.industrial_qa.config import load_config
+    return load_config().ingestion_service(spec, store)
+
+
 SPEC = KnowledgeBaseSpec.from_directory(
     DIRECTORY,
     name="industrial_qa",
@@ -35,4 +41,5 @@ SPEC = KnowledgeBaseSpec.from_directory(
     ontology=CATALOG.ontology(DIRECTORY / ONTOLOGY_FILE),
     record_normalizer=CATALOG.normalize_records,
     knowledge_filter_builder=CATALOG.knowledge_filter,
+    ingestion_factory=ingestion_factory,
 )

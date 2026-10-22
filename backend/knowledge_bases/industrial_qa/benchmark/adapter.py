@@ -1,23 +1,20 @@
-"""Benchmark-only provenance mapping and MC choice around the official H1/H3.
+"""Benchmark-only provenance mapping and MC choice around the official pipeline.
 
 The shared retriever and writer never receive gold evidence or MC options.
 """
 from __future__ import annotations
 
-import hashlib
+from dataclasses import replace
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from backend.knowledge_bases.industrial_qa import pilot
 from backend.knowledge_bases.industrial_qa.answering import IndustrialAnswerWriter
+from backend.knowledge_bases.industrial_qa.benchmark.data import expert_turns
+from backend.knowledge_bases.industrial_qa.benchmark.evidence import concatenate, record_turns
+from backend.knowledge_bases.industrial_qa.config import load_config
 from backend.knowledge_bases.industrial_qa.pipeline import build_retriever
-from backend.knowledge_bases.industrial_qa.retrieval import RetrievalConfig
 from backend.src.services import llm
-
-
-def sha(text):
-    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def benchmark_scope(run):
@@ -27,17 +24,24 @@ def benchmark_scope(run):
     return filters[0] if len(filters) == 1 else {"$or": filters}
 
 
+class AnswerOutput(BaseModel):
+    answer: str = Field(min_length=1)
+    choice: Literal["A", "B", "C", "D"]
+    sources: list[str] = Field(default_factory=list)
+
+
 class Choice(BaseModel):
     choice: Literal['A', 'B', 'C', 'D']
 
 
 class CompleteAnswer:
-    def __init__(self):
-        self.writer = IndustrialAnswerWriter()
-        self.chooser = llm.chat_client_from_env('ANSWER', max_tokens=1024,
-            response_format=llm.json_schema_format('choice', Choice))
+    def __init__(self, config=None):
+        config = config if config is not None else load_config()
+        self.writer = IndustrialAnswerWriter(config=config)
+        self.chooser = config.choice.client('choice', Choice)
+        self.env_prefix = config.choice.env_prefix
 
-    async def __call__(self, question, sources, _client):
+    async def __call__(self, question, sources):
         texts = {label: source['text'] for label, source in sources.items()}
         written, usage = await self.writer.write(question['question'], texts)
         options = '\n'.join(f'{letter}. {value}' for letter, value in sorted(question['options'].items()))
@@ -47,20 +51,20 @@ class CompleteAnswer:
             + '\nIndependently written answer:\n' + written.answer + '\nOptions:\n' + options
             + '\nSources:\n' + '\n\n'.join(texts.values()))
         choice = llm.validated(Choice,
-            llm.response_json(response, task='choice', env_prefix='ANSWER'), task='choice')
-        return pilot.AnswerOutput(answer=written.answer, choice=choice.choice, sources=written.sources), {
+            llm.response_json(response, task='choice', env_prefix=self.env_prefix), task='choice')
+        return AnswerOutput(answer=written.answer, choice=choice.choice, sources=written.sources), {
             'options_seen_by_writer': False, 'checklist': [p.model_dump() for p in written.checklist],
             'usage': [usage, getattr(response, 'usage_metadata', None)]}
 
 
 class ScopedRetrieval:
-    def __init__(self, budgets=None, *, scope=None):
+    def __init__(self, budgets=None, *, scope=None, retriever=None, config=None):
         self.budgets, self.scope = budgets or {}, scope
-        self.retriever = build_retriever()
+        self.retriever = retriever if retriever is not None else build_retriever(config)
 
     async def __call__(self, question, store, documents, run, args, by_evidence, conversations, chunks):
         # These are explicit benchmark controls, not different retrieval policy.
-        config = RetrievalConfig(k=args.k, per_conversation=args.per_conversation)
+        config = replace(self.retriever.config, k=args.k, per_conversation=args.per_conversation)
         result = await self.retriever.retrieve(question, store, documents,
             scope=self.scope if self.scope is not None else benchmark_scope(run),
             context_characters=self.budgets.get(question), config=config)
@@ -69,7 +73,7 @@ class ScopedRetrieval:
             if source.record is not None:
                 record = source.record
                 cid = by_evidence.get(str(record.evidence_id))
-                turns = pilot.record_turns(record, pilot.expert_turns(conversations[cid]), question) if cid else []
+                turns = record_turns(record, expert_turns(conversations[cid]), question) if cid else []
                 details = {'items': [{'type': 'conversation', 'id': cid, 'turn_id': t} for t in turns],
                     'knowledge_id': str(record.id), 'type': record.type.value,
                     'subject': record.subject, 'conversation_id': cid, 'confident': source.confident}
@@ -80,5 +84,7 @@ class ScopedRetrieval:
                 'candidate_label': source.candidate_label,
                 'retrieval_trace': {'assets': list(result.assets), 'family': result.family,
                     'budget_characters': self.budgets.get(question, self.retriever.config.context_characters),
-                    'candidate_count': result.candidates, 'ranker_usage': result.usage}}
-        return selected, pilot.concatenate([s['items'] for s in selected.values()])
+                    'candidate_count': result.candidate_count, 'candidate_pool': result.candidate_pool,
+                    'ranker_usage': result.usage,
+                    'query_rewrite': result.query_plan.trace() if result.query_plan else None}}
+        return selected, concatenate([s['items'] for s in selected.values()])

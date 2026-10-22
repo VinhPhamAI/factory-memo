@@ -2,6 +2,9 @@
 import asyncio
 from dataclasses import replace
 import json
+import os
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -13,9 +16,11 @@ from backend.app import create_app
 from backend.knowledge_bases import AnswerPipeline, get_kb
 from backend.knowledge_bases.industrial_qa import SPEC
 from backend.knowledge_bases.industrial_qa.answering import IndustrialAnswerWriter, WrittenAnswer
-from backend.knowledge_bases.industrial_qa.benchmark_adapter import ScopedRetrieval
-from backend.knowledge_bases.industrial_qa.pipeline import IndustrialQaPipeline, build_retriever
-from backend.knowledge_bases.industrial_qa.retrieval import RetrievalResult, Source
+from backend.knowledge_bases.industrial_qa.benchmark.adapter import ScopedRetrieval
+from backend.knowledge_bases.industrial_qa.config import DEFAULT_PATH, ENV_VAR, load_config, runner_config
+from backend.knowledge_bases.industrial_qa.pipeline import IndustrialQaPipeline, build_retriever, build_rewriter
+from backend.knowledge_bases.industrial_qa.query_rewrite import RewrittenQuery, check
+from backend.knowledge_bases.industrial_qa.retrieval import RetrievalConfig, RetrievalResult, Source
 from backend.knowledge_bases.industrial_qa.service import IndustrialQaService, answer_with_citations
 from backend.src.agents.agent.service import (
     InvalidKnowledgeCitation, KnowledgeAgentService, KnowledgeAgentUnavailable, KnowledgeAgentUpstreamError,
@@ -46,6 +51,93 @@ def stores(records=(), passages=(), neighbors=()):
 def written(sources=('K1','D1'), answer='Isolate power, then check CN2.'):
     return json.dumps({'answer': answer, 'sources': list(sources),
         'checklist': [{'point': 'Check connectors first', 'sources': list(sources)}] if sources else []})
+
+
+class PipelineConfigTests(unittest.TestCase):
+    def write(self, directory, text):
+        path = Path(directory) / 'config.toml'
+        path.write_text(DEFAULT_PATH.read_text().replace('"rerank.md"', json.dumps(str(DEFAULT_PATH.with_name('rerank.md'))))
+                        .replace('"answer.md"', json.dumps(str(DEFAULT_PATH.with_name('answer.md'))))
+                        .replace('"query.md"', json.dumps(str(DEFAULT_PATH.with_name('query.md')))) + text)
+        return path
+
+    def test_packaged_config_matches_code_defaults(self):
+        with patch.dict(os.environ, {ENV_VAR: ''}):
+            config = load_config()
+        self.assertEqual(config.path, DEFAULT_PATH)
+        # The packaged file pins the frozen runs' settings that the code leaves to the environment.
+        self.assertEqual(config.retrieval, RetrievalConfig(min_vector_similarity=0.6))
+        self.assertEqual((config.rerank.max_tokens, config.answer.max_tokens, config.choice.max_tokens), (2048, 8192, 1024))
+        self.assertEqual((config.extraction.env_prefix, config.extraction.max_tokens, config.extraction.thinking),
+                         ('EXTRACTION', 8192, 'disabled'))
+        self.assertEqual((config.ingestion.verify, config.ingestion.consolidate), ('quotes', True))
+        self.assertEqual((config.conversation.history_characters, config.conversation.history_turns), (6000, 5))
+        self.assertEqual(config.prompts['rerank'], DEFAULT_PATH.with_name('rerank.md').read_text().strip())
+        provenance = config.provenance()
+        self.assertEqual(provenance['retrieval']['rerank_mode'], 'hybrid')
+        self.assertNotIn('api_key', json.dumps(provenance).lower())
+
+    def test_env_selects_file_and_unknown_or_invalid_settings_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(directory, '')
+            path.write_text(path.read_text().replace('rerank_mode = "hybrid"', 'rerank_mode = "llm"'))
+            with patch.dict(os.environ, {ENV_VAR: str(path)}):
+                self.assertEqual(load_config().retrieval.rerank_mode, 'llm')
+            for broken in ('\n[llm.judge]\nenv_prefix = "X"\nmax_tokens = 1\n', '\ntop_k = 3\n'):
+                with self.assertRaises(ValueError):
+                    load_config(self.write(directory, broken))
+            path.write_text(path.read_text().replace('k = 8', 'k = 8\nrerank_top = 4'))
+            with self.assertRaises(ValueError):
+                load_config(path)
+            path.write_text(path.read_text().replace('rerank_mode = "llm"', 'rerank_mode = "cross"'))
+            with self.assertRaises(ValueError):
+                load_config(path)
+
+    def test_toml_llm_settings_override_environment(self):
+        env = {'OPENROUTER_API_KEY': 'test', 'OPENROUTER_MODEL': 'env-model', 'ANSWER_THINKING': 'enabled',
+               'EXTRACTION_MODEL': 'env-extraction', 'EXTRACTION_THINKING': 'enabled'}
+        with patch.dict(os.environ, env):
+            config = load_config(DEFAULT_PATH)
+            client = config.answer.client('written_answer', WrittenAnswer)
+            service, provenance = config.ingestion_service(SPEC, object())
+            resolved = config.provenance()['llm']
+        self.assertEqual((client.model_name, client.extra_body), ('deepseek-v4.1-flash', {'thinking': {'type': 'disabled'}}))
+        self.assertEqual({key: provenance[key] for key in ('model', 'max_tokens', 'thinking')},
+                         {'model': 'deepseek-v4.1-flash', 'max_tokens': 8192, 'thinking': 'disabled'})
+        self.assertEqual(provenance['version'], SPEC.extraction_version)
+        self.assertEqual(service._verifier.method, 'quotes')
+        self.assertIsNotNone(service._consolidator)
+        self.assertEqual(resolved['verify']['thinking'], None)
+        self.assertNotIn('test', json.dumps(resolved))
+
+    def test_ingestion_settings_fall_back_to_voice_environment(self):
+        env = {'VOICE_VERIFY': 'off', 'VOICE_CONSOLIDATE': 'false'}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, env):
+            self.assertEqual((load_config(DEFAULT_PATH).ingestion.verify, load_config(DEFAULT_PATH).ingestion.consolidate),
+                             ('quotes', True))
+            path = self.write(directory, '')
+            path.write_text(path.read_text().replace('verify = "quotes"', '').replace('consolidate = true', ''))
+            ingestion = load_config(path).ingestion
+            self.assertEqual((ingestion.verify, ingestion.consolidate, ingestion.validation_retries), ('off', False, 0))
+            with patch.dict(os.environ, {'VOICE_VERIFY': '', 'VOICE_CONSOLIDATE': ''}):
+                self.assertEqual((load_config(path).ingestion.verify, load_config(path).ingestion.consolidate),
+                                 ('quotes', True))
+            for broken in ({'VOICE_VERIFY': 'maybe'}, {'VOICE_CONSOLIDATE': 'perhaps'}):
+                with patch.dict(os.environ, broken), self.assertRaises(ValueError):
+                    load_config(path)
+
+    def test_voice_capture_uses_the_industrial_ingestion_settings(self):
+        from backend.api.voice_capture import default_ingestion_factory
+        with patch('backend.knowledge_bases.industrial_qa.config.PipelineConfig.ingestion_service',
+                   return_value=('service', {'version': 'v'})) as built:
+            self.assertEqual(default_ingestion_factory(SPEC, 'store'), ('service', {'version': 'v'}))
+        built.assert_called_once_with(SPEC, 'store')
+
+    def test_runner_flags_override_only_when_given(self):
+        args = SimpleNamespace(config=DEFAULT_PATH, k=None, per_conversation=0)
+        config = runner_config(args)
+        self.assertEqual((args.k, config.retrieval.k, config.retrieval.per_conversation), (8, 8, 0))
+        self.assertEqual(load_config(DEFAULT_PATH).retrieval.per_conversation, 3)
 
 
 class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -94,6 +186,11 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             result = await build_retriever(ranker=object()).retrieve('MR-JE connections', knowledge, documents)
         self.assertEqual([s.passage.doc_id for s in result.sources], [main.doc_id, good.doc_id])
         self.assertNotIn(fx.doc_id, '\n'.join(s.text for s in result.sources))
+        self.assertEqual(knowledge.search_knowledge.call_args.kwargs['min_vector_similarity'], 0.6)
+        unset = load_config(DEFAULT_PATH).with_retrieval(min_vector_similarity=None)
+        with patch.object(llm, 'ainvoke', AsyncMock(return_value='{"labels":["D1"]}')):
+            await build_retriever(unset, ranker=object()).retrieve('MR-JE connections', knowledge, documents)
+        self.assertNotIn('min_vector_similarity', knowledge.search_knowledge.call_args.kwargs)
 
     async def test_generic_queries_cap_conversations_but_exact_asset_retains_complementary_records(self):
         recs = [record(machine_id='MR-JE-AX391', machine_model='MR-JE') for _ in range(4)]
@@ -106,6 +203,220 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             generic = await core.retrieve('MR-JE connector checks', knowledge, documents)
             exact = await core.retrieve('MR-JE-AX391 connector checks', knowledge, documents)
         self.assertEqual((len(generic.sources),len(exact.sources)),(3,4))
+
+    async def test_cross_encoder_prefilter_keeps_top_per_source_and_benchmark_quota(self):
+        recs = [record().model_copy(update={'claim': f'claim {i}'}) for i in range(3)]
+        chunks = [passage(f'melservo_je_p00{i}0_c01', text=f'manual {i}') for i in range(3)]
+        knowledge, documents = stores(recs, chunks)
+        scores = {'claim 0': .1, 'claim 1': .9, 'claim 2': .5, 'manual 0': .2, 'manual 1': .3, 'manual 2': .8}
+        prefilter = SimpleNamespace(score=AsyncMock(side_effect=lambda query, texts:
+            [scores[text.splitlines()[-1]] for text in texts]))
+        invoke = AsyncMock(return_value='{"labels":["K1","D1","K2"]}')
+        with patch.object(llm, 'ainvoke', invoke):
+            core = build_retriever(load_config().with_retrieval(rerank_mode='llm', prefilter_knowledge=2, prefilter_manual=1),
+                ranker=object(), prefilter=prefilter)
+            result = await core.retrieve('encoder', knowledge, documents)
+            await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
+                {'run_id': 'run'}, SimpleNamespace(k=8, per_conversation=3), {}, {}, {})
+        # The cross-encoder never sees the ephemeral labels it reorders.
+        self.assertFalse(any(text.startswith('[') for text in prefilter.score.call_args.args[1]))
+        self.assertEqual((result.candidate_pool, result.candidate_count), (6, 3))
+        self.assertEqual([s.text.splitlines()[-1] for s in result.sources], ['claim 1', 'manual 2', 'claim 2'])
+        for prompt in (call.args[1] for call in invoke.call_args_list):
+            self.assertEqual(prompt.count('[K'), 2)
+            self.assertEqual(prompt.count('[D'), 1)
+
+    async def test_hybrid_rerank_mode_cuts_in_search_order_but_keeps_procedure_neighbors(self):
+        recs = [record().model_copy(update={'claim': f'claim {i}'}) for i in range(3)]
+        chunks = [passage('melservo_je_p0000_c01', text='Connection procedure 0'),
+                  *(passage(f'melservo_je_p00{i}0_c01', text=f'manual {i}') for i in (1, 2))]
+        neighbor = passage('melservo_je_p0001_c01', text='procedure step 2')
+        knowledge, documents = stores(recs, chunks, [neighbor])
+        invoke = AsyncMock(return_value='{"labels":["K2","D2","D1"]}')
+        with patch.object(llm, 'ainvoke', invoke):
+            core = build_retriever(load_config().with_retrieval(
+                rerank_mode='hybrid', prefilter_knowledge=2, prefilter_manual=1), ranker=object())
+            result = await core.retrieve('encoder', knowledge, documents)
+            await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
+                {'run_id': 'run'}, SimpleNamespace(k=8, per_conversation=3), {}, {}, {})
+        self.assertEqual((result.candidate_pool, result.candidate_count), (4, 4))
+        self.assertEqual([s.text.splitlines()[-1] for s in result.sources],
+                         ['claim 1', 'procedure step 2', 'Connection procedure 0'])
+        for prompt in (call.args[1] for call in invoke.call_args_list):
+            self.assertNotIn('claim 2', prompt)
+            self.assertNotIn('manual 1', prompt)
+            self.assertIn('procedure step 2', prompt)
+        with self.assertRaises(ValueError):
+            RetrievalConfig(rerank_mode='cross_encoder')
+
+    async def test_second_hop_searches_manual_with_record_wording_and_is_off_by_default(self):
+        question = 'MR-JE-AX391 servo will not respond and shows no alarm'
+        recs = [record(machine_id='MR-JE-AX391').model_copy(update={'subject': 'MR-JE amplifier',
+                    'claim': 'On MR-JE-AX391 at Line 4, copy the rotary switch and Pr. PC70 before power-up.'}),
+                record(machine_id='MR-JE-AX391').model_copy(update={'claim': 'Check the CN2 latch.'})]
+        first, station, latch = (passage(f'melservo_je_p00{page}_c01', text=f'manual {page}') for page in (21, 77, 78))
+        other_manual = passage('fx5_p0001_c01', text='fx5 manual')
+
+        async def search(query, k):
+            if 'PC70' in query:
+                return [station, first, other_manual]
+            if 'CN2' in query:
+                return [latch, station]
+            return [first]
+        knowledge, documents = stores(recs)
+        documents.search = AsyncMock(side_effect=search)
+        core = build_retriever(ranker=object())
+        candidates = (await core.candidates(question, knowledge, documents)).sources
+        self.assertEqual(documents.search.await_count, 1)
+        self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [first.doc_id])
+
+        documents.search.reset_mock()
+        enabled = replace(load_config().retrieval, second_hop_records=2, second_hop_per_record=3, second_hop_manual=4)
+        candidates = (await core.candidates(question, knowledge, documents, config=enabled)).sources
+        hops = [call.args[0] for call in documents.search.await_args_list[1:]]
+        self.assertEqual(len(hops), 2)
+        self.assertEqual({call.kwargs['k'] for call in documents.search.await_args_list[1:]}, {3})
+        # Record wording, scoped like the first-hop manual query: family kept, asset and line removed.
+        self.assertTrue(hops[0].startswith('MR-JE ') and 'PC70' in hops[0])
+        self.assertNotIn('AX391', hops[0])
+        self.assertNotIn('Line 4', hops[0])
+        # First-hop order is kept; new chunks interleave by rank, skip duplicates and other manuals.
+        self.assertEqual({label: s.passage.doc_id for label, s in candidates.items() if s.passage},
+                         {'D1': first.doc_id, 'D2': station.doc_id, 'D3': latch.doc_id})
+
+        capped = replace(enabled, second_hop_manual=1)
+        candidates = (await core.candidates(question, knowledge, documents, config=capped)).sources
+        self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [first.doc_id, station.doc_id])
+        for invalid in ({'second_hop_records': -1}, {'second_hop_per_record': 0}, {'second_hop_manual': 0}):
+            with self.assertRaises(ValueError):
+                RetrievalConfig(**invalid)
+
+    async def test_second_hop_in_hybrid_mode_uses_cut_records_and_adds_past_the_manual_cut(self):
+        question = 'MR-JE-AX391 servo will not respond and shows no alarm'
+        recs = [record(machine_id='MR-JE-AX391').model_copy(update={'claim': 'Copy Pr. PC70 before power-up.'}),
+                record(machine_id='MR-JE-AX391').model_copy(update={'claim': 'Check the CN2 latch.'})]
+        first, cut, station, latch = (passage(f'melservo_je_p00{page}_c01', text=f'manual {page}')
+                                      for page in (21, 22, 77, 78))
+
+        async def search(query, k):
+            if 'PC70' in query:
+                return [station]
+            if 'CN2' in query:
+                return [latch]
+            return [first, cut]
+        knowledge, documents = stores(recs)
+        documents.search = AsyncMock(side_effect=search)
+        hybrid = replace(load_config().retrieval, rerank_mode='hybrid', prefilter_knowledge=1, prefilter_manual=1,
+                         second_hop_records=2)
+        candidates = (await build_retriever(ranker=object()).candidates(
+            question, knowledge, documents, config=hybrid)).sources
+        # Only the record kept by the hybrid cut steers a second hop.
+        self.assertEqual(documents.search.await_count, 2)
+        self.assertEqual([s.record.claim for s in candidates.values() if s.record], [recs[0].claim])
+        # The hybrid cut drops the second first-hop chunk; the second-hop chunk joins after it.
+        self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [first.doc_id, station.doc_id])
+
+    def rewriting(self, mode):
+        config = load_config()
+        config = replace(config, retrieval=replace(config.retrieval, query_rewrite=mode))
+        return config, build_rewriter(config, client=object())
+
+    async def test_query_rewrite_is_off_by_default_and_auto_fires_only_on_follow_ups_and_other_languages(self):
+        self.assertEqual(load_config().retrieval.query_rewrite, 'off')
+        self.assertIsNone(build_retriever(ranker=object()).rewriter)
+        with self.assertRaises(ValueError):
+            RetrievalConfig(query_rewrite='sometimes')
+        _, rewriter = self.rewriting('auto')
+        history = [('MR-JE-AX391 CN2 checks', 'Isolate power, then check CN2.')]
+        with patch.object(llm, 'ainvoke', AsyncMock(return_value='not json')) as invoke:
+            english = await rewriter.plan('MR-JE-AX391 shows AL. 16.3', history, mode='auto')
+            scoped = await rewriter.plan('What about FX5U-32MT?', history, mode='auto')
+            self.assertEqual(invoke.await_count, 0)
+            follow_up = await rewriter.plan('Why first?', history, mode='auto')
+            language = await rewriter.plan('Máy MR-JE-AX391 báo lỗi AL. 16.3 thì kiểm tra gì?', (), mode='auto')
+        self.assertEqual((english.status, scoped.status), ('skipped', 'skipped'))
+        self.assertEqual((english.base, scoped.base), ('MR-JE-AX391 shows AL. 16.3', 'What about FX5U-32MT?'))
+        self.assertEqual(follow_up.base, 'MR-JE-AX391 CN2 checks\nFollow-up question: Why first?')
+        # A failed rewrite falls back to the original branch.
+        self.assertEqual([(p.reason, p.status, p.rewritten) for p in (follow_up, language)],
+                         [('follow-up', 'failed', None), ('language', 'failed', None)])
+        self.assertEqual(follow_up.rerank_question, follow_up.base)
+        self.assertIn('User: MR-JE-AX391 CN2 checks', invoke.await_args_list[0].args[1])
+        self.assertIn('## History\n(none)', invoke.await_args_list[1].args[1])
+
+    async def test_rewrite_adds_interleaved_candidates_and_keeps_the_original_branch(self):
+        question = 'Máy MR-JE-AX391 báo AL. 16.3 sau khi cắm lại CN2, kiểm tra gì?'
+        rewritten = {'standalone_question': 'What should be checked when MR-JE-AX391 shows AL.16.3 after reconnecting CN2?',
+                     'knowledge_query': 'MR-JE-AX391 AL.16.3 after CN2 reconnection check',
+                     'manual_query': 'MR-JE alarm 16.3 encoder cable CN2 reconnection check'}
+        recs = [record(machine_id='MR-JE-AX391').model_copy(update={'claim': f'claim {n}'}) for n in range(3)]
+        chunks = [passage(f'melservo_je_p00{n}_c01', text=f'manual {n}') for n in (21, 22, 23)]
+
+        async def search_knowledge(query, **_):
+            hits = [recs[1], recs[2]] if query == rewritten['knowledge_query'] else [recs[0], recs[1]]
+            return [SimpleNamespace(record=r, confident=True) for r in hits]
+
+        async def search(query, k):
+            return [chunks[1], chunks[2]] if 'encoder cable' in query else [chunks[0], chunks[1]]
+        knowledge, documents = stores()
+        knowledge.search_knowledge = AsyncMock(side_effect=search_knowledge)
+        documents.search = AsyncMock(side_effect=search)
+        config, rewriter = self.rewriting('auto')
+        core = build_retriever(config, ranker=object(), rewriter=rewriter)
+        with patch.object(llm, 'ainvoke', AsyncMock(return_value=json.dumps(rewritten))):
+            found = await core.candidates(question, knowledge, documents)
+        assets, family, candidates, plan = found.assets, found.family, found.sources, found.plan
+        self.assertEqual((plan.reason, plan.status), ('language', 'used'))
+        # Scope comes from the catalog on the user's own words.
+        self.assertEqual((list(assets), family), (['MR-JE-AX391'], 'MR-JE'))
+        self.assertEqual([c.args[0] for c in knowledge.search_knowledge.await_args_list],
+                         [question, rewritten['knowledge_query']])
+        self.assertEqual([s.record.claim for s in candidates.values() if s.record], ['claim 0', 'claim 1', 'claim 2'])
+        self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [c.doc_id for c in chunks])
+        # The language trigger keeps the reranker on the user's question.
+        self.assertEqual(plan.rerank_question, question)
+        self.assertNotIn('AX391', documents.search.await_args_list[1].args[0])
+
+        dropped = {**rewritten, 'manual_query': 'MR-JE encoder cable CN2 reconnection check'}
+        invented = {**rewritten, 'knowledge_query': rewritten['knowledge_query'] + ' MR-JE-AX392'}
+        for response, detail in ((dropped, 'manual_query dropped 16.3'), (invented, 'invented asset MR-JE-AX392')):
+            knowledge.search_knowledge.reset_mock()
+            with patch.object(llm, 'ainvoke', AsyncMock(return_value=json.dumps(response))):
+                found = await core.candidates(question, knowledge, documents)
+            candidates, plan = found.sources, found.plan
+            self.assertEqual((plan.status, plan.detail), ('rejected', detail))
+            self.assertEqual(knowledge.search_knowledge.await_count, 1)
+            self.assertEqual([s.record.claim for s in candidates.values() if s.record], ['claim 0', 'claim 1'])
+        # The manual search adds the detected family itself, so the rewrite may omit it.
+        family_only = RewrittenQuery(standalone_question='How do we recover when our FX5 PLC cannot reach the SD card?',
+            knowledge_query='FX5 PLC cannot reach SD card recovery', manual_query='SD memory card access failure recovery')
+        self.assertIsNone(check(family_only, 'Our FX5 PLC cannot reach the SD card. How do we recover?', ()))
+
+    async def test_follow_up_rewrite_steers_reranker_but_writer_keeps_the_user_question(self):
+        rec = record(machine_id='MR-JE-AX391', machine_model='MR-JE')
+        knowledge, documents = stores([rec])
+        rewritten = {'standalone_question': 'Why should CN2 on MR-JE-AX391 be checked first?',
+                     'knowledge_query': 'MR-JE-AX391 why check CN2 first',
+                     'manual_query': 'MR-JE why check CN2 connector first'}
+        config, rewriter = self.rewriting('auto')
+        with patch.object(llm, 'ainvoke', AsyncMock(side_effect=[
+                '{"labels":["K1"]}', written(('K1',)),
+                json.dumps(rewritten), '{"labels":["K1"]}', written(('K1',))])) as invoke:
+            service = IndustrialQaService(SPEC, knowledge, documents=documents,
+                pipeline=IndustrialQaPipeline(retriever=build_retriever(config, ranker=object(), rewriter=rewriter),
+                                              writer=IndustrialAnswerWriter(object())))
+            [e async for e in service.start_stream('MR-JE-AX391 CN2 checks', thread_id='a').events]
+            second = [e async for e in service.start_stream('Why first?', thread_id='a').events]
+        self.assertEqual(rewriter.calls, 1)
+        self.assertEqual([c.args[0] for c in knowledge.search_knowledge.await_args_list[1:]],
+                         ['MR-JE-AX391 CN2 checks\nFollow-up question: Why first?', rewritten['knowledge_query']])
+        self.assertIn(rewritten['standalone_question'], invoke.await_args_list[3].args[1])
+        self.assertNotIn(rewritten['standalone_question'], invoke.await_args_list[4].args[1])
+        self.assertIn('Why first?', invoke.await_args_list[4].args[1])
+        started, completed = (next(e.data for e in second if e.event == kind) for kind in ('tool.started', 'tool.completed'))
+        self.assertEqual(started['input'], {'query': 'MR-JE-AX391 CN2 checks\nFollow-up question: Why first?'})
+        self.assertEqual(completed['output']['query_rewrite'], {'reason': 'follow-up', 'status': 'used'})
+        self.assertNotIn(rewritten['knowledge_query'], json.dumps([e.data for e in second]))
 
     async def test_unknown_labels_and_empty_rankings_fail(self):
         knowledge, documents = stores([record()])
@@ -259,7 +570,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         entered, release = asyncio.Event(), asyncio.Event()
         queries = []
         histories = []
-        async def retrieve(question, *_args):
+        async def retrieve(question, *_args, **_kwargs):
             queries.append(question)
             if question == 'first':
                 entered.set()

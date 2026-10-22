@@ -145,6 +145,10 @@ class Catalog:
         self._component_index = self._index(
             (component.name, (component.name, *component.aliases)) for component in components
         )
+        self._family_spellings = [
+            (_spelling_re(spelling), family.name)
+            for family in families for spelling in (family.name, *family.aliases)
+        ]
         # Longest spelling first, so "Plant Hanoi" wins over "Hanoi".
         self._site_spellings = sorted(
             ((_spelling_re(spelling), site, len(spelling))
@@ -266,6 +270,11 @@ class Catalog:
                 return name
         return None
 
+    def families_named(self, text: str) -> set[str]:
+        """Families whose name or an alias appears anywhere in `text`."""
+
+        return {name for pattern, name in self._family_spellings if pattern.search(text)}
+
     def component(self, value: str) -> str | None:
         """Component model named in `value` ("FX5-ENET module" -> FX5-ENET)."""
 
@@ -331,6 +340,13 @@ class Catalog:
         return next(
             (site for pattern, site, _ in self._site_spellings if pattern.search(value)), None
         )
+
+    def without_sites(self, text: str) -> str:
+        """`text` with every site spelling blanked, longest spelling first."""
+
+        for pattern, _, _ in self._site_spellings:
+            text = pattern.sub(" ", text)
+        return text
 
     def line(self, value: str) -> tuple[str | None, str | None]:
         """(site, "Line N") of a line written as "Dong Nai Line 1", "LINE11"..."""

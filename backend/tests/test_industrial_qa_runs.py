@@ -13,9 +13,12 @@ from uuid import uuid4
 from langchain_core.embeddings import DeterministicFakeEmbedding
 from sqlalchemy import text
 
-from backend.knowledge_bases.industrial_qa import SPEC, pilot, rewrite, train
-from backend.knowledge_bases.industrial_qa.benchmark_adapter import sha
-from backend.knowledge_bases.industrial_qa.runs import overwrite_run, replace_previous_runs, require_official_database
+from backend.knowledge_bases.base import PROJECT_ROOT
+from backend.knowledge_bases.industrial_qa import SPEC
+from backend.knowledge_bases.industrial_qa.benchmark import reanswer, train
+from backend.knowledge_bases.industrial_qa.benchmark.manifest import EXTRACTION_SOURCES, source_paths
+from backend.knowledge_bases.industrial_qa.config import DEFAULT_PATH, load_config, sha
+from backend.knowledge_bases.industrial_qa.benchmark.runs import overwrite_run, replace_previous_runs, require_official_database
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import KnowledgeRecord, KnowledgeStore
 from backend.src.storage.databases import database_url
@@ -55,23 +58,22 @@ class RunnerDatabaseTests(unittest.TestCase):
             baseline = {'split':'train','run_id':'base','conversation_ids':['c'],
                         'conversations':{'c':{'status':'processed','records':[]}},'extraction':{}}
             (source/'run.json').write_text(json.dumps(baseline))
-            files = [Path(train.__file__).with_name(name) for name in
-                ('schema.py','extract.md','catalog_types.yaml','catalog_assets.yaml','ontology.yaml')]
+            files = source_paths(*EXTRACTION_SOURCES)
             manifest = {'database':'kb_old_experiment_should_not_be_used','input_sha256':{},
-                'source_sha256':{str(p.relative_to(pilot.PROJECT_ROOT)):sha(p.read_text()) for p in files}}
+                'source_sha256':{str(p.relative_to(PROJECT_ROOT)):sha(p.read_text()) for p in files}}
             (source/'manifest.json').write_text(json.dumps(manifest))
             args = SimpleNamespace(from_run_dir=source,run_dir=target,k=8,per_conversation=3,
-                concurrency=4,batch_size=4,verify='quotes')
+                concurrency=4,batch_size=4,verify='quotes',config=load_config(DEFAULT_PATH))
             questions=[{'question_id':'q','conversation_id':'c'}]
-            with patch.object(pilot,'gold_questions',side_effect=lambda split: questions if split=='train' else []), \
-                    patch.object(pilot,'public_questions',return_value={'q':questions[0]}):
+            with patch.object(train,'gold_questions',side_effect=lambda split: questions if split=='train' else []), \
+                    patch.object(train,'public_questions',return_value={'q':questions[0]}):
                 train.prepare(args)
             actual=json.loads((target/'manifest.json').read_text())
             self.assertEqual(actual['database'], 'kb_industrial_qa')
             self.assertEqual(actual['source_database'], manifest['database'])
             self.assertNotIn('backend/knowledge_bases/industrial_qa/experiment.py',actual['source_sha256'])
 
-    def test_rewrite_source_manifest_never_selects_a_new_database(self):
+    def test_reanswer_source_manifest_never_selects_a_new_database(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
             source,target=root/'source',root/'target'
@@ -79,10 +81,10 @@ class RunnerDatabaseTests(unittest.TestCase):
             (source/'manifest.json').write_text(json.dumps({'database':'kb_old_experiment','run_id':'base'}))
             (source/'run.json').write_text(json.dumps({'run_id':'base'}))
             (source/'question_ids.txt').write_text('q\n')
-            rewrite.prepare(SimpleNamespace(from_run_dir=source,run_dir=target))
+            reanswer.prepare(SimpleNamespace(from_run_dir=source,run_dir=target))
             actual=json.loads((target/'manifest.json').read_text())
             self.assertEqual(actual['database'],SPEC.database)
-            self.assertIs(pilot.SPEC,SPEC)
+            self.assertIs(reanswer.SPEC,SPEC)
 
 
 @unittest.skipUnless(os.getenv('TEST_DATABASE_URL'), 'TEST_DATABASE_URL is not set')

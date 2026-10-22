@@ -159,6 +159,10 @@ utterance in progress), `final` (finished turns with speaker letters),
 
 Settings: `VOICE_AUDIO_DIR`, `VOICE_VERIFY` (`off|quotes|llm`, default `quotes`),
 `VOICE_CONSOLIDATE` (default `true`), `CLEANING_*`, plus the `SPEECH_*` settings.
+`industrial_qa` extracts, verifies and consolidates with the `[ingestion]` and
+`[llm.*]` settings of its `config.toml` (`INDUSTRIAL_QA_CONFIG`), the same
+contract as its benchmark runners; `VOICE_VERIFY`/`VOICE_CONSOLIDATE` apply only
+where that file omits `verify`/`consolidate`.
 
 ## Limitations
 

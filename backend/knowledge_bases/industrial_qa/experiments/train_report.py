@@ -6,20 +6,21 @@ import json
 from pathlib import Path
 import statistics
 
-from backend.knowledge_bases.industrial_qa import pilot
+from backend.knowledge_bases.base import PROJECT_ROOT
+from backend.knowledge_bases.industrial_qa.benchmark.data import gold_questions, save
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--pilot-dir", type=Path,
-                        default=pilot.PROJECT_ROOT / "data/industrial_qa_runs/ablations-20261010-v1/paired-combined")
+                        default=PROJECT_ROOT / "data/industrial_qa_runs/ablations-20261010-v1/paired-combined")
     args = parser.parse_args()
     root = args.run_dir.resolve()
     run = json.loads((root / "run.json").read_text())
     results = json.loads((root / "results.json").read_text())
     answers = json.loads((root / "answers.json").read_text())
-    train = pilot.gold_questions("train")
+    train = gold_questions("train")
     if set(run["question_ids"]) != {q["question_id"] for q in train}:
         raise ValueError("Run does not cover every train question")
     if set(run["conversation_ids"]) != {q["conversation_id"] for q in train}:
@@ -38,7 +39,7 @@ def main():
     contradictions = [r["question_id"] for r in rows if (r.get("judge") or {}).get("contradiction")]
     quality = results["ingestion_quality"]["summary"]
     fact = results["fact_capture"]
-    lines = ["# Industrial QA — H1+H3 trên toàn bộ train split", "",
+    lines = ["# Industrial QA — pipeline chính thức trên toàn bộ train split", "",
         f"Đã ingest đủ {len(run['conversation_ids'])} conversations train: tái sử dụng "
         f"{len(run['reused_conversation_ids'])} baseline conversations, extract/ingest mới "
         f"{len(run['new_conversation_ids'])} conversations. Đã trả lời và chấm "
@@ -66,7 +67,7 @@ def main():
     changes = [{"question_id": row["question_id"],
                 "before": next(r["answer_correct"] for r in previous["per_question"] if r["question_id"] == row["question_id"]),
                 "after": row["answer_correct"]} for row in subset]
-    pilot.save(root / "pilot_subset_comparison.json", {
+    save(root / "pilot_subset_comparison.json", {
         "pilot_path": str(args.pilot_dir.resolve()), "n": len(subset), "full_train_on_pilot_questions": summary,
         "original_pilot": previous["overall"], "correctness_changes": changes,
     })

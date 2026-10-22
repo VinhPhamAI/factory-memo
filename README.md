@@ -170,11 +170,11 @@ explicitly reused runs. Stop API/UI use of this KB while rebuilding it.
 Run a **10-question train pilot**, then expand to **all 100 train questions**:
 
 ```bash
-uv run python -m backend.knowledge_bases.industrial_qa.pilot all \
+uv run python -m backend.knowledge_bases.industrial_qa.benchmark.pilot all \
   --run-dir data/industrial_qa_runs/pilot-local \
   --split train --sample 10
 
-uv run python -m backend.knowledge_bases.industrial_qa.train all \
+uv run python -m backend.knowledge_bases.industrial_qa.benchmark.train all \
   --run-dir data/industrial_qa_runs/train-local \
   --from-run-dir data/industrial_qa_runs/pilot-local
 ```
@@ -183,7 +183,7 @@ Freeze model, prompt and retrieval settings before running **all 400 test
 questions**:
 
 ```bash
-uv run python -m backend.knowledge_bases.industrial_qa.holdout all \
+uv run python -m backend.knowledge_bases.industrial_qa.benchmark.holdout all \
   --run-dir data/industrial_qa_runs/test-local \
   --reuse-run-dir data/industrial_qa_runs/train-local
 ```

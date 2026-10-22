@@ -157,6 +157,9 @@ class KnowledgeBaseSpec:
     # Rewrites the scope of the records of one transcript before the ontology
     # (see KnowledgeIngestionService), e.g. with an equipment catalog.
     record_normalizer: Callable[[str, list[KnowledgeRecord]], None] | None = None
+    # API ingestion (voice capture, pasted text): (spec, store) -> (service,
+    # extraction provenance). None uses the shared environment-configured one.
+    ingestion_factory: Callable[[Any, Any], tuple[Any, dict[str, Any]]] | None = None
 
     def __post_init__(self) -> None:
         keys = [item.key for item in self.context_filters]

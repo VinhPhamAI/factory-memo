@@ -1,4 +1,4 @@
-"""Industrial QA application service using the shared H1/H3 pipeline."""
+"""Industrial QA application service using the shared retrieval and answer pipeline."""
 from __future__ import annotations
 
 import asyncio
@@ -10,8 +10,10 @@ from uuid import uuid4
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.knowledge_bases.stores import open_document_store
+from backend.knowledge_bases.industrial_qa.config import load_config
 from backend.knowledge_bases.industrial_qa.pipeline import IndustrialQaPipeline
-from backend.knowledge_bases.industrial_qa.retrieval import DOCUMENT_QUERY_INSTRUCTION, detected_scope
+from backend.knowledge_bases.industrial_qa.scope import inherit_follow_up_scope
+from backend.knowledge_bases.industrial_qa.retrieval import DOCUMENT_QUERY_INSTRUCTION
 from backend.src.agents.agent.config import RUN_TIMEOUT_SECONDS
 from backend.src.agents.agent.service import (
     CITATION_RE, DOCUMENT_CITATION_RE,
@@ -26,6 +28,11 @@ from backend.src.storage import StorageError
 class _Thread:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     history: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _rewrite_summary(plan):
+    """Public trace of query rewriting: only why and whether, never the rewritten text."""
+    return {"reason": plan.reason, "status": plan.status} if plan is not None else None
 
 
 def answer_with_citations(written, retrieval):
@@ -74,6 +81,7 @@ class IndustrialQaService(KnowledgeAgentService):
         self._documents, self._owns_documents = documents, documents is None
         self._document_lock = asyncio.Lock()
         self.pipeline = pipeline if pipeline is not None else IndustrialQaPipeline()
+        self._conversation = (getattr(self.pipeline, "config", None) or load_config()).conversation
         self._timeout_seconds = timeout_seconds
         self._threads: dict[str, _Thread] = {}
 
@@ -99,31 +107,29 @@ class IndustrialQaService(KnowledgeAgentService):
         try:
             async with asyncio.timeout(self._timeout_seconds), thread.lock:
                 documents = await self._document_store()
-                retrieval_query = query
-                assets, family = detected_scope(query)
-                if not assets and not family:
-                    for prior_query, _ in reversed(thread.history):
-                        if any(detected_scope(prior_query)):
-                            retrieval_query = prior_query + "\nFollow-up question: " + query
-                            break
+                # A follow-up without scope of its own inherits the latest scoped question.
+                retrieval_query = inherit_follow_up_scope(query, thread.history)
                 call_id = f"{request_id}:retrieval"
                 yield events.create("tool.started", {"tool_call_id": call_id,
                     "tool": "industrial_qa_retrieval", "phase": "retrieving",
                     "input": {"query": retrieval_query[:2000]}})
-                retrieved = await self.pipeline.retrieve(retrieval_query, self._store, documents)
+                retrieved = await self.pipeline.retrieve(query, self._store, documents, history=thread.history)
                 yield events.create("tool.completed", {"tool_call_id": call_id,
                     "tool": "industrial_qa_retrieval", "status": "success",
                     "duration_ms": int((monotonic() - started) * 1000),
-                    "output": {"count": len(retrieved.sources), "candidate_count": retrieved.candidates,
+                    "output": {"count": len(retrieved.sources), "candidate_count": retrieved.candidate_count,
                         "assets": list(retrieved.assets), "family": retrieved.family,
                         "knowledge_ids": [str(s.record.id) for s in retrieved.sources if s.record],
-                        "document_ids": [s.passage.doc_id for s in retrieved.sources if s.passage]}})
-                history = "\n\n".join(f"User: {q}\nAssistant: {a}" for q, a in thread.history)[-6000:]
+                        "document_ids": [s.passage.doc_id for s in retrieved.sources if s.passage],
+                        "query_rewrite": _rewrite_summary(retrieved.query_plan)}})
+                limit = self._conversation.history_characters
+                history = "\n\n".join(f"User: {q}\nAssistant: {a}" for q, a in thread.history)[-limit:] if limit else ""
                 written, _ = await self.pipeline.write(query, retrieved, history=history)
                 answer, citations = answer_with_citations(written, retrieved)
                 # Labels (K1, D2) only mean something within their own turn.
                 history_answer = re.sub(r"\s*\[[KD]\d+\]", "", written.answer)
-                thread.history = [*thread.history, (query, history_answer)][-5:]
+                turns = self._conversation.history_turns
+                thread.history = [*thread.history, (query, history_answer)][-turns:] if turns else []
                 yield events.create("answer.delta", {"text": answer})
                 yield events.create("answer.citations", {"citations": [asdict(c) for c in citations]})
                 yield events.create("run.completed", {"duration_ms": int((monotonic()-started)*1000),

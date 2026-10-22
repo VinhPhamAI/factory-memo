@@ -100,7 +100,7 @@ class FakeStore:
         self.hits = [_hit()] if hits is None else hits
         self.searches: list[tuple[str, Any, int]] = []
 
-    async def search_knowledge(self, query, *, filters=None, k=5):
+    async def search_knowledge(self, query, *, filters=None, k=5, min_vector_similarity=None):
         if self.fail:
             raise StorageError("connection refused")
         self.searches.append((query, filters, k))
