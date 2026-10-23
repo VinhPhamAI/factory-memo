@@ -105,3 +105,37 @@ class ChunkReviewRequest(ReviewRequest):
 async def review_chunk(request: Request, kb: str, kind: Kind, source_id: str, body: ChunkReviewRequest):
     manager = await service(request, kb)
     return await result(manager.review_chunk(kb, kind, normalized_id(kind, source_id), body.chunk_id, body.decision, body.note))
+
+
+@router.get("/{kb}/conflicts")
+async def conflicts(request: Request, kb: str, status: str | None = None, evidence_id: UUID | None = None,
+                    offset: int = Query(0, ge=0)):
+    """Current judged pairs (one per pair) with both records, for review."""
+
+    manager = await service(request, kb)
+    return await result(manager.conflict_list(kb, status=status, evidence_id=evidence_id, offset=offset))
+
+
+class ConflictReviewRequest(BaseModel):
+    decision: Literal["confirm", "dismiss", "supersede"]
+    note: str = Field(default="", max_length=1000)
+    # supersede: the record kept; the other one is deprecated in its favour.
+    keep_id: UUID | None = None
+
+
+class ConflictRecheckRequest(BaseModel):
+    record_ids: list[UUID] = Field(default_factory=list, max_length=200)
+
+
+@router.post("/{kb}/conflicts/recheck", status_code=202)
+async def recheck_conflicts(request: Request, kb: str, body: ConflictRecheckRequest):
+    """Queues the conflict stage again for edited records (all changed ones without ids)."""
+
+    manager = await service(request, kb)
+    return await result(manager.recheck_conflicts(kb, body.record_ids))
+
+
+@router.post("/{kb}/conflicts/{conflict_id}/review")
+async def review_conflict(request: Request, kb: str, conflict_id: UUID, body: ConflictReviewRequest):
+    manager = await service(request, kb)
+    return await result(manager.review_conflict(kb, conflict_id, body.decision, body.note, body.keep_id))

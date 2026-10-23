@@ -9,6 +9,48 @@ uploads original files. It links to management after saving. Its **Auto · chạ
 
 ## Source lifecycle
 
+### Conflict review
+
+Select a KB in **Quản lý tri thức**, then open **Mâu thuẫn**, alongside
+**Nguồn dữ liệu**. The default filter is suspected conflicts (`open`); the status
+selector also exposes pending judgements, evidence needing review, confirmed,
+dismissed, resolved and non-conflicting pairs. Results are paginated. KBs without
+conflict detection show an explanatory empty state.
+
+Each pair shows both full claims, their record review states, the judge's quoted
+passages, relation, aspect, confidence and confirmation/link state. Expand
+**Phạm vi và bằng chứng nguồn** for scope, validity dates when present, verbatim
+source evidence and links to the source. Notes and previous review decisions
+remain visible in the review history.
+
+- **Xác nhận mâu thuẫn** adds conflict links; it does not approve either record.
+- **Bỏ qua** dismisses the pair and withdraws conflict links, without approving
+  either record.
+- **Thay thế một bản ghi…** requires explicitly selecting the survivor in a
+  dialog. The other record is retired from search and kept in history. The
+  survivor keeps its existing review status.
+
+Missing records and resolved pairs cannot be reviewed. If a record changed since
+the judgement (`stale`), review controls are disabled until it is compared again.
+**Kiểm tra lại cặp này** queues comparison for that pair's evidence sources;
+**Kiểm tra lại bản ghi đã đổi** asks the backend to queue changed records. These
+are queued jobs, not immediate LLM results, and require a conflict worker.
+
+The source list and source detail show conflict job progress/failure separately
+from extraction. Management keeps polling while loaded sources have active
+ingestion/conflict jobs; the conflict list refreshes while those jobs run and when
+their state changes. **Làm mới mâu thuẫn** also fetches the current list manually.
+Source-level counts describe the last detection run, not current review totals;
+the conflict filter counts come from the review API.
+
+The UI uses `GET /v1/knowledge-management/{kb}/conflicts`,
+`POST /v1/knowledge-management/{kb}/conflicts/{id}/review` and
+`POST /v1/knowledge-management/{kb}/conflicts/recheck`. Frontend unit tests and
+Playwright checks use mocked API responses; they do not validate a live
+database/LLM deployment.
+
+### Processing and review
+
 Processing and human review are independent:
 
 | Stage | Meaning |
@@ -249,7 +291,17 @@ upload (Auto) / Extract on raw ─► convert job ─ NOTIFY ─► convert work
                                        │ done: next job in the same transaction
                                        ▼
           Extract on converted ─► extract job ─ NOTIFY ─► extract worker ─► draft items/chunks
+                                       │ knowledge mode, KB with conflict detection
+                                       ▼
+                                  conflict job ─ NOTIFY ─► conflict worker ─► knowledge_conflicts
 ```
+
+The conflict stage runs only for knowledge-mode extraction in a KB that enables
+it (currently `industrial_qa`, `[conflicts] enabled`). It compares the new items
+with similar stored items and records suspected conflicts for review; it never
+changes item status. Its job is reported separately (`processing.conflict_job`,
+summary in `processing.conflicts`) and does not change the source's processing
+state. See [industrial QA conflict detection](industrial-qa-conflict-detection.md).
 
 - Enqueueing inserts the job and calls `pg_notify` on the stage's channel in one
   transaction. Workers `LISTEN`, claim with `FOR UPDATE SKIP LOCKED` and also
@@ -270,13 +322,14 @@ Workers run in one container (Compose service `worker`, same image as the API)
 with a supervisor and one process per stage slot:
 
 ```sh
-uv run python -m backend.worker                     # convert x1, extract x1
-uv run python -m backend.worker --convert 1 --extract 2
+uv run python -m backend.worker                     # convert x1, extract x1, conflict x1
+uv run python -m backend.worker --convert 1 --extract 2 --conflict 1
 uv run python -m backend.worker --stage extract     # one worker, no supervisor
 ```
 
-`WORKER_CONVERT_PROCESSES`/`WORKER_EXTRACT_PROCESSES` set the default counts;
+`WORKER_CONVERT_PROCESSES`/`WORKER_EXTRACT_PROCESSES`/`WORKER_CONFLICT_PROCESSES` set the default counts;
 several worker containers can share the queue. Without a running worker, jobs
 stay queued. Conversion covers plain-text uploads only; OCR and speech-to-text
 for uploaded media are not implemented, so such files stay raw. Legacy voice API
-clients that do not send `extract_mode` still extract in the API process.
+clients that do not send `extract_mode` still extract in the API process and
+then queue the conflict job.

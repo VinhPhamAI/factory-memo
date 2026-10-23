@@ -52,6 +52,29 @@ verify = "quotes"          # off | quotes | llm (uses [llm.verify]); advisory on
 consolidate = true         # benchmark runners always consolidate within their run scope
 validation_retries = 0     # re-ask once per retry when output fails the schema
 
+# Conflict detection: a `conflict` job after Extract (knowledge mode) compares a
+# source's new records with comparable stored ones (same isolation scope, hard
+# scope keys equal or unset, overlapping validity; case x case only with
+# compare_cases), at most candidates_per_record (max 8) each and
+# max_pairs_per_source per source.
+# "list" judges a record's candidates in one call ([llm.conflict], conflict.md)
+# and confirms a conflict with one pairwise call; "pair" (evaluation baseline)
+# judges every pair alone. Only conflicts confirmed with link_min_confidence and
+# verbatim quotes are linked; records stay drafts. While enabled, API
+# consolidation no longer marks conflicts itself (benchmark runners still do).
+[conflicts]
+enabled = true
+judge_mode = "list"
+candidates_per_record = 5
+min_similarity = 0.5
+max_pairs_per_source = 40
+confirm = true
+confirm_min_confidence = 0.5
+link_min_confidence = 0.7
+validation_retries = 1
+# Also compare cases with cases (incompatible confirmed causes or outcomes).
+compare_cases = false
+
 # env_prefix selects <PREFIX>_API_KEY/_BASE_URL with OPENROUTER_* fallbacks.
 # model, thinking ("enabled"/"disabled"), service_tier and timeout_seconds are
 # optional; an omitted one falls back to <PREFIX>_* then OPENROUTER_* in the
@@ -98,8 +121,15 @@ model = "deepseek-v4.1-flash"
 thinking = "disabled"
 max_tokens = 1024
 
+# Conflict judge of the `conflict` job stage; called only when [conflicts] is enabled.
+[llm.conflict]
+env_prefix = "CONSOLIDATION"
+model = "deepseek-v4.1-flash"
+max_tokens = 4096
+
 # Paths relative to this file.
 [prompts]
 rerank = "rerank.md"
 answer = "answer.md"
 query = "query.md"
+conflict = "conflict.md"

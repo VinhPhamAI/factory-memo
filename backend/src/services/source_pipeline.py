@@ -10,6 +10,10 @@ the same lookups to validate requests before queueing them.
 - extract: the text becomes evidence (a `raw_conversations` row, created on
   first extraction of an upload), then either knowledge records (LLM
   extraction) or document chunks. Results are drafts.
+- conflict: the knowledge records of the evidence are compared with stored
+  records of a limited candidate set (the KB's `ConflictDetector`); verdicts go
+  to `knowledge_conflicts`, and the summary to the evidence metadata
+  (`conflicts`). Queued after extract only when the KB enables the stage.
 
 A handler raises `JobFailed` with a message for the reviewer; `retry` says
 whether trying again may help. A stage that already has results (a worker
@@ -51,6 +55,7 @@ from backend.src.storage.extraction_runs import (
     content_sha256, extraction_fingerprint,
 )
 from backend.src.storage.job_queue import Job
+from backend.src.storage.knowledge_conflicts import ConflictStore
 from backend.src.storage.models import ConversationStatus
 
 
@@ -104,6 +109,18 @@ async def open_runs(spec, store):
     return runs
 
 
+async def open_conflicts(spec, store):
+    conflicts = ConflictStore(store.engine, schema=store.schema)
+    await conflicts.init_schema()
+    return conflicts
+
+
+def default_conflict_factory(spec):
+    """The KB's conflict detector, or None when it has no conflict stage."""
+
+    return spec.conflict_factory(spec) if getattr(spec, "conflict_factory", None) else None
+
+
 def duplicate_message(duplicate: dict[str, Any]) -> str:
     name = duplicate.get("name") or duplicate.get("evidence_id")
     if duplicate.get("status") == "running":
@@ -130,6 +147,7 @@ class SourcePipeline:
     def __init__(self, specs, uploads: DocumentUploadStore, *,
                  open_store=KnowledgeStore.for_kb, open_document_store=open_documents,
                  ingestion_factory=default_ingestion_factory, open_runs=open_runs,
+                 conflict_factory=default_conflict_factory, open_conflicts=open_conflicts,
                  thresholds: Thresholds | None = None):
         self.specs = dict(specs)
         self.thresholds = thresholds or Thresholds.from_env()
@@ -138,9 +156,12 @@ class SourcePipeline:
         self._open_documents = open_document_store
         self._open_runs = open_runs
         self._ingestion_factory = ingestion_factory
+        self._conflict_factory = conflict_factory
+        self._open_conflicts = open_conflicts
         self._stores: dict[str, Any] = {}
         self._documents: dict[str, Any] = {}
         self._runs: dict[str, Any] = {}
+        self._conflicts: dict[str, Any] = {}
         self._store_lock = asyncio.Lock()
 
     # ----------------------------------------------------------- lookup
@@ -176,6 +197,25 @@ class SourcePipeline:
             if kb not in self._runs:
                 self._runs[kb] = await self._open_runs(self.spec(kb), store)
         return self._runs[kb]
+
+    async def conflicts(self, kb):
+        store = await self.store(kb)
+        async with self._store_lock:
+            if kb not in self._conflicts:
+                self._conflicts[kb] = await self._open_conflicts(self.spec(kb), store)
+        return self._conflicts[kb]
+
+    def conflict_stages(self, kb, mode) -> tuple[str, ...]:
+        """`("conflict",)` when extracting knowledge in a KB with a conflict stage."""
+
+        if mode != "knowledge":
+            return ()
+        try:
+            return ("conflict",) if self._conflict_factory(self.spec(kb)) is not None else ()
+        except Exception:
+            # A broken conflict configuration must not block extraction.
+            logger.warning("Could not load the conflict detector of %s", kb, exc_info=True)
+            return ()
 
     def extraction_settings(self, spec, store, mode):
         """(settings, ingestion service or None) of the current extraction logic."""
@@ -310,7 +350,8 @@ class SourcePipeline:
     # ----------------------------------------------------------- stages
 
     async def run(self, job: Job) -> dict[str, Any]:
-        handler = {"convert": self.run_convert, "extract": self.run_extract}.get(job.stage)
+        handler = {"convert": self.run_convert, "extract": self.run_extract,
+                   "conflict": self.run_conflict}.get(job.stage)
         if handler is None:
             raise JobFailed(f"Không có worker cho bước {job.stage!r}.")
         return await handler(job)
@@ -439,10 +480,42 @@ class SourcePipeline:
         await store.update_conversation_metadata(row.id, {"management": state})
         return {"evidence_id": str(row.id), "mode": mode, "stored": state.get("stored", 0)}
 
+    async def run_conflict(self, job: Job) -> dict[str, Any]:
+        """Judges the new records of one evidence row against stored records.
+
+        Retrying is safe: judged pairs are cached in `knowledge_conflicts` and
+        links are added only when missing. Records stay drafts.
+        """
+
+        spec = self.spec(job.kb)
+        detector = self._conflict_factory(spec)
+        if detector is None:
+            return {"skipped": "conflict detection disabled"}
+        store = await self.store(job.kb)
+        if job.source_kind == "upload":
+            state = await asyncio.to_thread(self.uploads.processing, job.kb, job.source_id)
+            evidence_id = state.get("evidence_id")
+        else:
+            evidence_id = job.source_id
+        row = await store.get_conversation(UUID(evidence_id)) if evidence_id else None
+        if row is None:
+            return {"skipped": "no evidence"}
+        result = await detector.adetect(store, await self.conflicts(job.kb), row.id, job_id=str(job.id))
+        if "skipped" not in result:
+            counts = ("pairs", "judged", "cached", "rechecked", "closed", "truncated", "no_conflict", "open",
+                      "pending", "needs_review", "linked", "reviewed", "llm_calls")
+            await store.update_conversation_metadata(row.id, {"conflicts": {
+                "status": "done", "job_id": str(job.id), "finished_at": now(),
+                "judge_mode": result["judge_mode"], "judge_fingerprint": result["judge_fingerprint"],
+                **{key: result[key] for key in counts if key in result},
+            }})
+        return result
+
     async def aclose(self):
-        # Run stores share their knowledge store's engine.
+        # Run and conflict stores share their knowledge store's engine.
         for store in [*self._stores.values(), *self._documents.values()]:
             await store.aclose()
         self._stores.clear()
         self._documents.clear()
         self._runs.clear()
+        self._conflicts.clear()

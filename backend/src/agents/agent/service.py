@@ -125,6 +125,9 @@ class KnowledgeCitation:
     case_card: dict[str, Any] | None = None
     scope: dict[str, str] | None = None
     status: str | None = None
+    # Searchable records in a suspected or confirmed conflict with this one
+    # (knowledge_id, subject, claim, relation, conflict_status, reason).
+    conflicts: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)

@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+import logging
 import re
 from time import monotonic
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -21,7 +22,13 @@ from backend.src.agents.agent.service import (
     KnowledgeAgentService, KnowledgeAgentUnavailable, KnowledgeAgentUpstreamError,
     _StreamEventFactory, citations_from_evidence,
 )
+from backend.src.services.knowledge_conflicts import conflict_notes
 from backend.src.storage import StorageError
+from backend.src.storage.knowledge_conflicts import ConflictStore
+
+
+logger = logging.getLogger(__name__)
+MAX_CONFLICT_REASON = 300
 
 
 @dataclass
@@ -73,11 +80,39 @@ def answer_with_citations(written, retrieval):
     return answer.strip(), citations_from_evidence(answer, evidence)
 
 
+async def with_conflicts(citations, retrieval, store, conflicts):
+    """Knowledge citations gain the searchable records they conflict with.
+
+    Presentation only: the answer text and its policy are unchanged, and a
+    failure to read conflicts leaves the citations as they are.
+    """
+    records = {str(source.record.id): source.record for source in retrieval.sources if source.record}
+    cited = [records[c.knowledge_id] for c in citations if getattr(c, "knowledge_id", None) in records]
+    if not cited:
+        return citations
+    try:
+        notes = await conflict_notes(store, conflicts, cited)
+    except Exception:  # noqa: BLE001 - a warning must never break an answer
+        logger.warning("Could not read the conflicts of cited records", exc_info=True)
+        return citations
+    def noted(citation):
+        found = notes.get(UUID(citation.knowledge_id)) if getattr(citation, "knowledge_id", None) else None
+        if not found:
+            return citation
+        return replace(citation, conflicts=[
+            {**note, "reason": (note["reason"] or "")[:MAX_CONFLICT_REASON] or None} for note in found])
+    return tuple(noted(citation) for citation in citations)
+
+
 class IndustrialQaService(KnowledgeAgentService):
     """Same HTTP/CLI interface, with KB-specific retrieval and answer policy."""
     def __init__(self, spec, store, *, documents=None, pipeline=None,
-                 timeout_seconds=RUN_TIMEOUT_SECONDS):
+                 timeout_seconds=RUN_TIMEOUT_SECONDS, conflicts=None):
         self._spec, self._store = spec, store
+        # Read-only: the conflict stage creates the table; without it only record links are used.
+        if conflicts is None and getattr(store, "engine", None) is not None:
+            conflicts = ConflictStore(store.engine, schema=getattr(store, "schema", None) or "public")
+        self._conflicts = conflicts
         self._documents, self._owns_documents = documents, documents is None
         self._document_lock = asyncio.Lock()
         self.pipeline = pipeline if pipeline is not None else IndustrialQaPipeline()
@@ -126,6 +161,7 @@ class IndustrialQaService(KnowledgeAgentService):
                 history = "\n\n".join(f"User: {q}\nAssistant: {a}" for q, a in thread.history)[-limit:] if limit else ""
                 written, _ = await self.pipeline.write(query, retrieved, history=history)
                 answer, citations = answer_with_citations(written, retrieved)
+                citations = await with_conflicts(citations, retrieved, self._store, self._conflicts)
                 # Labels (K1, D2) only mean something within their own turn.
                 history_answer = re.sub(r"\s*\[[KD]\d+\]", "", written.answer)
                 turns = self._conversation.history_turns

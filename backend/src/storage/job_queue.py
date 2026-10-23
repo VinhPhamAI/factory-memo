@@ -1,7 +1,8 @@
 """Persistent stage jobs for source processing: PostgreSQL notify-consume queue.
 
-A source moves raw -> converted -> extracted. Each step is one job row for one
-stage (`convert` or `extract`) in the DATABASE_URL database, shared by all
+A source moves raw -> converted -> extracted, then (knowledge mode, when the KB
+enables it) its new records are checked for conflicts. Each step is one job row
+for one stage (`convert`, `extract` or `conflict`) in the DATABASE_URL database, shared by all
 knowledge bases like the KB registry. A job may name the stages that follow it
 (`next_stages`); finishing the job and creating the next one happen in a single
 transaction, so a pipeline never stops between stages or runs a stage twice.
@@ -44,7 +45,7 @@ from backend.src.storage.knowledge_store import StorageError
 logger = logging.getLogger(__name__)
 
 JOBS_TABLE = "ingestion_jobs"
-STAGES = ("convert", "extract")
+STAGES = ("convert", "extract", "conflict")
 SOURCE_KINDS = ("upload", "conversation")
 MODES = ("knowledge", "documents")
 ACTIVE = ("queued", "running")

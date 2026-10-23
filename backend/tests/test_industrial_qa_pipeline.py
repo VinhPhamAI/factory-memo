@@ -58,7 +58,8 @@ class PipelineConfigTests(unittest.TestCase):
         path = Path(directory) / 'config.toml'
         path.write_text(DEFAULT_PATH.read_text().replace('"rerank.md"', json.dumps(str(DEFAULT_PATH.with_name('rerank.md'))))
                         .replace('"answer.md"', json.dumps(str(DEFAULT_PATH.with_name('answer.md'))))
-                        .replace('"query.md"', json.dumps(str(DEFAULT_PATH.with_name('query.md')))) + text)
+                        .replace('"query.md"', json.dumps(str(DEFAULT_PATH.with_name('query.md'))))
+                        .replace('"conflict.md"', json.dumps(str(DEFAULT_PATH.with_name('conflict.md')))) + text)
         return path
 
     def test_packaged_config_matches_code_defaults(self):

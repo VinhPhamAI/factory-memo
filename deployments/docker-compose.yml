@@ -33,7 +33,7 @@ services:
       retries: 5
       start_period: 30s
 
-  # Job workers: one container, one process per stage slot (convert, extract).
+  # Job workers: one container, one process per stage slot (convert, extract, conflict).
   # They consume the ingestion_jobs queue in DATABASE_URL (LISTEN/NOTIFY with a
   # polling fallback); scale a stage with WORKER_<STAGE>_PROCESSES.
   worker:

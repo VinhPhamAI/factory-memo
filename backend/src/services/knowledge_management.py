@@ -18,20 +18,29 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.api.voice_capture import VoiceCaptureService, default_ingestion_factory, record_json
 from backend.src.services.source_pipeline import (
-    NO_CONVERTER, SourcePipeline, duplicate_message, open_documents, open_runs, overlap_message,
+    NO_CONVERTER, SourcePipeline, default_conflict_factory, duplicate_message, open_conflicts, open_documents,
+    open_runs, overlap_message,
 )
+from backend.src.services.knowledge_conflicts import link_updates, stale
 from backend.src.storage.content_signatures import CONFIRM_LEVELS
 from backend.src.services.voice_capture import CAPTURE_SOURCE_KINDS, MAX_TEXT_CHARS
 from backend.src.storage import KnowledgeStore, StorageError
 from backend.src.storage.document_uploads import DocumentUploadStore, text_convertible
 from backend.src.storage.extraction_runs import content_sha256
 from backend.src.storage.job_queue import Job, JobConflict, JobQueue
-from backend.src.storage.models import ConversationStatus, KnowledgeStatus
+from backend.src.storage.knowledge_conflicts import STATUSES as CONFLICT_STATUSES
+from backend.src.storage.models import ConversationStatus, KnowledgeLinkUpdate, KnowledgeStatus
 
 
 PAGE_SIZE = 100
 PREVIEW_CHARS = 100_000
 DECISIONS = {"approve": "approved", "reject": "deprecated", "reset": "draft"}
+CONFLICT_DECISIONS = {"confirm": "confirmed", "dismiss": "dismissed", "supersede": "resolved"}
+CONFLICT_PAGE_SIZE = 50
+# Current rows that still claim a conflict; only these are checked for edits.
+CLAIMING_STATUSES = ("open", "pending", "needs_review", "confirmed")
+RECHECK_SCAN_LIMIT = 1000
+REVIEW_ACTOR = "knowledge management UI (unauthenticated)"
 logger = logging.getLogger(__name__)
 
 
@@ -64,9 +73,16 @@ def review_state(counts: dict[str, int], extracted: bool) -> str:
 
 
 def job_state(state, job: Job | None, *, legacy_running=False, known=True):
-    """Processing state of a source: the handlers' record, overlaid by its latest job."""
+    """Processing state of a source: the handlers' record, overlaid by its latest job.
+
+    A conflict job runs after extraction is done: it is reported apart
+    (`conflict_job`) and does not change the source's processing status.
+    """
 
     state = dict(state)
+    if job is not None and job.stage == "conflict":
+        state["conflict_job"] = job.to_json()
+        job = None
     if job is not None:
         state["job"] = job.to_json()
         if job.active:
@@ -84,9 +100,12 @@ def job_state(state, job: Job | None, *, legacy_running=False, known=True):
 class KnowledgeManagementService(SourcePipeline):
     def __init__(self, specs, uploads: DocumentUploadStore, capture: VoiceCaptureService, *,
                  queue=None, open_store=KnowledgeStore.for_kb, open_document_store=open_documents,
-                 ingestion_factory=default_ingestion_factory, open_runs=open_runs, thresholds=None):
+                 ingestion_factory=default_ingestion_factory, open_runs=open_runs,
+                 conflict_factory=default_conflict_factory, open_conflicts=open_conflicts, thresholds=None):
         super().__init__(specs, uploads, open_store=open_store, open_document_store=open_document_store,
-                         ingestion_factory=ingestion_factory, open_runs=open_runs, thresholds=thresholds)
+                         ingestion_factory=ingestion_factory, open_runs=open_runs,
+                         conflict_factory=conflict_factory, open_conflicts=open_conflicts,
+                         thresholds=thresholds)
         self.capture = capture
         self.queue = queue if queue is not None else JobQueue()
 
@@ -108,7 +127,10 @@ class KnowledgeManagementService(SourcePipeline):
 
     def processing(self, kb, row, job=None, known=True):
         state = row.metadata.get("management") or row.metadata.get("ingestion") or {}
-        return job_state(state, job, legacy_running=bool(self.capture.running(row.id, "ingestion")), known=known)
+        state = job_state(state, job, legacy_running=bool(self.capture.running(row.id, "ingestion")), known=known)
+        if row.metadata.get("conflicts"):
+            state["conflicts"] = row.metadata["conflicts"]
+        return state
 
     def _summary(self, *, kb, kind, source_id, name, created_at, content_type,
                  converted, extracted, counts, mode=None, processing=None,
@@ -278,6 +300,18 @@ class KnowledgeManagementService(SourcePipeline):
 
     # ----------------------------------------------------------- requests
 
+    async def queue_conflicts(self, kb, evidence_id) -> None:
+        """Queues the conflict stage after a legacy in-process extraction."""
+
+        if not self.conflict_stages(kb, "knowledge"):
+            return
+        try:
+            await self.queue.enqueue(kb, "conflict", "conversation", str(evidence_id), mode="knowledge")
+        except JobConflict:
+            logger.info("Conflict check of %s not queued: the source has an active job", evidence_id)
+        except Exception:
+            logger.warning("Could not queue the conflict check of %s", evidence_id, exc_info=True)
+
     async def enqueue(self, kb, stage, kind, source_id, *, mode=None, next_stages=(), options=None):
         try:
             job = await self.queue.enqueue(kb, stage, kind, source_id, mode=mode, next_stages=next_stages,
@@ -345,6 +379,7 @@ class KnowledgeManagementService(SourcePipeline):
 
         self.spec(kb)
         options = {"confirm_overlap": True} if confirm_overlap else None
+        conflict = self.conflict_stages(kb, mode)
         if kind == "document":
             raise HTTPException(409, "This source is already extracted")
         store = await self.store(kb)
@@ -362,13 +397,14 @@ class KnowledgeManagementService(SourcePipeline):
                     await self.check_duplicate(kb, mode, original=upload.sha256)
                     # The text is not known before conversion; the worker checks overlaps.
                     return await self.enqueue(kb, "convert", "upload", source_id, mode=mode,
-                                              next_stages=("extract",), options=options)
+                                              next_stages=("extract", *conflict), options=options)
                 if mode == "knowledge" and len(text) > MAX_TEXT_CHARS:
                     raise HTTPException(422, f"Knowledge extraction accepts at most {MAX_TEXT_CHARS} characters")
                 await self.check_duplicate(kb, mode, text=text)
                 overlaps = await self.check_overlap(kb, mode, text, confirmed=confirm_overlap,
                                                     deferred=overlap_in_worker)
-                return {**await self.enqueue(kb, "extract", "upload", source_id, mode=mode, options=options),
+                return {**await self.enqueue(kb, "extract", "upload", source_id, mode=mode,
+                                             next_stages=conflict, options=options),
                         "overlaps": overlaps}
         else:
             row = await store.get_conversation(UUID(source_id))
@@ -383,7 +419,8 @@ class KnowledgeManagementService(SourcePipeline):
         await self.check_duplicate(kb, mode, text=row.transcript, exclude=row.id)
         overlaps = await self.check_overlap(kb, mode, row.transcript, confirmed=confirm_overlap, exclude=row.id,
                                             deferred=overlap_in_worker)
-        return {**await self.enqueue(kb, "extract", kind, source_id, mode=mode, options=options),
+        return {**await self.enqueue(kb, "extract", kind, source_id, mode=mode,
+                                     next_stages=conflict, options=options),
                 "overlaps": overlaps}
 
     async def review_record(self, kb, record_id, decision, note):
@@ -398,7 +435,7 @@ class KnowledgeManagementService(SourcePipeline):
     @staticmethod
     def review_event(decision, note):
         return {"action": "reviewed", "decision": decision, "status": DECISIONS[decision],
-                "note": note.strip() or None, "actor": "knowledge management UI (unauthenticated)", "at": now()}
+                "note": note.strip() or None, "actor": REVIEW_ACTOR, "at": now()}
 
     async def review_chunk(self, kb, kind, source_id, chunk_id, decision, note):
         detail = await self.detail(kb, kind, source_id)
@@ -410,6 +447,137 @@ class KnowledgeManagementService(SourcePipeline):
                                             event=self.review_event(decision, note)):
             raise HTTPException(404, "Chunk not found")
         return await self.detail(kb, kind, source_id)
+
+    # ----------------------------------------------------------- conflicts
+
+    async def conflict_list(self, kb, *, status=None, evidence_id=None, offset=0, limit=CONFLICT_PAGE_SIZE):
+        """Current conflict rows (one per pair) with both records, newest first.
+
+        `evidence_id` keeps pairs involving that source's records. A KB
+        without a conflict stage lists nothing.
+        """
+
+        self.spec(kb)
+        page = {"conflicts": [], "counts": {}, "offset": offset, "limit": limit, "next_offset": None}
+        if not self.conflict_stages(kb, "knowledge"):
+            return {**page, "enabled": False}
+        if status is not None and status not in CONFLICT_STATUSES:
+            raise HTTPException(422, "Unknown conflict status")
+        store, conflicts = await self.store(kb), await self.conflicts(kb)
+        record_ids = ()
+        if evidence_id is not None:
+            record_ids = [record.id for record in await store.knowledge_for_evidence(evidence_id)]
+            if not record_ids:
+                return {**page, "enabled": True}
+        rows, counts = await conflicts.list_rows(statuses=(status,) if status else (), record_ids=record_ids,
+                                                 limit=limit + 1, offset=offset)
+        more = len(rows) > limit
+        rows = rows[:limit]
+        records = {record.id: record for record in await store.get_knowledge(
+            list(dict.fromkeys(i for row in rows for i in row.pair)))}
+        return {**page, "enabled": True, "counts": counts, "next_offset": offset + limit if more else None,
+                "conflicts": [self.conflict_json(row, records) for row in rows]}
+
+    @staticmethod
+    def conflict_json(row, records):
+        def side(record_id):
+            record = records.get(record_id)
+            if record is None:
+                return {"id": str(record_id), "missing": True}
+            return {**record_json(record), "evidence_id": str(record.evidence_id) if record.evidence_id else None,
+                    "quote": row.quotes.get(str(record_id)) or None}
+        return {**row.to_json(), "stale": stale(row, records), "a": side(row.a_id), "b": side(row.b_id)}
+
+    async def review_conflict(self, kb, conflict_id, decision, note, keep_id=None):
+        """A reviewer's decision on a pair's current row.
+
+        confirm: the conflict links are written (if missing); dismiss: they
+        are withdrawn; supersede: the record not kept is deprecated in favour
+        of `keep_id` (final). Records otherwise stay as they are (drafts stay
+        drafts); both get a history event.
+        """
+
+        self.spec(kb)
+        if not self.conflict_stages(kb, "knowledge"):
+            raise HTTPException(404, "This knowledge base has no conflict detection")
+        store, conflicts = await self.store(kb), await self.conflicts(kb)
+        row = await conflicts.get_row(conflict_id)
+        if row is None:
+            raise HTTPException(404, "Conflict not found")
+        current = (await conflicts.current([row.pair])).get(row.pair)
+        if current is not None and current.id != row.id:
+            raise HTTPException(409, "A newer judgement of this pair exists; reload the list")
+        if row.status == "resolved":
+            raise HTTPException(409, "This conflict was already resolved")
+        records = {record.id: record for record in await store.get_knowledge(list(row.pair))}
+        if len(records) < 2:
+            raise HTTPException(409, "A record of this pair no longer exists")
+        first, second = records[row.a_id], records[row.b_id]
+        status = CONFLICT_DECISIONS[decision]
+        event = {"action": "conflict_reviewed", "decision": decision, "status": status,
+                 "note": note.strip() or None, "actor": REVIEW_ACTOR, "at": now(),
+                 "conflict_id": str(row.id), "pair": [str(row.a_id), str(row.b_id)]}
+        linked = row.linked
+        if decision == "supersede":
+            if keep_id not in records:
+                raise HTTPException(422, "keep_id must be one of the two records")
+            retired = second if keep_id == first.id else first
+            if retired.status is KnowledgeStatus.DEPRECATED or retired.superseded_by is not None:
+                raise HTTPException(409, "The other record is already retired")
+            event = {**event, "kept": str(keep_id), "retired": str(retired.id)}
+            updates = [KnowledgeLinkUpdate(retired.id, superseded_by=keep_id, event=event),
+                       KnowledgeLinkUpdate(keep_id, event=event)]
+        else:
+            linked = decision == "confirm"
+            updates = link_updates(first, second, records, linked=linked, event=event)
+            touched = {update.record_id for update in updates}
+            updates += [KnowledgeLinkUpdate(record_id, event=event) for record_id in row.pair if record_id not in touched]
+        # Records first: a failure leaves the row unchanged, and the review can be repeated.
+        await store.add_knowledge([], updates=updates)
+        reviewed = await conflicts.set_review(row.id, status, linked=linked, event=event)
+        records = {record.id: record for record in await store.get_knowledge(list(row.pair))}
+        return self.conflict_json(reviewed, records)
+
+    async def recheck_conflicts(self, kb, record_ids=()):
+        """Queues the conflict stage again for edited records.
+
+        With `record_ids`, the sources of those records; without, the sources
+        of records changed since a still-claiming pair was judged (at most
+        RECHECK_SCAN_LIMIT current rows are scanned). The job judges changed
+        pairs again, reopens reviews of changed content and withdraws links
+        that no longer hold.
+        """
+
+        self.spec(kb)
+        if not self.conflict_stages(kb, "knowledge"):
+            raise HTTPException(404, "This knowledge base has no conflict detection")
+        store, conflicts = await self.store(kb), await self.conflicts(kb)
+        evidence: dict[str, None] = {}
+        stale_rows = 0
+        if record_ids:
+            records = await store.get_knowledge(list(record_ids))
+            if not records:
+                raise HTTPException(404, "Knowledge records not found")
+            evidence.update({str(record.evidence_id): None for record in records if record.evidence_id})
+        else:
+            rows, _ = await conflicts.list_rows(statuses=CLAIMING_STATUSES, limit=RECHECK_SCAN_LIMIT)
+            records = {record.id: record for record in await store.get_knowledge(
+                list(dict.fromkeys(i for row in rows for i in row.pair)))}
+            for row in rows:
+                changed = [record_id for record_id in row.pair
+                           if record_id in records and stale(row, {record_id: records[record_id]})]
+                if changed and records[changed[0]].evidence_id is not None:
+                    stale_rows += 1
+                    evidence[str(records[changed[0]].evidence_id)] = None
+        queued, busy = [], []
+        for evidence_id in evidence:
+            try:
+                job = await self.queue.enqueue(kb, "conflict", "conversation", evidence_id, mode="knowledge")
+            except JobConflict:
+                busy.append(evidence_id)
+                continue
+            queued.append(job.to_json())
+        return {"queued": queued, "busy": busy, "sources": len(evidence), "stale": stale_rows}
 
     async def aclose(self):
         await super().aclose()

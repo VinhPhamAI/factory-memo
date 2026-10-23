@@ -328,3 +328,133 @@ test("stream EOF and run.failed remain failed; stop aborts a pending answer", as
   );
   await expect(page.getByTestId("kb-select")).toBeEnabled();
 });
+
+for (const width of [1365, 390]) {
+  test(`conflict review compares evidence and supersedes an explicit survivor at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 950 });
+    await mockBases(page);
+    const record = (id: string, claim: string) => ({
+      id,
+      subject: "FX5-PLC9001",
+      claim,
+      type: "rule",
+      status: "draft",
+      context: {
+        machine_id: "FX5-PLC9001",
+        configuration: "CONFLICT-DEMO",
+        condition: "Mất phản hồi nhưng kết nối vẫn được giữ",
+        quotes: [{ turn_id: "T04", quote: claim }],
+      },
+      stated_by: "Chuyên gia",
+      created_at: "2026-10-23T01:00:00Z",
+      superseded_by: null,
+      verify: null,
+      consolidation: null,
+      history: [],
+      evidence_id: `source-${id}`,
+      quote: claim,
+    });
+    const conflict = {
+      id: "pair1",
+      a_id: "record-a",
+      b_id: "record-b",
+      new_id: "record-b",
+      status: "open",
+      relation: "contradiction",
+      aspect: "value",
+      confidence: 0.95,
+      reason:
+        "Hai chuyên gia yêu cầu giá trị D100 khác nhau cho cùng PLC, cấu hình và điều kiện.",
+      quotes: {},
+      linked: true,
+      confirmed_by_pair: true,
+      review: [],
+      stale: false,
+      created_at: "2026-10-23T01:00:00Z",
+      updated_at: "2026-10-23T01:00:00Z",
+      a: record("record-a", "D100 bắt buộc bằng 1000 ms."),
+      b: record("record-b", "D100 bắt buộc bằng 3000 ms."),
+    };
+    let resolved = false;
+    await page.route("**/v1/knowledge-management/*/sources*", (route) =>
+      route.fulfill({
+        json: {
+          sources: [],
+          warnings: [],
+          next_offset: null,
+          qa_mode: "knowledge",
+        },
+      }),
+    );
+    await page.route(
+      "**/v1/knowledge-management/*/conflicts**",
+      async (route) => {
+        if (route.request().method() === "POST") {
+          expect(route.request().postDataJSON()).toEqual({
+            decision: "supersede",
+            note: "Đã đối chiếu hai nguồn",
+            keep_id: "record-b",
+          });
+          resolved = true;
+          await route.fulfill({ json: { ...conflict, status: "resolved" } });
+        } else {
+          await route.fulfill({
+            json: {
+              conflicts: resolved ? [] : [conflict],
+              counts: resolved ? { resolved: 1 } : { open: 1 },
+              enabled: true,
+              offset: 0,
+              limit: 20,
+              next_offset: null,
+            },
+          });
+        }
+      },
+    );
+    await page.goto("/knowledge");
+    await page.getByTestId("management-kb").selectOption("industrial_qa");
+    await page.getByRole("tab", { name: "Mâu thuẫn", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "Review mâu thuẫn" }),
+    ).toBeVisible();
+    await expect(page.getByRole("region", { name: "Bản ghi A" })).toContainText(
+      "1000 ms",
+    );
+    await expect(page.getByRole("region", { name: "Bản ghi B" })).toContainText(
+      "3000 ms",
+    );
+    await page
+      .getByRole("textbox", { name: "Ghi chú quyết định" })
+      .fill("Đã đối chiếu hai nguồn");
+    await page.getByTestId("knowledge-management").evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page.screenshot({
+      path: `/private/tmp/voice-agent-conflict-${width}.png`,
+      fullPage: true,
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.getByRole("button", { name: "Thay thế một bản ghi…" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("button", { name: "Lưu quyết định thay thế" }),
+    ).toBeDisabled();
+    await dialog.getByRole("radio", { name: /Bản ghi B/ }).check();
+    await dialog
+      .getByRole("button", { name: "Lưu quyết định thay thế" })
+      .click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("status")).toContainText(
+      "Thay thế bản ghi: đã lưu quyết định.",
+    );
+    await expect(
+      page.getByText(/Chưa có cặp nào ở trạng thái này/),
+    ).toBeVisible();
+  });
+}

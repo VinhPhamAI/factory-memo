@@ -59,6 +59,8 @@ def create_app(
             KNOWLEDGE_BASES, app.state.document_uploads, capture,
         )
         app.state.knowledge_management = manager
+        # In-process (legacy) extractions queue the conflict stage too.
+        capture.on_ingested = manager.queue_conflicts
         # Knowledge bases created in the UI are added to both services.
         catalog = KnowledgeBaseCatalog(KNOWLEDGE_BASES, listeners=[pool, capture, manager])
         try:

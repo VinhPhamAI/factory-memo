@@ -1,10 +1,11 @@
 """Source processing workers: one supervisor, one process per stage slot.
 
-    uv run python -m backend.worker                     # convert x1, extract x1
-    uv run python -m backend.worker --convert 1 --extract 2
+    uv run python -m backend.worker                     # convert x1, extract x1, conflict x1
+    uv run python -m backend.worker --convert 1 --extract 2 --conflict 1
     uv run python -m backend.worker --stage extract     # a single worker, no supervisor
 
-WORKER_CONVERT_PROCESSES and WORKER_EXTRACT_PROCESSES set the default counts.
+WORKER_CONVERT_PROCESSES, WORKER_EXTRACT_PROCESSES and WORKER_CONFLICT_PROCESSES
+set the default counts.
 Each child LISTENs on its stage's channel and claims jobs with SKIP LOCKED, so
 workers may also run in several containers. The supervisor restarts a child
 that exits unexpectedly and forwards SIGTERM/SIGINT; a child finishes its

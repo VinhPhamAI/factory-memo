@@ -19,6 +19,12 @@ def ingestion_factory(spec, store):
     return load_config().ingestion_service(spec, store)
 
 
+def conflict_factory(spec):
+    """Conflict detection with the [conflicts] settings of config.toml (None when disabled)."""
+    from backend.knowledge_bases.industrial_qa.config import load_config
+    return load_config().conflict_detector()
+
+
 SPEC = KnowledgeBaseSpec.from_directory(
     DIRECTORY,
     name="industrial_qa",
@@ -42,4 +48,5 @@ SPEC = KnowledgeBaseSpec.from_directory(
     record_normalizer=CATALOG.normalize_records,
     knowledge_filter_builder=CATALOG.knowledge_filter,
     ingestion_factory=ingestion_factory,
+    conflict_factory=conflict_factory,
 )

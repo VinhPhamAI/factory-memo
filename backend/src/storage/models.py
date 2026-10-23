@@ -200,6 +200,9 @@ class KnowledgeLinkUpdate:
     conflict_with: tuple[UUID, ...] = ()
     # Retires the record (status deprecated) in favour of this one.
     superseded_by: UUID | None = None
+    # Links withdrawn by a reviewer (a dismissed conflict); applied after the additions.
+    unlink_conflict_with: tuple[UUID, ...] = ()
+    unlink_contradicted_by: tuple[UUID, ...] = ()
     # Appended to revision["history"], to explain the change.
     event: dict[str, Any] | None = None
 

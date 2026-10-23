@@ -27,6 +27,11 @@ import {
   KnowledgePanel,
   TranscriptPanel,
 } from "@/components/knowledge/source-review";
+import {
+  ConflictJobNote,
+  ConflictReviewPanel,
+  conflictRunning,
+} from "@/components/knowledge/conflict-review";
 import { listKnowledgeBases } from "@/services/knowledge-api";
 import {
   audioUrl,
@@ -81,6 +86,7 @@ const MODE_OPTIONS = {
 const PROGRESS = {
   convert: ["Đang chờ chuyển đổi", "Đang chuyển đổi"],
   extract: ["Đang chờ trích xuất", "Đang trích xuất"],
+  conflict: ["Chờ kiểm tra mâu thuẫn", "Đang kiểm tra mâu thuẫn"],
 };
 const isRunning = (source: ManagedSource) =>
   ["queued", "running"].includes(source.processing.status ?? "");
@@ -565,6 +571,7 @@ function BulkNotice({ kb, result }: { kb: string; result: BulkResult }) {
 }
 
 export function KnowledgeManagementPage() {
+  const [view, setView] = useState<"sources" | "conflicts">("sources");
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
   const [kb, setKb] = useState("");
   const [sources, setSources] = useState<ManagedSource[]>([]);
@@ -635,7 +642,9 @@ export function KnowledgeManagementPage() {
   }, [kb, reload]);
 
   // While jobs are queued or running, refresh the first page in place.
-  const polling = sources.some(isRunning);
+  const polling = sources.some(
+    (source) => isRunning(source) || conflictRunning(source.processing),
+  );
   useEffect(() => {
     if (!kb || !polling) return;
     const abort = new AbortController();
@@ -758,147 +767,200 @@ export function KnowledgeManagementPage() {
             ))}
           </select>
         </label>
-        <label className="vc-field">
-          <span>Tìm nguồn dữ liệu</span>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Tên file hoặc bản ghi…"
-          />
-        </label>
+        {view === "sources" && (
+          <label className="vc-field">
+            <span>Tìm nguồn dữ liệu</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Tên file hoặc bản ghi…"
+            />
+          </label>
+        )}
       </div>
       <div
         className="vc-filter km-filters"
         role="tablist"
-        aria-label="Lọc nguồn dữ liệu"
+        aria-label="Nội dung quản lý tri thức"
       >
-        {[
-          ["all", "Tất cả"],
-          ["raw", "Raw"],
-          ["converted", "Converted"],
-          ["extracted", "Extracted"],
-          ["pending", "Chờ duyệt"],
-        ].map(([key, label]) => (
-          <button
-            key={key}
-            role="tab"
-            aria-selected={filter === key}
-            onClick={() => setFilter(key)}
-          >
-            {label}
-          </button>
-        ))}
+        <button
+          id="km-sources-tab"
+          role="tab"
+          aria-controls="km-sources-panel"
+          aria-selected={view === "sources"}
+          onClick={() => setView("sources")}
+        >
+          Nguồn dữ liệu
+        </button>
+        <button
+          id="km-conflicts-tab"
+          role="tab"
+          aria-controls="km-conflicts-panel"
+          aria-selected={view === "conflicts"}
+          disabled={!kb}
+          onClick={() => setView("conflicts")}
+        >
+          Mâu thuẫn
+        </button>
       </div>
-      {error && (
-        <p className="vc-notice error" role="alert">
-          {error}
-        </p>
-      )}
-      {warnings.map((warning) => (
-        <p className="vc-notice warn" key={warning} role="status">
-          {warning}
-        </p>
-      ))}
-      {bulkResult && <BulkNotice kb={kb} result={bulkResult} />}
-      {!!visible.length && (
-        <BulkActions
-          key={qaMode}
-          sources={checked}
-          selectable={selectable.length}
-          defaultMode={qaMode}
-          allSelected={allSelected}
-          onToggleAll={toggleAll}
-          onQueued={queued}
-        />
-      )}
-      {loading && !sources.length ? (
-        <p className="vc-muted">
-          <Loader2 className="animate-spin" size={16} /> Đang tải dữ liệu…
-        </p>
-      ) : !visible.length ? (
-        <div className="km-empty">
-          <FolderOpen size={32} />
-          <h2>
-            {sources.length
-              ? "Không có nguồn phù hợp bộ lọc"
-              : "Chưa có nguồn dữ liệu"}
-          </h2>
-          <Link to="/capture">Thêm dữ liệu</Link>
+      {view === "conflicts" ? (
+        <div
+          id="km-conflicts-panel"
+          role="tabpanel"
+          aria-labelledby="km-conflicts-tab"
+        >
+          {kb && (
+            <ConflictReviewPanel
+              key={kb}
+              kb={kb}
+              refreshKey={`${reload}:${sources.map((source) => `${source.processing.conflict_job?.id}:${source.processing.conflict_job?.status}`).join(",")}`}
+              activeJobs={polling}
+              onChanged={() => setReload((value) => value + 1)}
+            />
+          )}
         </div>
       ) : (
-        <ul className="km-source-list">
-          {visible.map((source) => (
-            <li key={key(source)} data-testid="managed-source">
-              <input
-                type="checkbox"
-                className="km-select"
-                aria-label={`Chọn ${source.name}`}
-                checked={isSelectable(source) && selected.has(key(source))}
-                disabled={!isSelectable(source)}
-                title={
-                  isSelectable(source)
-                    ? undefined
-                    : isRunning(source)
-                      ? "Đang xử lý"
-                      : "Không có bước Convert/Extract cho nguồn này"
-                }
-                onChange={() => toggle(source)}
-                data-testid="select-source"
-              />
-              <div className="km-source-icon">
-                {source.source_kind === "voice_recording" ? (
-                  <Mic />
-                ) : (
-                  <FileText />
-                )}
-              </div>
-              <div className="km-source-main">
-                <Link to={sourceLink(source)} className="km-source-name">
-                  {source.name}
-                </Link>
-                <p className="vc-muted">
-                  {source.content_type} ·{" "}
-                  {source.created_at
-                    ? dateTime(source.created_at)
-                    : "Không có thời gian nguồn"}
-                  {source.mode ? ` · ${MODES[source.mode]}` : ""}
-                </p>
-                <SourceStatus source={source} />
-                {source.conversion_note && (
-                  <p className="vc-muted">{source.conversion_note}</p>
-                )}
-                <JobNote processing={source.processing} />
-                {source.review === "pending" && (
-                  <small>{source.counts.draft ?? 0} mục chờ duyệt</small>
-                )}
-              </div>
-              <Button variant="outline" size="sm" asChild>
-                <Link to={sourceLink(source)}>
-                  {source.review === "pending"
-                    ? "Duyệt kết quả"
-                    : "Xem / xử lý"}
-                  <ArrowRight />
-                </Link>
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {next !== null && (
-        <Button
-          variant="outline"
-          disabled={loading}
-          onClick={() => void loadMore()}
+        <div
+          id="km-sources-panel"
+          role="tabpanel"
+          aria-labelledby="km-sources-tab"
         >
-          Tải thêm nguồn dữ liệu
-        </Button>
+          <div
+            className="vc-filter km-filters"
+            role="tablist"
+            aria-label="Lọc nguồn dữ liệu"
+          >
+            {[
+              ["all", "Tất cả"],
+              ["raw", "Raw"],
+              ["converted", "Converted"],
+              ["extracted", "Extracted"],
+              ["pending", "Chờ duyệt"],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                role="tab"
+                aria-selected={filter === key}
+                onClick={() => setFilter(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {error && (
+            <p className="vc-notice error" role="alert">
+              {error}
+            </p>
+          )}
+          {warnings.map((warning) => (
+            <p className="vc-notice warn" key={warning} role="status">
+              {warning}
+            </p>
+          ))}
+          {bulkResult && <BulkNotice kb={kb} result={bulkResult} />}
+          {!!visible.length && (
+            <BulkActions
+              key={qaMode}
+              sources={checked}
+              selectable={selectable.length}
+              defaultMode={qaMode}
+              allSelected={allSelected}
+              onToggleAll={toggleAll}
+              onQueued={queued}
+            />
+          )}
+          {loading && !sources.length ? (
+            <p className="vc-muted">
+              <Loader2 className="animate-spin" size={16} /> Đang tải dữ liệu…
+            </p>
+          ) : !visible.length ? (
+            <div className="km-empty">
+              <FolderOpen size={32} />
+              <h2>
+                {sources.length
+                  ? "Không có nguồn phù hợp bộ lọc"
+                  : "Chưa có nguồn dữ liệu"}
+              </h2>
+              <Link to="/capture">Thêm dữ liệu</Link>
+            </div>
+          ) : (
+            <ul className="km-source-list">
+              {visible.map((source) => (
+                <li key={key(source)} data-testid="managed-source">
+                  <input
+                    type="checkbox"
+                    className="km-select"
+                    aria-label={`Chọn ${source.name}`}
+                    checked={isSelectable(source) && selected.has(key(source))}
+                    disabled={!isSelectable(source)}
+                    title={
+                      isSelectable(source)
+                        ? undefined
+                        : isRunning(source)
+                          ? "Đang xử lý"
+                          : "Không có bước Convert/Extract cho nguồn này"
+                    }
+                    onChange={() => toggle(source)}
+                    data-testid="select-source"
+                  />
+                  <div className="km-source-icon">
+                    {source.source_kind === "voice_recording" ? (
+                      <Mic />
+                    ) : (
+                      <FileText />
+                    )}
+                  </div>
+                  <div className="km-source-main">
+                    <Link to={sourceLink(source)} className="km-source-name">
+                      {source.name}
+                    </Link>
+                    <p className="vc-muted">
+                      {source.content_type} ·{" "}
+                      {source.created_at
+                        ? dateTime(source.created_at)
+                        : "Không có thời gian nguồn"}
+                      {source.mode ? ` · ${MODES[source.mode]}` : ""}
+                    </p>
+                    <SourceStatus source={source} />
+                    {source.conversion_note && (
+                      <p className="vc-muted">{source.conversion_note}</p>
+                    )}
+                    <JobNote processing={source.processing} />
+                    <ConflictJobNote processing={source.processing} />
+                    {source.review === "pending" && (
+                      <small>{source.counts.draft ?? 0} mục chờ duyệt</small>
+                    )}
+                  </div>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to={sourceLink(source)}>
+                      {source.review === "pending"
+                        ? "Duyệt kết quả"
+                        : "Xem / xử lý"}
+                      <ArrowRight />
+                    </Link>
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {next !== null && (
+            <Button
+              variant="outline"
+              disabled={loading}
+              onClick={() => void loadMore()}
+            >
+              Tải thêm nguồn dữ liệu
+            </Button>
+          )}
+          <p className="vc-muted km-footnote">
+            Chọn các nguồn rồi bấm Convert hoặc Extract ở đầu danh sách; hai nút
+            chỉ xếp job, worker chạy nền theo thứ tự chuyển đổi → trích xuất
+            (Extract trên Raw tự chuyển đổi trước). Trạng thái xử lý và trạng
+            thái duyệt được lưu riêng. “Extracted” chưa có nghĩa là đã được
+            chuyên gia duyệt.
+          </p>
+        </div>
       )}
-      <p className="vc-muted km-footnote">
-        Chọn các nguồn rồi bấm Convert hoặc Extract ở đầu danh sách; hai nút chỉ
-        xếp job, worker chạy nền theo thứ tự chuyển đổi → trích xuất (Extract
-        trên Raw tự chuyển đổi trước). Trạng thái xử lý và trạng thái duyệt được
-        lưu riêng. “Extracted” chưa có nghĩa là đã được chuyên gia duyệt.
-      </p>
     </main>
   );
 }
@@ -957,6 +1019,7 @@ export function KnowledgeSourcePage() {
         setError("");
         if (
           isRunning(detail) ||
+          conflictRunning(detail.processing) ||
           ["queued", "running"].includes(
             detail.conversation?.cleaning.status ?? "",
           )
@@ -1151,6 +1214,7 @@ export function KnowledgeSourcePage() {
         ))}
       </ol>
       <section className="km-processing" aria-label="Xử lý nguồn dữ liệu">
+        <ConflictJobNote processing={source.processing} />
         {source.stage === "extracted" ? (
           <p>
             <strong>

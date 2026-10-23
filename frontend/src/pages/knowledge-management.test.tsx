@@ -771,3 +771,57 @@ describe("knowledge management", () => {
     expect(screen.queryByTestId("confirm-overlap")).toBeNull();
   });
 });
+
+it("opens conflict review inside management and follows the selected KB", async () => {
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url.endsWith("/knowledge-bases"))
+      return Response.json({
+        knowledge_bases: [
+          {
+            name: "industrial_qa",
+            title: "Industrial QA",
+            description: "Industrial knowledge",
+          },
+          {
+            name: "general",
+            title: "General",
+            description: "General knowledge",
+          },
+        ],
+      });
+    if (url.includes("/conflicts"))
+      return Response.json({
+        conflicts: [],
+        counts: {},
+        enabled: !url.includes("/general/"),
+        offset: 0,
+        limit: 20,
+        next_offset: null,
+      });
+    return Response.json({
+      sources: [],
+      warnings: [],
+      next_offset: null,
+      qa_mode: "knowledge",
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  show("/knowledge");
+  await screen.findByText("Chưa có nguồn dữ liệu");
+  expect(fetchMock.mock.calls.some(([url]) => url.includes("/conflicts"))).toBe(
+    false,
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "Mâu thuẫn" }));
+  await screen.findByText(/Chưa có cặp nào ở trạng thái này/);
+  expect(
+    fetchMock.mock.calls.some(([url]) =>
+      url.includes("industrial_qa/conflicts?status=open"),
+    ),
+  ).toBe(true);
+  fireEvent.change(screen.getByTestId("management-kb"), {
+    target: { value: "general" },
+  });
+  await screen.findByText("Knowledge base này chưa bật phát hiện mâu thuẫn.");
+  fireEvent.click(screen.getByRole("tab", { name: "Nguồn dữ liệu" }));
+  await screen.findByText("Chưa có nguồn dữ liệu");
+});

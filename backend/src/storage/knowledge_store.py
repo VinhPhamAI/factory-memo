@@ -190,8 +190,9 @@ _FILTER_FIELDS = {
     "type": "k.type",
     "valid_from": "k.valid_from",
     "valid_to": "k.valid_to",
+    "evidence_id": "k.evidence_id",
 }
-_FILTER_OPERATORS = {"$eq", "$ilike", "$exists", "$lte", "$gte"}
+_FILTER_OPERATORS = {"$eq", "$ne", "$ilike", "$exists", "$lte", "$gte"}
 
 
 def _context_key(key: str) -> str:
@@ -250,6 +251,9 @@ def _compile_knowledge_filter(
         placeholder = bind(operand)
         if operator == "$eq":
             return f"{column} = {placeholder}"
+        if operator == "$ne":
+            # NULL differs from every value, as in Python.
+            return f"{column} IS DISTINCT FROM {placeholder}"
         if operator == "$ilike":
             return f"{column} ILIKE {placeholder} ESCAPE '\\'"
         if operator == "$lte":
@@ -718,22 +722,36 @@ class KnowledgeStore:
                 ).mappings().all()
         return [dict(row) for row in rows]
 
-    async def knowledge_for_evidence(self, conversation_id: UUID) -> list[KnowledgeRecord]:
-        """Every record citing a conversation, deprecated ones included, oldest first."""
+    async def knowledge_for_evidence(
+        self, conversation_id: UUID, *, embeddings: bool = False
+    ) -> list[KnowledgeRecord]:
+        """Every record citing a conversation, deprecated ones included, oldest first.
 
+        `embeddings` also reads the stored vectors, so that similarity
+        searches from these records need no new embedding call.
+        """
+
+        vector_sql = f", k.{EMBEDDING_COLUMN}::text AS embedding_text" if embeddings else ""
         async with self._errors("read knowledge"):
             async with self._engine.connect() as conn:
                 rows = (
                     await conn.execute(
                         text(
-                            f"SELECT {_RECORD_SELECT_SQL} "
+                            f"SELECT {_RECORD_SELECT_SQL}{vector_sql} "
                             f"FROM {self._table(KNOWLEDGE_TABLE)} AS k "
                             "WHERE k.evidence_id = :id ORDER BY k.created_at, k.id"
                         ),
                         {"id": conversation_id},
                     )
                 ).mappings().all()
-        return [KnowledgeRecord.model_validate(dict(row)) for row in rows]
+        records = []
+        for row in rows:
+            record = KnowledgeRecord.model_validate({key: row[key] for key in RECORD_COLUMNS})
+            if embeddings and row["embedding_text"]:
+                # pgvector's text form is a JSON array.
+                record.embedding = json.loads(row["embedding_text"])
+            records.append(record)
+        return records
 
     async def review_knowledge(
         self,
@@ -852,9 +870,11 @@ class KnowledgeStore:
         for update in updates:
             row = current[update.record_id]
             for column in ("supported_by", "contradicted_by", "conflict_with"):
-                row[column] = list(
-                    dict.fromkeys([*(row[column] or []), *getattr(update, column)])
-                )
+                removed = set(getattr(update, f"unlink_{column}", ()))
+                row[column] = [
+                    value for value in dict.fromkeys([*(row[column] or []), *getattr(update, column)])
+                    if value not in removed
+                ]
             # The first replacement wins; a later one is only recorded.
             if update.superseded_by is not None and row["superseded_by"] is None:
                 row["superseded_by"] = update.superseded_by
@@ -931,6 +951,56 @@ class KnowledgeStore:
             (
                 KnowledgeRecord.model_validate({key: row[key] for key in RECORD_COLUMNS}),
                 float(row["similarity"]),
+            )
+            for row in rows
+        ]
+
+    async def lexical_knowledge(
+        self,
+        query: str,
+        *,
+        k: int = DEFAULT_SEARCH_K,
+        types: Collection[KnowledgeType | str] = (),
+        filters: dict[str, Any] | None = None,
+    ) -> list[tuple[KnowledgeRecord, float]]:
+        """Searchable records sharing any term of `query`, with their full-text rank.
+
+        No embedding call: used next to similar_knowledge to find records that
+        name the same codes or values in different words.
+        """
+
+        lexical_query = lexical_or_query(query)
+        if not lexical_query:
+            return []
+        where_sql, parameters = _compile_knowledge_filter(filters)
+        type_sql = "TRUE"
+        if types:
+            type_sql = "k.type = ANY(:types)"
+            parameters["types"] = [KnowledgeType(kind).value for kind in types]
+        statement = text(
+            f"""
+            SELECT {_RECORD_SELECT_SQL},
+                   ts_rank_cd(k.search_vector, q.lexical_query) AS lexical_score
+            FROM {self._table(KNOWLEDGE_TABLE)} AS k
+            CROSS JOIN (
+                SELECT websearch_to_tsquery(
+                    '{self._text_search_config}'::regconfig, :lexical_query
+                ) AS lexical_query
+            ) AS q
+            WHERE {where_sql} AND {type_sql} AND {_SEARCHABLE_SQL}
+              AND k.search_vector @@ q.lexical_query
+            ORDER BY lexical_score DESC, k.id
+            LIMIT :k
+            """
+        )
+        parameters.update({"lexical_query": lexical_query, "k": max(1, min(k, MAX_SEARCH_K))})
+        async with self._errors("search knowledge text"):
+            async with self._engine.connect() as conn:
+                rows = (await conn.execute(statement, parameters)).mappings().all()
+        return [
+            (
+                KnowledgeRecord.model_validate({key: row[key] for key in RECORD_COLUMNS}),
+                float(row["lexical_score"]),
             )
             for row in rows
         ]

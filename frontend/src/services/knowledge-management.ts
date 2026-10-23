@@ -10,10 +10,10 @@ import type {
 export type SourceKind = "upload" | "conversation" | "document";
 export type ExtractionMode = "knowledge" | "documents";
 
-/** A queued stage for a source; the job workers run convert, then extract. */
+/** A queued stage for a source; conflict runs separately after extraction. */
 export interface SourceJob {
   id: string;
-  stage: "convert" | "extract";
+  stage: "convert" | "extract" | "conflict";
   status: "queued" | "running" | "done" | "failed";
   mode: ExtractionMode | null;
   /** Stages queued automatically after this one (Extract on a raw file). */
@@ -70,6 +70,17 @@ export type ProcessingState = Omit<IngestionStatus, "status"> & {
   status?: JobState | "unavailable" | "duplicate" | "near_duplicate";
   mode?: ExtractionMode;
   job?: SourceJob;
+  conflict_job?: SourceJob;
+  conflicts?: {
+    status: "done";
+    job_id: string;
+    finished_at: string;
+    open?: number;
+    pending?: number;
+    needs_review?: number;
+    judged?: number;
+    truncated?: boolean;
+  };
   duplicate_of?: DuplicateOf;
   overlaps?: OverlapMatch[];
   /** The reviewer confirmed extraction despite a near-duplicate match. */

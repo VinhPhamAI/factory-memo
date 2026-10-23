@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,6 +181,9 @@ class VoiceCaptureService:
         self._stores: dict[str, Any] = {}
         self._store_lock = asyncio.Lock()
         self._jobs: dict[tuple[UUID, str], Job] = {}
+        # Called with (kb, evidence id) after an in-process extraction stored
+        # records, e.g. to queue the conflict stage (set by the app).
+        self.on_ingested: Callable[[str, UUID], Awaitable[None]] | None = None
 
     # ----------------------------------------------------------- lookup
 
@@ -398,6 +401,11 @@ class VoiceCaptureService:
             ],
             "consolidation": result.consolidation,
         }})
+        if self.on_ingested is not None and result.records:
+            try:
+                await self.on_ingested(kb, conversation.id)
+            except Exception:
+                logger.warning("Post-extraction hook failed for %s", conversation.id, exc_info=True)
 
     def start_cleaning(self, kb: str, conversation_id: UUID, transcript: str) -> None:
         if self.running(conversation_id, "cleaning"):

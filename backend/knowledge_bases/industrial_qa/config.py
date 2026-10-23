@@ -15,13 +15,14 @@ import tomllib
 
 from backend.knowledge_bases.industrial_qa.retrieval import RetrievalConfig
 from backend.src.services import llm
+from backend.src.services.knowledge_conflicts import ConflictPolicy, ConflictSettings
 
 
 DEFAULT_PATH = Path(__file__).with_name("config.toml")
 ENV_VAR = "INDUSTRIAL_QA_CONFIG"
-LLM_STEPS = ("rerank", "answer", "choice", "extraction", "verify", "consolidation", "query")
-PROMPTS = ("rerank", "answer", "query")
-SECTIONS = ("name", "retrieval", "conversation", "ingestion", "llm", "prompts")
+LLM_STEPS = ("rerank", "answer", "choice", "extraction", "verify", "consolidation", "query", "conflict")
+PROMPTS = ("rerank", "answer", "query", "conflict")
+SECTIONS = ("name", "retrieval", "conversation", "ingestion", "conflicts", "llm", "prompts")
 VERIFY_MODES = ("off", "quotes", "llm")
 THINKING = ("enabled", "disabled")
 TRUE, FALSE = {"1", "true", "yes", "on"}, {"0", "false", "no", "off"}
@@ -98,6 +99,7 @@ class PipelineConfig:
     retrieval: RetrievalConfig
     conversation: ConversationSettings
     ingestion: IngestionSettings
+    conflicts: ConflictSettings
     rerank: LlmSettings
     answer: LlmSettings
     choice: LlmSettings
@@ -105,6 +107,7 @@ class PipelineConfig:
     verify: LlmSettings
     consolidation: LlmSettings
     query: LlmSettings
+    conflict: LlmSettings
     prompts: dict[str, str]
     path: Path
     sha256: str
@@ -119,7 +122,7 @@ class PipelineConfig:
         """Resolved, non-secret settings for run manifests."""
         return {"name": self.name, "path": str(self.path), "sha256": self.sha256,
                 "retrieval": asdict(self.retrieval), "conversation": asdict(self.conversation),
-                "ingestion": asdict(self.ingestion),
+                "ingestion": asdict(self.ingestion), "conflicts": asdict(self.conflicts),
                 "llm": {step: getattr(self, step).resolved() for step in LLM_STEPS},
                 "prompt_sha256": {key: sha(text) for key, text in self.prompts.items()}}
 
@@ -142,6 +145,19 @@ class PipelineConfig:
         from backend.src.services.knowledge_consolidation import Decisions, KnowledgeConsolidator
         return KnowledgeConsolidator(self.consolidation.client("knowledge_consolidation", Decisions), store, **kwargs)
 
+    def conflict_detector(self):
+        """The `conflict` job stage's detector, or None when [conflicts] is disabled."""
+        from backend.knowledge_bases.industrial_qa.conflicts import CONFLICT_ANCHORS, HARD_SCOPE_KEYS, SOFT_SCOPE_KEYS
+        from backend.src.services.knowledge_conflicts import ConflictDetector, Verdicts
+        if not self.conflicts.enabled:
+            return None
+        policy = ConflictPolicy(self.prompts["conflict"], hard_keys=HARD_SCOPE_KEYS,
+                                soft_keys=SOFT_SCOPE_KEYS, anchors=CONFLICT_ANCHORS)
+        resolved = self.conflict.resolved()
+        return ConflictDetector(
+            lambda: self.conflict.client("knowledge_conflicts", Verdicts), settings=self.conflicts, policy=policy,
+            model={key: resolved[key] for key in ("model", "max_tokens", "thinking")})
+
     def ingestion_service(self, spec, store):
         """API ingestion (voice capture, pasted text): extract, normalize, verify, consolidate."""
         from backend.src.services.knowledge_ingestion import KnowledgeIngestionService
@@ -149,7 +165,9 @@ class PipelineConfig:
         service = KnowledgeIngestionService(
             extractor, store, ontology=spec.ontology, normalizer=spec.record_normalizer,
             verifier=self.verifier(),
-            consolidator=self.consolidator(store) if self.ingestion.consolidate else None)
+            # With the conflict stage on, conflicts are judged there, not inline.
+            consolidator=self.consolidator(store, detect_conflicts=not self.conflicts.enabled)
+            if self.ingestion.consolidate else None)
         return service, {"version": spec.extraction_version, **extractor.provenance}
 
 
@@ -223,6 +241,7 @@ def load_config(path: str | Path | None = None) -> PipelineConfig:
         retrieval=_build(RetrievalConfig, data.get("retrieval", {}), f"{path.name} [retrieval]"),
         conversation=_build(ConversationSettings, data.get("conversation", {}), f"{path.name} [conversation]"),
         ingestion=_ingestion(data.get("ingestion", {}), f"{path.name} [ingestion]"),
+        conflicts=_build(ConflictSettings, data.get("conflicts", {}), f"{path.name} [conflicts]"),
         **{step: _build(LlmSettings, llm_tables[step], f"{path.name} [llm.{step}]") for step in LLM_STEPS},
         prompts={key: (path.parent / prompt_files[key]).read_text().strip() for key in PROMPTS},
         path=path, sha256=sha(text),

@@ -160,6 +160,10 @@ class KnowledgeBaseSpec:
     # API ingestion (voice capture, pasted text): (spec, store) -> (service,
     # extraction provenance). None uses the shared environment-configured one.
     ingestion_factory: Callable[[Any, Any], tuple[Any, dict[str, Any]]] | None = None
+    # Detector of the `conflict` job stage after knowledge extraction
+    # (backend/src/services/knowledge_conflicts.py): spec -> ConflictDetector,
+    # or None when disabled. None (the default) means no conflict stage.
+    conflict_factory: Callable[[Any], Any] | None = None
 
     def __post_init__(self) -> None:
         keys = [item.key for item in self.context_filters]
