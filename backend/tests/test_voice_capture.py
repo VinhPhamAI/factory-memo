@@ -491,10 +491,10 @@ class VoiceCaptureApiTest(unittest.TestCase):
         self.client.__exit__(None, None, None)
         self.tmp.cleanup()
 
-    def record(self, name="Rung trục Z", clean=True) -> dict:
+    def record(self, name="Rung trục Z", clean=True, extract=True) -> dict:
         with self.client.websocket_connect("/v1/voice/general/record") as socket:
             socket.send_text(json.dumps({"type": "start", "name": name,
-                                         "sample_rate": 16000, "clean": clean}))
+                                         "sample_rate": 16000, "clean": clean, "extract": extract}))
             ready = socket.receive_json()
             self.assertEqual(ready["type"], "ready")
             socket.send_bytes(b"\x00\x00" * 1600)
@@ -536,6 +536,16 @@ class VoiceCaptureApiTest(unittest.TestCase):
         self.assertEqual(detail["ingestion"]["stored"], 1)
         listed = self.client.get("/v1/voice/general/conversations").json()["conversations"]
         self.assertEqual(listed[0]["name"], "Rung trục Z")
+
+    def test_ui_recording_can_save_transcript_before_choosing_extraction_mode(self) -> None:
+        saved = self.record(clean=False, extract=False)
+        self.assertEqual(saved["type"], "saved")
+        detail = self.client.get(f"/v1/voice/general/conversations/{saved['conversation_id']}").json()
+        self.assertEqual(detail["ingestion"]["status"], "off")
+        self.assertEqual(detail["status"], "pending")
+        self.assertEqual(len(detail["turns"]), 3)
+        self.assertEqual(detail["records"], [])
+        self.assertEqual(self.store.records, {})
 
     def test_typed_dialogue_is_stored_and_extracted_without_audio(self) -> None:
         response = self.client.post("/v1/voice/general/texts", json={

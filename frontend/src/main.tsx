@@ -39,8 +39,22 @@ const router = createBrowserRouter([
             {
               path: "/capture/:kb/:conversationId",
               lazy: async () => ({
-                Component: (await import("@/pages/capture-review"))
-                  .CaptureReviewPage,
+                Component: (await import("@/pages/knowledge-management"))
+                  .LegacyCaptureReviewRedirect,
+              }),
+            },
+            {
+              path: "/knowledge",
+              lazy: async () => ({
+                Component: (await import("@/pages/knowledge-management"))
+                  .KnowledgeManagementPage,
+              }),
+            },
+            {
+              path: "/knowledge/:kb/sources/:kind/:sourceId",
+              lazy: async () => ({
+                Component: (await import("@/pages/knowledge-management"))
+                  .KnowledgeSourcePage,
               }),
             },
           ]

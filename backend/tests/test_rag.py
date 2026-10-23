@@ -231,6 +231,24 @@ class DocumentStoreIntegrationTest(unittest.IsolatedAsyncioTestCase):
             await conn.execute(text(f"DROP SCHEMA {self.schema} CASCADE"))
         await self.store.aclose()
 
+    async def test_chunk_reviews_preserve_evidence_and_exclude_rejected_from_search(self) -> None:
+        original = (await self.store.get_document("d1"))[0]
+        summaries = await self.store.document_summaries()
+        self.assertGreater(next(row for row in summaries if row["doc_id"] == "d1")["draft"], 0)
+        event = {"decision": "reject", "note": "needs review", "at": "2026-10-23T00:00:00Z"}
+        self.assertTrue(await self.store.review_chunk("d1", original.chunk_id, "deprecated", event=event))
+        rejected = (await self.store.get_document("d1"))[0]
+        self.assertEqual(rejected.text, original.text)
+        self.assertEqual(rejected.metadata["review_status"], "deprecated")
+        self.assertEqual(rejected.metadata["review_history"], [event])
+        for mode in (SearchMode.KEYWORD, SearchMode.SEMANTIC, SearchMode.HYBRID):
+            hits = await self.store.search("aspirin heart attack", mode=mode, k=20)
+            self.assertNotIn(original.chunk_id, [hit.chunk_id for hit in hits])
+        self.assertTrue(await self.store.review_chunk("d1", original.chunk_id, "draft", event={"decision": "reset"}))
+        hits = await self.store.keyword_search("aspirin", k=20)
+        self.assertIn(original.chunk_id, [hit.chunk_id for hit in hits])
+        self.assertFalse(await self.store.review_chunk("other", original.chunk_id, "approved", event={}))
+
     async def test_adjacent_passages_and_search_preserve_manual_metadata(self) -> None:
         documents = [
             Document("manual_p0021_c01", "Connector connection procedure.", title="Connectors",

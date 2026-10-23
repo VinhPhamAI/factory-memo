@@ -471,6 +471,37 @@ class DocumentStore:
             for row in rows
         ]
 
+    async def document_summaries(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        """Inventory includes retired chunks, without copying passage text into lists."""
+        statement = text(f"""
+            SELECT doc_id, max(title) AS title,
+                   count(*) FILTER (WHERE COALESCE(metadata->>'review_status', 'draft') = 'draft') AS draft,
+                   count(*) FILTER (WHERE metadata->>'review_status' = 'approved') AS approved,
+                   count(*) FILTER (WHERE metadata->>'review_status' = 'deprecated') AS deprecated,
+                   max(metadata->>'evidence_id') AS evidence_id,
+                   max(metadata->>'created_at') AS created_at
+            FROM {self._table(self._table_name)} GROUP BY doc_id
+            ORDER BY doc_id LIMIT :limit OFFSET :offset
+        """)
+        async with self._errors("list document sources"):
+            async with self._engine.connect() as conn:
+                rows = (await conn.execute(statement, {"limit": limit, "offset": offset})).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def review_chunk(self, doc_id: str, chunk_id: str, status: str, *, event: Mapping[str, Any]) -> bool:
+        if status not in {"draft", "approved", "deprecated"}:
+            raise ValueError("Invalid review status")
+        async with self._errors("review a document chunk"):
+            async with self._engine.begin() as conn:
+                updated = await conn.scalar(text(f"""
+                    UPDATE {self._table(self._table_name)}
+                    SET metadata = metadata || jsonb_build_object('review_status', CAST(:status AS text),
+                        'review_history', COALESCE(metadata->'review_history', '[]'::jsonb) || CAST(:event AS jsonb))
+                    WHERE id = :id AND doc_id = :doc_id RETURNING id
+                """), {"id": chunk_id, "doc_id": doc_id, "status": status,
+                       "event": json.dumps([dict(event)], default=str)})
+        return updated is not None
+
     async def adjacent_chunks(self, chunk_ids: Sequence[str]) -> list[ChunkHit]:
         """Immediate indexed neighbors; supports legacy page-chunk document IDs."""
         if not chunk_ids:
@@ -480,6 +511,7 @@ class DocumentStore:
                 SELECT id,
                     lag(id) OVER w AS previous_id, lead(id) OVER w AS next_id
                 FROM {self._table(self._table_name)}
+                WHERE COALESCE(metadata->>'review_status', 'draft') != 'deprecated'
                 WINDOW w AS (
                     PARTITION BY COALESCE(metadata->>'reference_doc_id', metadata->>'doc_id',
                         regexp_replace(doc_id, '_p[0-9]+_c[0-9]+$', ''))
@@ -523,6 +555,7 @@ class DocumentStore:
             SELECT id, doc_id, chunk_index, title, content, metadata,
                    embedding <=> CAST(:embedding AS vector) AS distance
             FROM {self._table(self._table_name)}
+            WHERE COALESCE(metadata->>'review_status', 'draft') != 'deprecated'
             ORDER BY distance
             LIMIT :k
             """
@@ -599,6 +632,7 @@ class DocumentStore:
                 JOIN idf USING (lexeme)
                 JOIN {chunks} AS c ON c.id = p.chunk_id
                 CROSS JOIN corpus
+                WHERE COALESCE(c.metadata->>'review_status', 'draft') != 'deprecated'
                 GROUP BY p.chunk_id
                 ORDER BY score DESC, p.chunk_id
                 LIMIT :k

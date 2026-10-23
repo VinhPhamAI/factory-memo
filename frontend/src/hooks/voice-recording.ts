@@ -226,6 +226,7 @@ export function useVoiceRecording(onSaved: (conversationId: string) => void) {
       socket.onopen = () =>
         socket.send(
           JSON.stringify({
+            extract: false,
             type: "start",
             name: current.options.name,
             clean: current.options.clean,

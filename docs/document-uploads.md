@@ -55,6 +55,9 @@ curl --fail-with-body \
 
 The response's `storage_key` is relative to the storage root, for example
 `general/0123456789abcdef0123456789abcdef/content`. The upload response confirms
-storage only. There is currently no document listing, download or extraction API.
+storage only. Listing, original downloads, text conversion, per-source extraction
+and human review are available separately in **Quản lý tri thức**; see the
+[management guide](knowledge-management.md). TXT files can be extracted directly
+without a manual Convert step. OCR for PDF/images/Office media is not implemented.
 The legacy `POST /v1/voice/{kb}/texts` remains available for existing conversation
 clients; the document tab never calls it.

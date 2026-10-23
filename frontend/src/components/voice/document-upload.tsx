@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { CheckCircle2, FileText, Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { uploadDocument, type StoredDocument } from "@/services/document-api";
@@ -96,8 +97,12 @@ export function DocumentUpload({
       <div className="vc-notice" role="note">
         <FileText size={18} />
         <p>
-          Chỉ lưu trữ file gốc theo knowledge base. Chưa trích xuất nội dung
-          hoặc đưa tài liệu vào tìm kiếm.
+          Tải lên chỉ lưu file gốc theo knowledge base. Chuyển đổi, trích xuất
+          và duyệt kết quả trong{" "}
+          <Link to="/knowledge" className="link-button">
+            Quản lý tri thức
+          </Link>
+          .
         </p>
       </div>
 
@@ -110,7 +115,13 @@ export function DocumentUpload({
               {item.document ? (
                 <span className="vc-upload-success">
                   <CheckCircle2 size={16} /> Đã lưu vào {item.document.kb} · Mã:{" "}
-                  {item.document.id}
+                  {item.document.id} ·{" "}
+                  <Link
+                    to={`/knowledge/${encodeURIComponent(item.document.kb)}/sources/upload/${item.document.id}`}
+                    className="link-button"
+                  >
+                    Xem / xử lý
+                  </Link>
                 </span>
               ) : sending && active === index ? (
                 <span>Đang tải lên…</span>

@@ -1,25 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
-  ArrowLeft,
   Check,
-  CheckCircle2,
-  Circle,
   Loader2,
   Pencil,
   Play,
-  RotateCcw,
   Sparkles,
   Undo2,
   X,
-  XCircle,
 } from "lucide-react";
 import {
-  audioUrl,
-  getConversation,
   renameSpeakers,
-  retryExtraction,
   reviewRecord,
   startCleaning,
   type ReviewStatus,
@@ -32,9 +23,7 @@ import {
   CERTAINTY_LABELS,
   claimText,
   clock,
-  dateTime,
   findQuote,
-  pipelineSteps,
   recordEvidence,
   recordScope,
   recordSpeaker,
@@ -50,7 +39,6 @@ import { Button } from "@/components/ui/button";
 import { SpeakerBadge } from "@/components/voice/speaker-badge";
 import { cn } from "@/utils/cn";
 
-const POLL_MS = 1500;
 const ACTIVE = new Set(["queued", "running"]);
 
 interface Focus {
@@ -60,323 +48,9 @@ interface Focus {
   nonce: number;
 }
 
-export function CaptureReviewPage() {
-  const { kb = "", conversationId = "" } = useParams();
-  const [conversation, setConversation] = useState<VoiceConversation>();
-  const [loadError, setLoadError] = useState("");
-  const [reload, setReload] = useState(0);
-  const [focus, setFocus] = useState<Focus>();
-  const [mobileTab, setMobileTab] = useState<"transcript" | "knowledge">(
-    "knowledge",
-  );
-  const audio = useRef<HTMLAudioElement>(null);
-
-  const active =
-    !!conversation &&
-    (ACTIVE.has(conversation.ingestion.status ?? "") ||
-      ACTIVE.has(conversation.cleaning.status ?? ""));
-
-  useEffect(() => {
-    const abort = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = async () => {
-      try {
-        const next = await getConversation(kb, conversationId, abort.signal);
-        setConversation(next);
-        setLoadError("");
-        if (
-          ACTIVE.has(next.ingestion.status ?? "") ||
-          ACTIVE.has(next.cleaning.status ?? "")
-        )
-          timer = setTimeout(() => void load(), POLL_MS);
-      } catch (reason) {
-        if (abort.signal.aborted) return;
-        setLoadError(reason instanceof Error ? reason.message : String(reason));
-        // Keep polling through brief network failures while jobs run.
-        timer = setTimeout(() => void load(), POLL_MS * 3);
-      }
-    };
-    void load();
-    return () => {
-      abort.abort();
-      clearTimeout(timer);
-    };
-  }, [kb, conversationId, reload]);
-
-  const refresh = useCallback(() => setReload((value) => value + 1), []);
-
-  const playFrom = (seconds: number | null) => {
-    const element = audio.current;
-    if (!element || seconds == null) return;
-    element.currentTime = Math.max(0, seconds - 0.3);
-    void element.play().catch(() => undefined);
-  };
-
-  const showEvidence = (evidence: Evidence) => {
-    if (!evidence.turnId) return;
-    setFocus({
-      turnId: evidence.turnId,
-      quote: evidence.quote,
-      nonce: Date.now(),
-    });
-    setMobileTab("transcript");
-  };
-
-  const replaceRecord = (record: VoiceRecord) =>
-    setConversation(
-      (current) =>
-        current && {
-          ...current,
-          records: current.records.map((item) =>
-            item.id === record.id ? record : item,
-          ),
-        },
-    );
-
-  if (!conversation)
-    return (
-      <main className="vc-page vc-review-loading">
-        {loadError ? (
-          <div className="vc-notice error" role="alert">
-            <AlertTriangle size={18} />
-            <div>
-              <p>{loadError}</p>
-              <div className="vc-notice-actions">
-                <Button size="sm" variant="outline" onClick={refresh}>
-                  Thử lại
-                </Button>
-                <Button size="sm" variant="ghost" asChild>
-                  <Link to="/capture">Về trang ghi âm</Link>
-                </Button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <p className="vc-muted">
-            <Loader2 className="animate-spin" size={16} /> Đang tải cuộc hội
-            thoại…
-          </p>
-        )}
-      </main>
-    );
-
-  const counts = countStatuses(conversation.records);
-
-  return (
-    <main className="vc-page vc-review" data-testid="capture-review">
-      <header className="vc-review-head">
-        <Link to="/capture" className="vc-back">
-          <ArrowLeft size={16} />
-          Ghi âm
-        </Link>
-        <div className="vc-review-title">
-          <h1>{conversation.name}</h1>
-          <p>
-            {dateTime(conversation.recorded_at ?? conversation.created_at)} ·{" "}
-            {conversation.source === "text"
-              ? "Văn bản"
-              : clock(conversation.audio.duration_s)}{" "}
-            · {conversation.speakers.length} người nói ·{" "}
-            {conversation.turns.length} lượt · KB{" "}
-            <strong>{conversation.kb}</strong>
-          </p>
-        </div>
-        {conversation.source === "text" ? null : conversation.audio
-            .available ? (
-          <audio
-            ref={audio}
-            className="vc-audio"
-            controls
-            preload="metadata"
-            src={audioUrl(conversation.kb, conversation.id)}
-            data-testid="review-audio"
-          />
-        ) : (
-          <span className="vc-muted">Không tìm thấy file âm thanh</span>
-        )}
-      </header>
-
-      <Pipeline
-        conversation={conversation}
-        pending={counts.draft}
-        onRetry={async () => {
-          await retryExtraction(conversation.kb, conversation.id);
-          refresh();
-        }}
-      />
-      {loadError && active && (
-        <p className="vc-inline-error" role="status">
-          Mất kết nối, đang thử cập nhật lại… ({loadError})
-        </p>
-      )}
-
-      <div className="vc-mobile-tabs" role="tablist">
-        <button
-          role="tab"
-          aria-selected={mobileTab === "transcript"}
-          onClick={() => setMobileTab("transcript")}
-        >
-          Bản ghi
-        </button>
-        <button
-          role="tab"
-          aria-selected={mobileTab === "knowledge"}
-          onClick={() => setMobileTab("knowledge")}
-        >
-          Tri thức
-          {conversation.records.length
-            ? ` (${conversation.records.length})`
-            : ""}
-        </button>
-      </div>
-
-      <div className="vc-columns" data-tab={mobileTab}>
-        <TranscriptPanel
-          conversation={conversation}
-          focus={focus}
-          onPlay={playFrom}
-          onRenamed={setConversation}
-          onCleaningStarted={refresh}
-        />
-        <KnowledgePanel
-          conversation={conversation}
-          counts={counts}
-          onEvidence={showEvidence}
-          onRecord={replaceRecord}
-        />
-      </div>
-    </main>
-  );
-}
-
-function countStatuses(records: VoiceRecord[]) {
-  const counts: Record<ReviewStatus, number> = {
-    draft: 0,
-    approved: 0,
-    deprecated: 0,
-  };
-  for (const record of records) counts[record.status] += 1;
-  return counts;
-}
-
-function elapsedSince(iso: string | undefined, now: number) {
-  if (!iso) return "";
-  const seconds = Math.max(
-    0,
-    Math.round((now - new Date(iso).getTime()) / 1000),
-  );
-  return clock(seconds);
-}
-
-function Pipeline({
-  conversation,
-  pending,
-  onRetry,
-}: {
-  conversation: VoiceConversation;
-  pending: number;
-  onRetry(): Promise<void>;
-}) {
-  const ingestion = conversation.ingestion;
-  const steps = pipelineSteps(ingestion);
-  const running = ACTIVE.has(ingestion.status ?? "");
-  const [now, setNow] = useState(() => Date.now());
-  const [retrying, setRetrying] = useState(false);
-  const [retryError, setRetryError] = useState("");
-
-  useEffect(() => {
-    if (!running) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [running]);
-
-  const failed =
-    ingestion.status === "failed" || ingestion.status === "interrupted";
-  return (
-    <section
-      className={cn("vc-pipeline", failed && "failed")}
-      aria-label="Tiến trình xử lý"
-      data-testid="pipeline"
-      data-status={ingestion.status}
-    >
-      <ol>
-        {steps.map((step) => (
-          <li key={step.key} className={step.state}>
-            {step.state === "done" ? (
-              <CheckCircle2 size={18} />
-            ) : step.state === "active" ? (
-              <Loader2 size={18} className="animate-spin" />
-            ) : step.state === "failed" ? (
-              <XCircle size={18} />
-            ) : (
-              <Circle size={18} />
-            )}
-            <span>{step.label}</span>
-          </li>
-        ))}
-        <li className={ingestion.status === "done" ? "done" : "waiting"}>
-          {ingestion.status === "done" ? (
-            <CheckCircle2 size={18} />
-          ) : (
-            <Circle size={18} />
-          )}
-          <span>
-            {ingestion.status !== "done"
-              ? "Chờ duyệt"
-              : !conversation.records.length
-                ? "Không có mục cần duyệt"
-                : pending
-                  ? `${pending} mục chờ bạn duyệt`
-                  : "Đã duyệt xong"}
-          </span>
-        </li>
-      </ol>
-      <div className="vc-pipeline-status" aria-live="polite">
-        <span>{stageText(ingestion)}</span>
-        {running && ingestion.started_at && (
-          <span className="vc-muted">
-            {elapsedSince(ingestion.started_at, now)}
-          </span>
-        )}
-        {failed && (
-          <>
-            {ingestion.error && (
-              <code className="vc-error-detail" title={ingestion.error}>
-                {ingestion.error}
-              </code>
-            )}
-            <Button
-              size="sm"
-              disabled={retrying}
-              onClick={() => {
-                setRetrying(true);
-                setRetryError("");
-                onRetry()
-                  .catch((reason: unknown) =>
-                    setRetryError(
-                      reason instanceof Error ? reason.message : String(reason),
-                    ),
-                  )
-                  .finally(() => setRetrying(false));
-              }}
-              data-testid="retry-extraction"
-            >
-              <RotateCcw />
-              Trích xuất lại
-            </Button>
-            {retryError && (
-              <span className="vc-inline-error">{retryError}</span>
-            )}
-          </>
-        )}
-      </div>
-    </section>
-  );
-}
-
 // ------------------------------------------------------------------ transcript
 
-function TranscriptPanel({
+export function TranscriptPanel({
   conversation,
   focus,
   onPlay,
@@ -761,7 +435,7 @@ function SpeakerNames({
 
 type Filter = "all" | ReviewStatus;
 
-function KnowledgePanel({
+export function KnowledgePanel({
   conversation,
   counts,
   onEvidence,
@@ -823,8 +497,8 @@ function KnowledgePanel({
             </p>
             <p className="vc-muted">
               {merged.length
-                ? "Các nội dung trong hội thoại trùng với tri thức đã có trong knowledge base (xem bên dưới)."
-                : "AI không tìm thấy kinh nghiệm, quy trình hay sự việc nào đủ rõ để ghi lại từ cuộc hội thoại này."}
+                ? "Các nội dung trong nguồn dữ liệu trùng với tri thức đã có trong knowledge base (xem bên dưới)."
+                : "AI không tìm thấy kinh nghiệm, quy trình hay sự việc nào đủ rõ để ghi lại từ nguồn dữ liệu này."}
             </p>
           </div>
         )}
@@ -882,7 +556,7 @@ function KnowledgePanel({
         <section className="vc-merged">
           <h3>Trùng với tri thức đã có ({merged.length})</h3>
           <p className="vc-muted">
-            Cuộc hội thoại này được ghi nhận là bằng chứng bổ sung cho các mục
+            Nguồn dữ liệu này được ghi nhận là bằng chứng bổ sung cho các mục
             sau, thay vì tạo mục mới.
           </p>
           <ul>
@@ -1010,7 +684,7 @@ function RecordCard({
               key={index}
               type="button"
               className="vc-quote"
-              disabled={!item.turnId}
+              disabled={!item.turnId && !item.quote}
               onClick={() => onEvidence(item)}
               data-testid="evidence-quote"
             >

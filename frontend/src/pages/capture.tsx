@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useBlocker, useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
-  ChevronRight,
   Download,
-  FileText,
   Upload,
   Loader2,
   Mic,
@@ -14,16 +12,8 @@ import {
 } from "lucide-react";
 import type { KnowledgeBase } from "@/types";
 import { useVoiceRecording, type LiveTurn } from "@/hooks/voice-recording";
-import {
-  listCaptureKnowledgeBases,
-  listConversations,
-  type VoiceConversationSummary,
-} from "@/services/voice-api";
-import {
-  clock,
-  dateTime,
-  defaultConversationName,
-} from "@/services/voice-display";
+import { listCaptureKnowledgeBases } from "@/services/voice-api";
+import { clock, defaultConversationName } from "@/services/voice-display";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -88,7 +78,9 @@ export function CapturePage() {
   const saved = useRef(false);
   const recording = useVoiceRecording((id) => {
     saved.current = true;
-    void navigate(`/capture/${encodeURIComponent(kb)}/${id}`);
+    void navigate(
+      `/knowledge/${encodeURIComponent(kb)}/sources/conversation/${id}`,
+    );
   });
   const live = recording.phase === "recording" || recording.phase === "saving";
   const blocker = useBlocker(() => live && !saved.current);
@@ -177,7 +169,7 @@ export function CapturePage() {
           <h1>{mode === "voice" ? "Ghi lại hội thoại" : "Tải lên tài liệu"}</h1>
           <p>
             {mode === "voice"
-              ? "Ghi âm trao đổi tại hiện trường. Sau khi lưu, AI trích xuất tri thức để bạn duyệt."
+              ? "Ghi âm trao đổi tại hiện trường. Sau khi lưu transcript, chọn cách trích xuất và duyệt trong Quản lý tri thức."
               : "Lưu tài liệu và hình ảnh vào kho lưu trữ của knowledge base."}
           </p>
         </header>
@@ -327,9 +319,11 @@ export function CapturePage() {
           )}
         </form>
 
-        {mode === "voice" && kb && kbState === "ready" && (
-          <RecentConversations kb={kb} />
-        )}
+        <p className="vc-muted">
+          <Link to="/knowledge" className="link-button">
+            Xem và xử lý dữ liệu đã lưu trong Quản lý tri thức
+          </Link>
+        </p>
 
         <CreateKnowledgeBaseDialog
           open={creatingKb}
@@ -565,91 +559,5 @@ function LeaveDialog({
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-const JOB_LABELS: Record<string, string> = {
-  queued: "Đang chờ trích xuất",
-  running: "Đang trích xuất",
-  failed: "Trích xuất lỗi",
-  interrupted: "Bị gián đoạn",
-};
-
-function RecentConversations({ kb }: { kb: string }) {
-  const [items, setItems] = useState<VoiceConversationSummary[]>();
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const abort = new AbortController();
-    setItems(undefined);
-    setError("");
-    listConversations(kb, abort.signal)
-      .then(setItems)
-      .catch((reason: unknown) => {
-        if (!abort.signal.aborted)
-          setError(reason instanceof Error ? reason.message : String(reason));
-      });
-    return () => abort.abort();
-  }, [kb]);
-
-  return (
-    <section className="vc-recent" aria-labelledby="vc-recent-title">
-      <h2 id="vc-recent-title">Hội thoại đã lưu</h2>
-      {error && <p className="vc-inline-error">{error}</p>}
-      {!items && !error && <p className="vc-muted">Đang tải…</p>}
-      {items && !items.length && (
-        <p className="vc-muted">
-          Chưa có cuộc hội thoại nào trong <strong>{kb}</strong>.
-        </p>
-      )}
-      {!!items?.length && (
-        <ul>
-          {items.map((item) => {
-            const pending = item.knowledge.draft ?? 0;
-            const reviewed =
-              (item.knowledge.approved ?? 0) + (item.knowledge.deprecated ?? 0);
-            const job = item.ingestion.status ?? "";
-            return (
-              <li key={item.id}>
-                <Link
-                  to={`/capture/${encodeURIComponent(kb)}/${item.id}`}
-                  data-testid="recent-conversation"
-                >
-                  <span className="vc-recent-name">
-                    {item.source === "text" ? (
-                      <FileText size={15} aria-label="Văn bản" />
-                    ) : (
-                      <Mic size={15} aria-label="Ghi âm" />
-                    )}
-                    <span>{item.name}</span>
-                  </span>
-                  <span className="vc-recent-meta">
-                    {dateTime(item.recorded_at)} ·{" "}
-                    {item.source === "text"
-                      ? "Văn bản"
-                      : clock(item.duration_s)}{" "}
-                    · {item.speakers} người nói
-                  </span>
-                  <span className="vc-recent-state">
-                    {JOB_LABELS[job] ? (
-                      <span className={cn("vc-chip", job)}>
-                        {JOB_LABELS[job]}
-                      </span>
-                    ) : pending ? (
-                      <span className="vc-chip draft">{pending} chờ duyệt</span>
-                    ) : reviewed ? (
-                      <span className="vc-chip approved">Đã duyệt xong</span>
-                    ) : (
-                      <span className="vc-chip">Không có tri thức mới</span>
-                    )}
-                    <ChevronRight size={16} />
-                  </span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </section>
   );
 }

@@ -5,12 +5,15 @@ selector, streaming answers and a sources panel. React, TypeScript, Vite, Tailwi
 CSS and shadcn/ui. No account is needed.
 
 `api` is the default mode. It offers QA (`/ask`) and live voice capture
-(`/capture`): microphone recording with live speaker-lettered transcript, then a
-review page with the transcript (raw or AI-cleaned, audio per turn) beside the
-extracted knowledge, which reviewers approve or reject. The **Tải lên tài liệu**
+(`/capture`): microphone recording with live speaker-lettered transcript. The
+**Quản lý tri thức** tab (`/knowledge`) lists original uploads, converted text and
+extracted results, with per-source mode selection and shared review. TXT files
+can be extracted directly from Raw without a manual Convert step. Recording
+transcripts, speaker labels and audio are reviewed in the same workspace. The **Tải lên tài liệu**
 tab stores PDF, images, TXT, PPTX and other files independently of conversations,
 without extraction. See [voice capture](../docs/voice-capture.md) and
-[document uploads](../docs/document-uploads.md). The old five-step MR-JE-AX167 simulation remains available explicitly in
+[document uploads](../docs/document-uploads.md) and
+[knowledge management](../docs/knowledge-management.md). The old five-step MR-JE-AX167 simulation remains available explicitly in
 `mock` mode.
 
 ## Run

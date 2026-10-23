@@ -1,7 +1,10 @@
 # Voice capture
 
 Live microphone recording in the React UI (`/capture`, tab **Ghi âm**), turned
-into stored evidence, extracted knowledge drafts and a side-by-side review. The
+into stored transcript evidence. New UI recordings wait for per-source extraction
+mode selection and side-by-side review in **Quản lý tri thức** (`/knowledge`);
+see the [management guide](knowledge-management.md). Legacy API clients still
+extract automatically by default unless they send `extract=false`. The
 same page offers **Tải lên tài liệu** for storage-only document uploads, independent
 of conversations; see [document uploads](document-uploads.md). The typed-text API
 remains available to existing clients (see [Typed text](#typed-text)).
@@ -12,9 +15,9 @@ Browser mic ─ AudioWorklet (PCM16, 16 kHz) ─ WS /v1/voice/{kb}/record ─ Fa
               data/audio/<time>_<name>.wav  ◄── every frame, written first ┤
               speech-api realtime ASR + diarization ◄── same frames ───────┘
 Stop ─► transcript "[T01] Speaker A: …" ─► kb_<name>.raw_conversations (pending)
-     ─► background: extraction → quote check → consolidation → knowledge_items (draft)
+     ─► Quản lý tri thức: select mode → extraction → knowledge_items/chunks (draft)
      ─► background (optional): LLM-cleaned copy of each turn, for reading only
-Review page: transcript (raw / cleaned, audio per turn) | records (approve / reject)
+Management detail: transcript (raw / cleaned, audio per turn) | results (approve / reject)
 ```
 
 Only knowledge bases with `retrieval="knowledge"` (`general`, `industrial_qa`

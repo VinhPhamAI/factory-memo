@@ -235,6 +235,7 @@ class VoiceCaptureService:
         capture_mode: Literal["live", "upload"],
         language: str,
         endpointing_ms: int,
+        extract: bool = True,
     ) -> UUID:
         """Stores the transcript as evidence and starts extraction (and cleaning)."""
 
@@ -286,10 +287,11 @@ class VoiceCaptureService:
             "speakers": {letter: {"name": None} for letter in speaker_letters(turns)},
             "turns": [turn.to_json() for turn in turns],
             "cleaning": {"enabled": clean, "status": "queued" if clean else "off"},
-            "ingestion": {"status": "queued"},
+            "ingestion": {"status": "queued" if extract else "off"},
         }
         conversation = await store.add_conversation(transcript, metadata=metadata)
-        self._start_ingestion(kb, conversation)
+        if extract:
+            self._start_ingestion(kb, conversation)
         if clean:
             self.start_cleaning(kb, conversation.id, conversation.transcript)
         return conversation.id
@@ -708,6 +710,7 @@ async def upload_recording(
     audio: Annotated[UploadFile, File()],
     clean: Annotated[bool, Form()] = True,
     recorded_at: Annotated[datetime | None, Form()] = None,
+    extract: Annotated[bool, Form()] = True,
 ) -> dict[str, str]:
     """A whole WAV recording, e.g. kept by the browser when the live socket dropped."""
 
@@ -744,6 +747,7 @@ async def upload_recording(
             clean=clean,
             capture_mode="upload", language=client.settings.language,
             endpointing_ms=client.settings.endpointing_ms,
+            extract=extract,
         )
     except (SpeechServiceError, OSError) as exc:
         raise HTTPException(502, f"Speech recognition failed; the audio is kept as {path.name}") from exc
@@ -787,6 +791,7 @@ class StartMessage(BaseModel):
     name: str
     sample_rate: int = Field(ge=8_000, le=96_000)
     clean: bool = True
+    extract: bool = True
 
     @field_validator("name")
     @classmethod
@@ -875,6 +880,7 @@ async def record(websocket: WebSocket, kb: str) -> None:
             kb, name=start.name, recorded_at=started, recorder=recorder, outcome=outcome,
             clean=start.clean, capture_mode="live", language=client.settings.language,
             endpointing_ms=client.settings.endpointing_ms,
+            extract=start.extract,
         )
     except EmptyRecordingError as exc:
         await fail(f"{exc}. The audio is kept as {recorder.path.name}.", "empty", recorder.path.name)

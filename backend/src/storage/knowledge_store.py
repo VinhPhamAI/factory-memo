@@ -673,6 +673,7 @@ class KnowledgeStore:
         metadata_filters: Sequence[Mapping[str, str]],
         metadata_keys: Sequence[str],
         limit: int = 50,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Newest conversations whose metadata contains any of `metadata_filters`.
 
@@ -696,6 +697,7 @@ class KnowledgeStore:
                           WHERE c.metadata @> f.value)
             ORDER BY c.created_at DESC, c.id
             LIMIT :limit
+            OFFSET :offset
             """
         )
         async with self._errors("list conversations"):
@@ -707,6 +709,7 @@ class KnowledgeStore:
                             [dict(item) for item in metadata_filters], ensure_ascii=False
                         ),
                         "limit": max(1, min(limit, 200)),
+                        "offset": max(0, offset),
                     })
                 ).mappings().all()
         return [dict(row) for row in rows]

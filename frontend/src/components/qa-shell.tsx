@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
-import { FolderPlus, MessagesSquare } from "lucide-react";
+import { FolderPlus, LibraryBig, MessagesSquare } from "lucide-react";
 import { BrandMark } from "./brand";
 import { useWorkspace } from "@/hooks/workspace";
 import { cn } from "@/utils/cn";
@@ -33,6 +33,16 @@ export function QaShell() {
           >
             <FolderPlus size={16} />
             Thêm dữ liệu
+          </NavLink>
+          <NavLink
+            to="/knowledge"
+            className={({ isActive }) =>
+              cn("qa-nav-link", isActive && "active")
+            }
+            data-testid="nav-knowledge-management"
+          >
+            <LibraryBig size={16} />
+            Quản lý tri thức
           </NavLink>
         </nav>
       </header>

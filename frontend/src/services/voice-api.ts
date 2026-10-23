@@ -199,11 +199,14 @@ export function reviewRecord(
   decision: "approve" | "reject" | "reset",
   note = "",
 ) {
-  return request<VoiceRecord>(`${kbPath(kb)}/knowledge/${recordId}/review`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ decision, note }),
-  });
+  return request<VoiceRecord>(
+    `${apiBaseUrl}/v1/knowledge-management/${encodeURIComponent(kb)}/knowledge/${recordId}/review`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision, note }),
+    },
+  );
 }
 
 export function retryExtraction(kb: string, id: string) {
@@ -268,6 +271,7 @@ export async function uploadRecording(
   const data = new FormData();
   data.set("name", form.name);
   data.set("clean", String(form.clean));
+  data.set("extract", "false");
   data.set("recorded_at", form.recordedAt.toISOString());
   data.set("audio", form.audio, "recording.wav");
   const body = await request<{ conversation_id: string }>(
