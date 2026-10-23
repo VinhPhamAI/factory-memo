@@ -105,7 +105,32 @@ base; see [voice capture](docs/voice-capture.md) for storage and schema.
 
 ## 3. API and QA UI
 
-**Terminal 1 — API:**
+**API in Docker Compose** (loads provider settings from the root `.env`):
+
+```bash
+docker compose --env-file .env -f deployments/docker-compose.yml up -d --build api
+docker compose -f deployments/docker-compose.yml logs -f api
+```
+
+This also starts PostgreSQL and waits for it to be healthy. The API is available
+at **http://localhost:8005** (`/healthz` for health, `/docs` for API documentation).
+Set `API_PORT` in `.env` to change the host port. Recordings and other runtime
+data persist in the host's `data/` directory across container recreation.
+Rebuild with the same command after changing backend code or dependencies.
+
+Inside Compose, the API connects to `postgres:5432` and `speech-api:8080`;
+`API_DATABASE_URL` and `API_SPEECH_API_URL` override these defaults. For chat or
+embedding endpoints running on the Docker host, replace `localhost` in the
+corresponding `*_BASE_URL` with `host.docker.internal`. `VOICE_AUDIO_DIR` inside
+the API container is fixed to `/app/data/audio`, backed by the host's `data/audio/`.
+
+Speech is optional: prepare it with `deployments/speech/setup.sh`, then start it
+with `deployments/speech/up.sh` as above. After setup, the full stack can also be
+started with `docker compose --env-file .env -f deployments/docker-compose.yml
+--profile speech up -d --build`. Without that profile, `up -d --build` starts
+only the API and PostgreSQL. Text capture and QA do not require speech.
+
+**Alternative — API on the host:**
 
 ```bash
 uv run uvicorn backend.app:app --host 0.0.0.0 --port 8005

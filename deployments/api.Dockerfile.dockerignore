@@ -1,0 +1,11 @@
+# Only send the API source and dependency metadata to the builder.
+# Keep credentials, recordings, model weights and benchmark labels out.
+**
+!pyproject.toml
+!README.md
+!backend/
+!backend/**
+**/__pycache__/
+**/*.py[cod]
+**/.env
+**/.env.*
