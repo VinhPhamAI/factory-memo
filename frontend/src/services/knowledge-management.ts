@@ -28,11 +28,52 @@ export interface SourceJob {
   retry_at: string | null;
 }
 
+/** The earlier source whose identical content was already extracted. */
+export interface DuplicateOf {
+  run_id: string;
+  evidence_id: string;
+  /** "running" while that extraction is still in progress. */
+  status: "running" | "done";
+  mode: ExtractionMode;
+  name: string;
+  kind: "upload" | "conversation";
+  source_id: string;
+  /** False when it was extracted with older extraction logic; null if unknown. */
+  same_logic: boolean | null;
+  extracted_at: string;
+}
+
+export type OverlapLevel = "near_duplicate" | "contained" | "similar";
+
+/**
+ * An extracted source in the same KB and mode whose text overlaps this one,
+ * measured on 5-word shingles. `near_duplicate` and `contained` need the
+ * reviewer's confirmation before extraction; `similar` is information only.
+ */
+export interface OverlapMatch extends Omit<DuplicateOf, "same_logic"> {
+  level: OverlapLevel;
+  /** Shared shingles / all shingles of both texts. */
+  jaccard: number;
+  /** Share of this text found in the earlier source. */
+  containment: number;
+  /** Share of the earlier source found in this text. */
+  coverage: number;
+}
+
 export type ProcessingState = Omit<IngestionStatus, "status"> & {
-  /** "unavailable" when the evidence row could not be read. */
-  status?: JobState | "unavailable";
+  /**
+   * "unavailable" when the evidence row could not be read; "duplicate" when
+   * the worker skipped content that another source already extracted;
+   * "near_duplicate" when it waits for the reviewer to confirm extraction of
+   * content that nearly matches an extracted source.
+   */
+  status?: JobState | "unavailable" | "duplicate" | "near_duplicate";
   mode?: ExtractionMode;
   job?: SourceJob;
+  duplicate_of?: DuplicateOf;
+  overlaps?: OverlapMatch[];
+  /** The reviewer confirmed extraction despite a near-duplicate match. */
+  overlap_confirmed?: boolean;
 };
 
 export interface ManagedSource {
@@ -88,6 +129,56 @@ export const sourceLink = (source: Pick<ManagedSource, "kb" | "kind" | "id">) =>
 export const originalDocumentUrl = (source: ManagedSource) =>
   `${sourcePath(source.kb, "upload", source.id)}/original`;
 
+/** Extraction refused: the same content was already extracted in this mode. */
+export class DuplicateContentError extends Error {
+  constructor(
+    message: string,
+    readonly duplicateOf: DuplicateOf,
+  ) {
+    super(message);
+    this.name = "DuplicateContentError";
+  }
+}
+
+/** Extraction waits for confirmation: the content nearly matches an extracted source. */
+export class NearDuplicateError extends Error {
+  constructor(
+    message: string,
+    readonly matches: OverlapMatch[],
+  ) {
+    super(message);
+    this.name = "NearDuplicateError";
+  }
+}
+
+async function duplicateError(response: Response) {
+  try {
+    const body = (await response.json()) as {
+      detail?: {
+        code?: string;
+        message?: string;
+        duplicate_of?: DuplicateOf;
+        matches?: OverlapMatch[];
+      };
+    };
+    const detail = body.detail;
+    if (detail?.code === "duplicate_content" && detail.duplicate_of)
+      return new DuplicateContentError(
+        detail.message ?? "Nội dung trùng với một nguồn đã trích xuất.",
+        detail.duplicate_of,
+      );
+    if (detail?.code === "near_duplicate" && detail.matches?.length)
+      return new NearDuplicateError(
+        detail.message ??
+          "Nội dung gần giống một nguồn đã trích xuất. Xác nhận nếu vẫn muốn trích xuất.",
+        detail.matches,
+      );
+  } catch {
+    // Not JSON: fall back to the generic conflict message.
+  }
+  return null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -104,10 +195,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw new Error(
         "Không tìm thấy nguồn dữ liệu hoặc API chưa được cập nhật.",
       );
-    if (response.status === 409)
+    if (response.status === 409) {
+      const duplicate = await duplicateError(response);
+      if (duplicate) throw duplicate;
       throw new Error(
         "Nguồn đang được xử lý hoặc đã có kết quả. Hãy làm mới để xem trạng thái.",
       );
+    }
     if (response.status === 422)
       throw new Error(
         "Không xử lý được dữ liệu. File text cần dùng UTF-8/UTF-16 và có nội dung; trích xuất knowledge items giới hạn 100.000 ký tự.",
@@ -140,15 +234,21 @@ export const extractManagedSource = (
   kind: SourceKind,
   id: string,
   mode: ExtractionMode,
+  options: { confirmOverlap?: boolean } = {},
 ) =>
-  request<{ status: "queued"; mode: ExtractionMode; job: SourceJob }>(
-    `${sourcePath(kb, kind, id)}/extract`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode }),
-    },
-  );
+  request<{
+    status: "queued";
+    mode: ExtractionMode;
+    job: SourceJob;
+    /** Overlaps that did not block: `similar` ones, or confirmed matches. */
+    overlaps?: OverlapMatch[];
+  }>(`${sourcePath(kb, kind, id)}/extract`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(
+      options.confirmOverlap ? { mode, confirm_overlap: true } : { mode },
+    ),
+  });
 
 /** The source as it looks right after a job was queued, until the next refresh. */
 export const withJob = <T extends ManagedSource>(
@@ -162,6 +262,8 @@ export const withJob = <T extends ManagedSource>(
     status: job.status,
     mode: job.mode ?? source.processing.mode,
     error: undefined,
+    overlaps: undefined,
+    overlap_confirmed: undefined,
     job,
   },
 });

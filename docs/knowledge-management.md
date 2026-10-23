@@ -110,7 +110,134 @@ characters; document chunk processing still reads the whole converted text.
 
 A queued or running job returns 409 for a second request on the same source.
 Source details include the latest job in `processing.job` (stage, status, mode,
-next stages, attempts, error and retry time).
+next stages, attempts, error and retry time). Extract also returns 409 with
+`detail.code = "duplicate_content"` when identical content was already extracted,
+or `detail.code = "near_duplicate"` (with `matches`) when the content nearly
+matches an extracted source and the request has no `confirm_overlap: true`
+(see below).
+
+## Duplicate content
+
+Extracting **exactly** the same content twice in the same mode is blocked;
+content that is **nearly** the same as an extracted source needs the reviewer's
+confirmation (see [near-duplicate content](#near-duplicate-content)).
+Re-extraction of identical content with changed logic is not implemented.
+
+- **Content fingerprint:** SHA-256 of the evidence text after Unicode NFC and
+  whitespace collapse, so re-uploads that differ only in line endings or spacing
+  match. Case, punctuation and wording changes are different content. Before
+  conversion a raw upload is compared by the SHA-256 of its original bytes.
+- **Extraction fingerprint:** SHA-256 of the mode and its settings: extraction
+  provenance (pipeline version, prompt, model and schema/ontology hashes) for
+  knowledge items, chunking/index settings for document chunks.
+- **`extraction_runs`** (in the KB database) records each extraction of an
+  evidence row: content and extraction fingerprints, original-byte hash, job ID,
+  status (`running`, `done`, `failed`, `duplicate`) and result counts. A unique
+  partial index allows one `running`/`done` run per content, mode and
+  fingerprint; a transaction lock on content + mode serializes starts across
+  different fingerprints.
+
+Policy:
+
+| Earlier run of the same content and mode | Effect |
+| --- | --- |
+| `done`, same logic | Blocked: the existing results are reused, not extracted again |
+| `done`, older logic | Blocked, reported as extracted with older logic (re-extraction not implemented) |
+| `running`, started (or taken over) within `EXTRACTION_RUN_STALE_S` (default 3600 s) | Blocked as "being extracted" |
+| `running` for longer | Not blocking; the next start marks it `failed` |
+| `failed` | Not blocking |
+| Other mode | Not blocking (knowledge items and document chunks are separate results) |
+
+The API checks before queueing and answers 409 with `duplicate_of` (earlier
+source name, kind, ID, status, mode, `same_logic` and time). The extract worker
+checks again when the job starts, since two copies can be queued before either
+runs: the second job completes without an LLM call and the source shows
+`processing.status = "duplicate"` with `duplicate_of`. Its evidence stays stored
+and can be extracted later if the earlier run fails. A requeued job of the same
+source takes over its own running run. Runs have no heartbeat, so set
+`EXTRACTION_RUN_STALE_S` above the longest expected extraction.
+
+Extractions made before runs existed are backfilled on the next check: processed
+evidence rows (or rows with knowledge records) get a `done` run, or `duplicate`
+when an earlier row already holds that content; the fingerprint is taken from
+stored extraction provenance, else `legacy`. Runs are history and are never
+deleted; no knowledge record or chunk is overwritten or removed.
+
+The UI shows **Trùng nội dung** in the list, a note linking the earlier source
+on the detail page, and duplicates separately in bulk results (they are
+unchecked because they would be refused again). Legacy voice API clients that
+extract in the API process are not checked when they start; their results are
+recorded by the backfill afterwards.
+
+## Near-duplicate content
+
+Re-recordings, edited copies and excerpts of a source are different content,
+so the exact fingerprint does not catch them. Before an extraction starts, its
+text is compared with the sources already extracted (`done` or live `running`
+run) **in the same KB and mode**:
+
+- **Shingles:** 5-word runs of the text after Unicode NFC, case folding and
+  removal of punctuation and `[Tnn] Speaker X:` turn labels.
+- **Candidates:** each extracted text keeps a MinHash signature (128
+  permutations) cut into 64 LSH bands of 2 rows in `content_signatures` (KB
+  database, GIN index on the bands). Sources sharing a band are candidates;
+  the 20 sharing the most bands are scored exactly from their texts.
+- **Scores:** Jaccard (shared / all shingles of both), containment (share of
+  the new text found in the earlier source) and coverage (share of the earlier
+  source found in the new text).
+
+| Level | Rule (default) | Effect |
+| --- | --- | --- |
+| `near_duplicate` | Jaccard ≥ `NEAR_DUPLICATE_JACCARD` (0.9) | Waits for confirmation |
+| `contained` | containment ≥ `NEAR_DUPLICATE_CONTAINMENT` (0.9) | Waits for confirmation |
+| `similar` | any score ≥ `NEAR_DUPLICATE_INFO` (0.6) | Information only |
+
+Thresholds are in (0, 1]; an out-of-range value stops the API/worker at start.
+Similarity is a warning, never a decision: nothing is merged, overwritten or
+discarded because of it, and embedding similarity is not used. Exact duplicates
+keep the policy above.
+
+The API answers 409 `near_duplicate` with `matches` (source name, kind, ID,
+status, mode, level and the three scores, at most 5, strongest first) and a
+message. Extract with `confirm_overlap: true` queues the job; the option is kept
+by the job (column `options`) through convert → extract. The extract worker
+checks again, because a raw upload has no text before conversion and another
+source can finish first. Without confirmation it completes without an LLM call
+and leaves `processing.status = "near_duplicate"` with `overlaps`; with
+confirmation it extracts and records `overlaps` and `overlap_confirmed`. Auto
+mode on upload queues the job anyway, so the worker decides. The confirmed
+result is a separate draft of the new source; consolidation still runs as for
+any extraction.
+
+The UI shows **Gần giống · chờ xác nhận** in the list, the matches with links
+and scores on the detail page with **Vẫn trích xuất** (confirmation dialog), and
+near-duplicates separately in bulk results (unchecked; confirm per source).
+Overlaps of a finished extraction are shown for information.
+
+Limitations: LSH finds a candidate reliably when Jaccard is at least ~0.2, so an
+excerpt of a source more than ~5x longer may be missed even when its
+containment is high. Rows extracted before signatures existed are all signed on
+the next check (in batches of 100), which makes the first check on a large KB
+slower. Signatures are not refreshed when an evidence text
+changes after extraction. Legacy voice API clients that extract in the API
+process are not checked.
+
+### Tuning thresholds on real data
+
+`backend/scripts/near_duplicate_report.py` is read-only: it loads the extracted
+texts of one KB, scores every pair of the same mode exactly and prints the score
+distribution and the top pairs with the level each would get at the current
+(or given) thresholds. It writes nothing.
+
+```sh
+uv run python -m backend.scripts.near_duplicate_report --kb general
+uv run python -m backend.scripts.near_duplicate_report --kb general --mode knowledge --top 30 --jaccard 0.85
+```
+
+Review the top pairs by hand: lower a threshold when real re-recordings fall
+below it; raise it when distinct cases (for example the same checklist on
+different machines) are flagged. Set the chosen values in `NEAR_DUPLICATE_*`.
+All pairs grow quadratically; use `--limit` on large KBs.
 
 ## Job queue and workers
 

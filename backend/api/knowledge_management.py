@@ -77,6 +77,8 @@ async def convert(request: Request, kb: str, source_id: UUID):
 
 class ExtractRequest(BaseModel):
     mode: Literal["knowledge", "documents"]
+    # Extract even though the content nearly matches an extracted source.
+    confirm_overlap: bool = False
 
 
 @router.post("/{kb}/sources/{kind}/{source_id}/extract", status_code=202)
@@ -84,7 +86,8 @@ async def extract(request: Request, kb: str, kind: Kind, source_id: str, body: E
     """Queues extraction; a raw upload is queued for conversion, then extraction."""
 
     manager = await service(request, kb)
-    queued = await result(manager.extract(kb, kind, normalized_id(kind, source_id), body.mode))
+    queued = await result(manager.extract(kb, kind, normalized_id(kind, source_id), body.mode,
+                                          confirm_overlap=body.confirm_overlap))
     return {"status": "queued", "mode": body.mode, **queued}
 
 

@@ -41,12 +41,18 @@ class UploadedDocument(StoredDocument):
 
 async def queue_processing(connection: HTTPConnection, kb: str, kind: str, source_id: str,
                            mode: str) -> tuple[dict[str, Any] | None, str | None]:
-    """Queues the full pipeline for a stored source; reports, not raises, a failure."""
+    """Queues the full pipeline for a stored source; reports, not raises, a failure.
+
+    Near-duplicate content is still queued: the worker marks the source for
+    the reviewer to confirm in Quản lý tri thức.
+    """
 
     try:
-        queued = await connection.app.state.knowledge_management.extract(kb, kind, source_id, mode)
+        queued = await connection.app.state.knowledge_management.extract(
+            kb, kind, source_id, mode, overlap_in_worker=True)
     except HTTPException as exc:
-        return None, str(exc.detail)
+        detail = exc.detail
+        return None, detail.get("message", str(detail)) if isinstance(detail, dict) else str(detail)
     except Exception:
         logger.warning("Could not queue processing of %s %s in KB %s", kind, source_id, kb, exc_info=True)
         return None, "Không xếp được job xử lý; nguồn đã lưu ở trạng thái Raw, hãy xử lý lại trong Quản lý tri thức."

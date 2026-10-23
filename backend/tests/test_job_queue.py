@@ -52,8 +52,8 @@ class QueueContract:
 
     async def test_enqueue_claim_and_chain_the_next_stage(self):
         job = await self.queue.enqueue("general", "convert", "upload", "a1", mode="documents",
-                                       next_stages=["extract"])
-        self.assertEqual((job.status, job.attempts), ("queued", 0))
+                                       next_stages=["extract"], options={"confirm_overlap": True})
+        self.assertEqual((job.status, job.attempts, job.options), ("queued", 0, {"confirm_overlap": True}))
         self.assertIsNone(await self.queue.claim("extract", "w1"))
         claimed = await self.queue.claim("convert", "w1")
         self.assertEqual((claimed.id, claimed.status, claimed.attempts, claimed.locked_by),
@@ -62,6 +62,9 @@ class QueueContract:
         following = await self.queue.complete(claimed, "w1", {"converter": "text"})
         self.assertEqual((following.stage, following.mode, following.parent_id, following.next_stages),
                          ("extract", "documents", job.id, ()))
+        # The reviewer's options apply to the whole pipeline.
+        self.assertEqual(following.options, {"confirm_overlap": True})
+        self.assertTrue(following.to_json()["confirm_overlap"])
         latest = await self.queue.latest("general")
         self.assertEqual(latest[("upload", "a1")].id, following.id)
         extract = await self.queue.claim("extract", "w2")

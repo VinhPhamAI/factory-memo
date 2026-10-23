@@ -17,10 +17,14 @@ from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from backend.api.voice_capture import VoiceCaptureService, default_ingestion_factory, record_json
-from backend.src.services.source_pipeline import NO_CONVERTER, SourcePipeline, open_documents
+from backend.src.services.source_pipeline import (
+    NO_CONVERTER, SourcePipeline, duplicate_message, open_documents, open_runs, overlap_message,
+)
+from backend.src.storage.content_signatures import CONFIRM_LEVELS
 from backend.src.services.voice_capture import CAPTURE_SOURCE_KINDS, MAX_TEXT_CHARS
 from backend.src.storage import KnowledgeStore, StorageError
 from backend.src.storage.document_uploads import DocumentUploadStore, text_convertible
+from backend.src.storage.extraction_runs import content_sha256
 from backend.src.storage.job_queue import Job, JobConflict, JobQueue
 from backend.src.storage.models import ConversationStatus, KnowledgeStatus
 
@@ -80,9 +84,9 @@ def job_state(state, job: Job | None, *, legacy_running=False, known=True):
 class KnowledgeManagementService(SourcePipeline):
     def __init__(self, specs, uploads: DocumentUploadStore, capture: VoiceCaptureService, *,
                  queue=None, open_store=KnowledgeStore.for_kb, open_document_store=open_documents,
-                 ingestion_factory=default_ingestion_factory):
+                 ingestion_factory=default_ingestion_factory, open_runs=open_runs, thresholds=None):
         super().__init__(specs, uploads, open_store=open_store, open_document_store=open_document_store,
-                         ingestion_factory=ingestion_factory)
+                         ingestion_factory=ingestion_factory, open_runs=open_runs, thresholds=thresholds)
         self.capture = capture
         self.queue = queue if queue is not None else JobQueue()
 
@@ -274,9 +278,10 @@ class KnowledgeManagementService(SourcePipeline):
 
     # ----------------------------------------------------------- requests
 
-    async def enqueue(self, kb, stage, kind, source_id, *, mode=None, next_stages=()):
+    async def enqueue(self, kb, stage, kind, source_id, *, mode=None, next_stages=(), options=None):
         try:
-            job = await self.queue.enqueue(kb, stage, kind, source_id, mode=mode, next_stages=next_stages)
+            job = await self.queue.enqueue(kb, stage, kind, source_id, mode=mode, next_stages=next_stages,
+                                           options=options)
         except JobConflict as exc:
             raise HTTPException(409, "This source is already being processed") from exc
         return {"job": job.to_json()}
@@ -293,10 +298,53 @@ class KnowledgeManagementService(SourcePipeline):
             raise HTTPException(422, NO_CONVERTER)
         return await self.enqueue(kb, "convert", "upload", source_id)
 
-    async def extract(self, kb, kind, source_id, mode):
-        """Queues extraction; a raw upload is converted first, in the same pipeline."""
+    async def check_duplicate(self, kb, mode, *, text=None, original=None, exclude=None):
+        """409 when this exact content (or upload bytes) was already extracted in this mode.
+
+        The worker checks again atomically when the job runs; this check only
+        spares the reviewer a job that would be skipped.
+        """
+
+        await self.backfill(kb)
+        runs = await self.runs(kb)
+        if text is not None:
+            run = await runs.find_active(content_sha256(text), mode, exclude=exclude)
+        else:
+            run = await runs.find_active_original(original, mode)
+        if run is None:
+            return
+        spec, store = self.spec(kb), await self.store(kb)
+        duplicate = await self.duplicate_info(kb, run, self.current_fingerprint(spec, store, mode))
+        raise HTTPException(409, {"code": "duplicate_content", "message": duplicate_message(duplicate),
+                                  "duplicate_of": duplicate})
+
+    async def check_overlap(self, kb, mode, text, *, confirmed, exclude=None, deferred=False):
+        """409 when the text nearly matches an extracted source, unless the reviewer confirmed.
+
+        Returns the matches to show next to the queued job (information only,
+        or confirmed). The worker checks again when the job runs; `deferred`
+        leaves the check to it, so the source records the warning (Auto mode).
+        """
+
+        if deferred:
+            return []
+        matches = await self.overlaps(kb, mode, text, exclude=exclude)
+        if not confirmed and any(match["level"] in CONFIRM_LEVELS for match in matches):
+            raise HTTPException(409, {"code": "near_duplicate", "message": overlap_message(matches),
+                                      "matches": matches})
+        return matches
+
+    async def extract(self, kb, kind, source_id, mode, *, confirm_overlap=False, overlap_in_worker=False):
+        """Queues extraction; a raw upload is converted first, in the same pipeline.
+
+        Content that nearly matches an extracted source needs `confirm_overlap`;
+        the option goes with the job (and its next stages) to the worker. With
+        `overlap_in_worker` (Auto mode, nobody to confirm now) the job is queued
+        and the worker marks the source `near_duplicate`.
+        """
 
         self.spec(kb)
+        options = {"confirm_overlap": True} if confirm_overlap else None
         if kind == "document":
             raise HTTPException(409, "This source is already extracted")
         store = await self.store(kb)
@@ -311,11 +359,17 @@ class KnowledgeManagementService(SourcePipeline):
                 if text is None:
                     if not text_convertible(upload):
                         raise HTTPException(409, NO_CONVERTER)
-                    return await self.enqueue(kb, "convert", "upload", source_id,
-                                              mode=mode, next_stages=("extract",))
+                    await self.check_duplicate(kb, mode, original=upload.sha256)
+                    # The text is not known before conversion; the worker checks overlaps.
+                    return await self.enqueue(kb, "convert", "upload", source_id, mode=mode,
+                                              next_stages=("extract",), options=options)
                 if mode == "knowledge" and len(text) > MAX_TEXT_CHARS:
                     raise HTTPException(422, f"Knowledge extraction accepts at most {MAX_TEXT_CHARS} characters")
-                return await self.enqueue(kb, "extract", "upload", source_id, mode=mode)
+                await self.check_duplicate(kb, mode, text=text)
+                overlaps = await self.check_overlap(kb, mode, text, confirmed=confirm_overlap,
+                                                    deferred=overlap_in_worker)
+                return {**await self.enqueue(kb, "extract", "upload", source_id, mode=mode, options=options),
+                        "overlaps": overlaps}
         else:
             row = await store.get_conversation(UUID(source_id))
             if row is None:
@@ -326,7 +380,11 @@ class KnowledgeManagementService(SourcePipeline):
             raise HTTPException(409, "This source already has extracted results; review them first")
         if mode == "knowledge" and len(row.transcript) > MAX_TEXT_CHARS:
             raise HTTPException(422, f"Knowledge extraction accepts at most {MAX_TEXT_CHARS} characters")
-        return await self.enqueue(kb, "extract", kind, source_id, mode=mode)
+        await self.check_duplicate(kb, mode, text=row.transcript, exclude=row.id)
+        overlaps = await self.check_overlap(kb, mode, row.transcript, confirmed=confirm_overlap, exclude=row.id,
+                                            deferred=overlap_in_worker)
+        return {**await self.enqueue(kb, "extract", kind, source_id, mode=mode, options=options),
+                "overlaps": overlaps}
 
     async def review_record(self, kb, record_id, decision, note):
         status = DECISIONS[decision]

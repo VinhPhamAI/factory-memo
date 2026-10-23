@@ -15,6 +15,17 @@ A handler raises `JobFailed` with a message for the reviewer; `retry` says
 whether trying again may help. A stage that already has results (a worker
 that died after saving them) completes without running again, so a retried
 job never duplicates knowledge or chunks.
+
+Each extraction is recorded as an extraction run (`extraction_runs`). Content
+that another evidence row already extracted (or is extracting) in the same
+mode is not extracted again: the job completes with the source marked
+`duplicate` and a link to the earlier source, without an LLM call.
+
+Content that nearly matches an extracted source in the same mode and KB (5-word
+shingle Jaccard or containment above the thresholds, `content_signatures.py`)
+is not extracted until the reviewer confirms: the job completes with the source
+marked `near_duplicate` and the matches, and a job queued with the option
+`confirm_overlap` extracts it. Smaller overlaps are recorded for information.
 """
 
 from __future__ import annotations
@@ -31,13 +42,22 @@ from backend.src.agents.rag.indexing import index_config
 from backend.src.services.knowledge_ingestion import transcript_sha256
 from backend.src.services.voice_capture import MAX_TEXT_CHARS
 from backend.src.storage import KnowledgeStore
+from backend.src.storage.content_signatures import (
+    CONFIRM_LEVELS, SIGNATURE_VERSION, Thresholds, overlap, shingles, signature,
+)
 from backend.src.storage.document_uploads import DocumentUploadStore, text_convertible
+from backend.src.storage.extraction_runs import (
+    LEGACY_FINGERPRINT, ExtractionRun, ExtractionRunStore, RunConflict,
+    content_sha256, extraction_fingerprint,
+)
 from backend.src.storage.job_queue import Job
 from backend.src.storage.models import ConversationStatus
 
 
 logger = logging.getLogger(__name__)
 
+OVERLAP_CANDIDATES = 20
+MAX_OVERLAPS = 5
 NO_CONVERTER = "Chưa có OCR/bộ chuyển đổi cho loại file này. File gốc đã được lưu."
 UNREADABLE_TEXT = "File không phải văn bản đọc được (UTF-8/UTF-16) hoặc rỗng; không thể chuyển đổi."
 
@@ -78,17 +98,49 @@ async def open_documents(spec):
     )
 
 
+async def open_runs(spec, store):
+    runs = ExtractionRunStore(store.engine, schema=store.schema)
+    await runs.init_schema()
+    return runs
+
+
+def duplicate_message(duplicate: dict[str, Any]) -> str:
+    name = duplicate.get("name") or duplicate.get("evidence_id")
+    if duplicate.get("status") == "running":
+        return f"Nội dung trùng với «{name}» đang được trích xuất; không trích xuất lặp."
+    if duplicate.get("same_logic") is False:
+        return (f"Nội dung trùng với «{name}» đã trích xuất bằng logic trích xuất cũ. "
+                "Trích xuất lại có xác nhận chưa được hỗ trợ.")
+    return f"Nội dung trùng với «{name}» đã được trích xuất; không trích xuất lặp."
+
+
+def overlap_message(matches: list[dict[str, Any]]) -> str:
+    match = matches[0]
+    name = match.get("name") or match.get("evidence_id")
+    if match["level"] == "near_duplicate":
+        found = f"gần như trùng với «{name}» (Jaccard {match['jaccard']:.0%})"
+    else:
+        found = f"là một phần của «{name}» ({match['containment']:.0%} nội dung nằm trong nguồn đó)"
+    more = f" và {len(matches) - 1} nguồn khác" if len(matches) > 1 else ""
+    return (f"Nội dung {found}{more}, nguồn đã được trích xuất. "
+            "Xác nhận nếu vẫn muốn trích xuất.")
+
+
 class SourcePipeline:
     def __init__(self, specs, uploads: DocumentUploadStore, *,
                  open_store=KnowledgeStore.for_kb, open_document_store=open_documents,
-                 ingestion_factory=default_ingestion_factory):
+                 ingestion_factory=default_ingestion_factory, open_runs=open_runs,
+                 thresholds: Thresholds | None = None):
         self.specs = dict(specs)
+        self.thresholds = thresholds or Thresholds.from_env()
         self.uploads = uploads
         self._open_store = open_store
         self._open_documents = open_document_store
+        self._open_runs = open_runs
         self._ingestion_factory = ingestion_factory
         self._stores: dict[str, Any] = {}
         self._documents: dict[str, Any] = {}
+        self._runs: dict[str, Any] = {}
         self._store_lock = asyncio.Lock()
 
     # ----------------------------------------------------------- lookup
@@ -117,6 +169,113 @@ class SourcePipeline:
             if kb not in self._documents:
                 self._documents[kb] = await self._open_documents(spec)
         return self._documents[kb]
+
+    async def runs(self, kb):
+        store = await self.store(kb)
+        async with self._store_lock:
+            if kb not in self._runs:
+                self._runs[kb] = await self._open_runs(self.spec(kb), store)
+        return self._runs[kb]
+
+    def extraction_settings(self, spec, store, mode):
+        """(settings, ingestion service or None) of the current extraction logic."""
+
+        if mode == "knowledge":
+            ingestion, provenance = self._ingestion_factory(spec, store)
+            return provenance, ingestion
+        return index_config(spec.chunking), None
+
+    def current_fingerprint(self, spec, store, mode) -> str | None:
+        try:
+            return extraction_fingerprint(mode, self.extraction_settings(spec, store, mode)[0])
+        except Exception:
+            # Only labels a duplicate as same or older logic; unknown is acceptable.
+            logger.warning("Could not build the %s extraction settings of %s", mode, spec.name)
+            return None
+
+    async def backfill(self, kb) -> int:
+        """Records extractions made before runs existed, or by the legacy capture path."""
+
+        spec, runs = self.spec(kb), await self.runs(kb)
+        rows = await runs.unrecorded()
+        for row in rows:
+            metadata = row.metadata
+            mode = (metadata.get("management") or {}).get("mode") or (
+                "knowledge" if row.has_knowledge or metadata.get("extraction") else spec.retrieval.value)
+            settings = metadata.get("extraction") if mode == "knowledge" else None
+            await runs.record_legacy(
+                evidence_id=row.id, content=content_sha256(row.transcript), mode=mode,
+                fingerprint=extraction_fingerprint(mode, settings) if settings else LEGACY_FINGERPRINT,
+                settings=settings or {}, original_sha256=metadata.get("original_sha256"),
+            )
+        return len(rows)
+
+    @staticmethod
+    def source_info(run: ExtractionRun, row) -> dict[str, Any]:
+        """The earlier extracted source of a run, for links shown to the reviewer."""
+
+        metadata = row.metadata if row is not None else {}
+        upload_id = metadata.get("upload_id")
+        return {
+            "run_id": str(run.id), "evidence_id": str(run.evidence_id), "status": run.status,
+            "mode": run.mode, "name": metadata.get("name") or metadata.get("filename") or str(run.evidence_id),
+            "kind": "upload" if upload_id else "conversation",
+            "source_id": upload_id or str(run.evidence_id),
+            "extracted_at": (run.finished_at or run.created_at).isoformat(),
+        }
+
+    async def duplicate_info(self, kb, run: ExtractionRun, fingerprint: str | None) -> dict[str, Any]:
+        """The earlier source that already covers this content, for the reviewer."""
+
+        row = await (await self.store(kb)).get_conversation(run.evidence_id)
+        return {**self.source_info(run, row),
+                "same_logic": None if fingerprint is None else run.fingerprint == fingerprint}
+
+    async def sign(self, kb, evidence_id, transcript) -> None:
+        signed = await asyncio.to_thread(signature, transcript)
+        await (await self.runs(kb)).put_signature(
+            evidence_id, content=content_sha256(transcript), version=SIGNATURE_VERSION,
+            shingle_count=len(signed.shingles), bands=signed.bands)
+
+    async def sign_extracted(self, kb) -> int:
+        """Signs extracted rows that have no signature yet (older rows, or a failed write)."""
+
+        runs, store, signed = await self.runs(kb), await self.store(kb), 0
+        while ids := await runs.unsigned(SIGNATURE_VERSION):
+            for evidence_id in ids:
+                row = await store.get_conversation(evidence_id)
+                await self.sign(kb, evidence_id, row.transcript if row is not None else "")
+                signed += 1
+        return signed
+
+    async def overlaps(self, kb, mode, text, *, exclude=None) -> list[dict[str, Any]]:
+        """Extracted sources in this KB and mode whose text overlaps `text`, strongest first.
+
+        Each match has its `level` (`near_duplicate` and `contained` need the
+        reviewer's confirmation; `similar` informs) and its exact scores.
+        """
+
+        await self.backfill(kb)
+        await self.sign_extracted(kb)
+        runs, store = await self.runs(kb), await self.store(kb)
+        new = await asyncio.to_thread(signature, text)
+        candidates = await runs.overlap_candidates(
+            new.bands, mode, version=SIGNATURE_VERSION, content=content_sha256(text),
+            exclude=exclude, limit=OVERLAP_CANDIDATES)
+        matches = []
+        for run, _ in candidates:
+            row = await store.get_conversation(run.evidence_id)
+            if row is None:
+                continue
+            scores = overlap(new.shingles, await asyncio.to_thread(shingles, row.transcript))
+            level = self.thresholds.level(scores)
+            if level:
+                matches.append({**self.source_info(run, row), "level": level,
+                                "jaccard": round(scores.jaccard, 3), "containment": round(scores.containment, 3),
+                                "coverage": round(scores.coverage, 3)})
+        matches.sort(key=lambda match: (match["level"] not in CONFIRM_LEVELS,
+                                        -max(match["jaccard"], match["containment"], match["coverage"])))
+        return matches[:MAX_OVERLAPS]
 
     async def has_results(self, kb, row) -> bool:
         if row.status is ConversationStatus.PROCESSED or await (await self.store(kb)).knowledge_for_evidence(row.id):
@@ -180,8 +339,12 @@ class SourcePipeline:
             row = await store.get_conversation(UUID(job.source_id))
             if row is None:
                 raise JobFailed("Không tìm thấy transcript của job.")
+        runs = await self.runs(job.kb)
         if await self.has_results(job.kb, row):
             # An earlier attempt saved its results before its worker stopped.
+            for run in await runs.for_evidence(row.id):
+                if run.status == "running":
+                    await runs.finish(run.id, "done", result={"recovered": True})
             await store.update_conversation_metadata(row.id, {"management": {
                 **(row.metadata.get("management") or {}), "status": "done", "mode": mode,
                 "job_id": str(job.id), "finished_at": now(),
@@ -190,13 +353,55 @@ class SourcePipeline:
         if mode == "knowledge" and len(row.transcript) > MAX_TEXT_CHARS:
             raise JobFailed(f"Trích xuất tri thức nhận tối đa {MAX_TEXT_CHARS} ký tự; hãy chọn chế độ document chunks.")
 
+        content = content_sha256(row.transcript)
         state: dict[str, Any] = {"status": "running", "mode": mode, "job_id": str(job.id),
                                  "attempt": job.attempts, "started_at": now()}
-        await store.update_conversation_metadata(row.id, {"management": state})
+        run = None
+
+        async def duplicate(earlier: ExtractionRun) -> dict[str, Any]:
+            # Same content already extracted from another source: no LLM call.
+            info = await self.duplicate_info(job.kb, earlier, fingerprint)
+            state.update(status="duplicate", finished_at=now(), duplicate_of=info)
+            await store.update_conversation_metadata(row.id, {"management": state, "content_sha256": content})
+            return {"evidence_id": str(row.id), "mode": mode, "skipped": "duplicate_content",
+                    "duplicate_of": info}
+
         try:
+            settings, ingestion = self.extraction_settings(spec, store, mode)
+            fingerprint = extraction_fingerprint(mode, settings)
+            await self.backfill(job.kb)
+            if earlier := await runs.find_active(content, mode, exclude=row.id):
+                return await duplicate(earlier)
+            overlaps = await self.overlaps(job.kb, mode, row.transcript, exclude=row.id)
+            confirm = [match for match in overlaps if match["level"] in CONFIRM_LEVELS]
+            if confirm and not job.options.get("confirm_overlap"):
+                # Nearly the same as an extracted source: wait for the reviewer.
+                state.update(status="near_duplicate", finished_at=now(), overlaps=overlaps)
+                await store.update_conversation_metadata(row.id, {"management": state, "content_sha256": content})
+                return {"evidence_id": str(row.id), "mode": mode, "skipped": "near_duplicate",
+                        "overlaps": overlaps}
+            if overlaps:
+                state["overlaps"] = overlaps
+            if confirm:
+                state["overlap_confirmed"] = True
+            try:
+                run = await runs.start(
+                    evidence_id=row.id, content=content, mode=mode, fingerprint=fingerprint,
+                    settings=settings, original_sha256=row.metadata.get("original_sha256"),
+                    job_id=str(job.id),
+                )
+            except RunConflict as exc:
+                return await duplicate(exc.run)
+            try:
+                await self.sign(job.kb, row.id, row.transcript)
+            except Exception:
+                # The next overlap check signs rows it finds unsigned.
+                logger.warning("Could not store the signature of %s", row.id, exc_info=True)
+            await store.update_conversation_metadata(row.id, {
+                "management": state, "content_sha256": content,
+                **({"extraction": settings} if mode == "knowledge" else {}),
+            })
             if mode == "knowledge":
-                ingestion, provenance = self._ingestion_factory(spec, store)
-                await store.update_conversation_metadata(row.id, {"extraction": provenance})
                 result = await ingestion.ingest_stored(row)
                 state.update(stored=len(result.records), merged=[{
                     "subject": record.subject, "claim": record.claim, "type": record.type.value,
@@ -216,7 +421,8 @@ class SourcePipeline:
                 state["stored"] = await documents.add_chunks(chunks)
                 await store.mark_conversation(row.id, ConversationStatus.PROCESSED)
         except asyncio.CancelledError:
-            # Shutdown: the job goes back to the queue and runs again.
+            # Shutdown: the job goes back to the queue and runs again; its rerun
+            # takes over the still-running run of this evidence row.
             state.update(status="interrupted", finished_at=now())
             await asyncio.shield(store.update_conversation_metadata(row.id, {"management": state}))
             raise
@@ -225,13 +431,18 @@ class SourcePipeline:
             message, _ = failure(exc)
             state.update(status="failed", finished_at=now(), error=message)
             await store.update_conversation_metadata(row.id, {"management": state})
+            if run is not None:
+                await runs.finish(run.id, "failed", error=message)
             raise
         state.update(status="done", finished_at=now())
+        await runs.finish(run.id, "done", result={"stored": state.get("stored", 0), "job_id": str(job.id)})
         await store.update_conversation_metadata(row.id, {"management": state})
         return {"evidence_id": str(row.id), "mode": mode, "stored": state.get("stored", 0)}
 
     async def aclose(self):
+        # Run stores share their knowledge store's engine.
         for store in [*self._stores.values(), *self._documents.values()]:
             await store.aclose()
         self._stores.clear()
         self._documents.clear()
+        self._runs.clear()

@@ -550,6 +550,7 @@ class VoiceCaptureApiTest(unittest.TestCase):
     def test_auto_recording_queues_extraction_for_the_workers(self) -> None:
         from backend.src.services.knowledge_management import KnowledgeManagementService
         from backend.src.storage.document_uploads import DocumentUploadStore
+        from backend.src.storage.extraction_runs import MemoryExtractionRunStore
         from backend.src.storage.job_queue import MemoryJobQueue
 
         queue = MemoryJobQueue()
@@ -557,9 +558,12 @@ class VoiceCaptureApiTest(unittest.TestCase):
         async def open_store(spec):
             return self.store
 
+        async def open_runs(spec, store):
+            return MemoryExtractionRunStore()
+
         manager = KnowledgeManagementService(
             {"general": get_kb("general")}, DocumentUploadStore(Path(self.tmp.name) / "uploads"),
-            self.service, queue=queue, open_store=open_store,
+            self.service, queue=queue, open_store=open_store, open_runs=open_runs,
         )
         self.client.__exit__(None, None, None)
         self.client = TestClient(create_app(voice_capture=self.service, knowledge_management=manager))

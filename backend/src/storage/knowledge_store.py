@@ -374,6 +374,10 @@ class KnowledgeStore:
         return self._engine
 
     @property
+    def schema(self) -> str:
+        return self._schema
+
+    @property
     def min_vector_similarity(self) -> float:
         return self._min_vector_similarity
 

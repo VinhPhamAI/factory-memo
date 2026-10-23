@@ -15,6 +15,8 @@ hint; workers also poll, so a missed notification delays a job but never loses i
 A running job keeps a heartbeat. A job whose worker stopped heartbeating (a
 crash or a killed container) is requeued, or failed after `max_attempts`.
 At most one job per source is queued or running (a unique partial index).
+`options` carry the reviewer's request to every stage of a pipeline (today
+only `confirm_overlap`: extract despite a near-duplicate warning).
 """
 
 from __future__ import annotations
@@ -88,6 +90,7 @@ class Job:
     error: str | None = None
     result: dict[str, Any] = field(default_factory=dict)
     parent_id: UUID | None = None
+    options: dict[str, Any] = field(default_factory=dict)
     locked_by: str | None = None
     started_at: datetime | None = None
     heartbeat_at: datetime | None = None
@@ -110,6 +113,7 @@ class Job:
         return {
             "id": str(self.id), "stage": self.stage, "status": self.status, "mode": self.mode,
             "next_stages": list(self.next_stages), "attempts": self.attempts,
+            "confirm_overlap": bool(self.options.get("confirm_overlap")),
             "max_attempts": self.max_attempts, "error": self.error,
             "created_at": iso(self.created_at), "started_at": iso(self.started_at),
             "finished_at": iso(self.finished_at),
@@ -212,6 +216,10 @@ class JobQueue:
                         )
                     """))
                     await conn.execute(text(
+                        f"ALTER TABLE {self._table} ADD COLUMN IF NOT EXISTS "
+                        "options jsonb NOT NULL DEFAULT '{}'::jsonb"
+                    ))
+                    await conn.execute(text(
                         f"CREATE UNIQUE INDEX IF NOT EXISTS {name}_active ON {self._table} "
                         "(kb, source_kind, source_id) WHERE status IN ('queued', 'running')"
                     ))
@@ -233,6 +241,7 @@ class JobQueue:
         values = dict(row)
         values["next_stages"] = tuple(values.get("next_stages") or ())
         values["result"] = values.get("result") or {}
+        values["options"] = values.get("options") or {}
         values.pop("updated_at", None)
         return Job(**values)
 
@@ -242,28 +251,31 @@ class JobQueue:
 
     async def _insert(self, conn, *, kb: str, stage: str, source_kind: str, source_id: str,
                       mode: str | None, next_stages: Sequence[str],
-                      parent_id: UUID | None = None) -> Job:
+                      parent_id: UUID | None = None, options: dict[str, Any] | None = None) -> Job:
         row = (await conn.execute(text(
             f"INSERT INTO {self._table} (id, kb, stage, source_kind, source_id, mode, "
-            "next_stages, max_attempts, parent_id) VALUES (:id, :kb, :stage, :source_kind, "
-            ":source_id, :mode, CAST(:next_stages AS jsonb), :max_attempts, :parent_id) "
-            "RETURNING *"
+            "next_stages, max_attempts, parent_id, options) VALUES (:id, :kb, :stage, :source_kind, "
+            ":source_id, :mode, CAST(:next_stages AS jsonb), :max_attempts, :parent_id, "
+            "CAST(:options AS jsonb)) RETURNING *"
         ), {
             "id": uuid4(), "kb": kb, "stage": stage, "source_kind": source_kind,
             "source_id": source_id, "mode": mode, "next_stages": json.dumps(list(next_stages)),
             "max_attempts": self.max_attempts, "parent_id": parent_id,
+            "options": json.dumps(options or {}),
         })).mappings().one()
         await self._notify(conn, stage, row["id"])
         return self._job(row)
 
     async def enqueue(self, kb: str, stage: str, source_kind: str, source_id: str, *,
-                      mode: str | None = None, next_stages: Sequence[str] = ()) -> Job:
+                      mode: str | None = None, next_stages: Sequence[str] = (),
+                      options: dict[str, Any] | None = None) -> Job:
         next_stages = _checked_job(kb, stage, source_kind, mode, next_stages)
         engine = await self._ensure()
         try:
             async with engine.begin() as conn:
                 return await self._insert(conn, kb=kb, stage=stage, source_kind=source_kind,
-                                          source_id=source_id, mode=mode, next_stages=next_stages)
+                                          source_id=source_id, mode=mode, next_stages=next_stages,
+                                          options=options)
         except IntegrityError as exc:
             raise JobConflict("This source already has a queued or running job") from exc
         except SQLAlchemyError as exc:
@@ -323,7 +335,7 @@ class JobQueue:
                 return await self._insert(
                     conn, kb=job.kb, stage=job.next_stages[0], source_kind=job.source_kind,
                     source_id=job.source_id, mode=job.mode, next_stages=job.next_stages[1:],
-                    parent_id=job.id,
+                    parent_id=job.id, options=job.options,
                 )
         except SQLAlchemyError as exc:
             raise StorageError(f"Could not complete job {job.id}: {exc}") from exc
@@ -484,22 +496,25 @@ class MemoryJobQueue:
             if stage in listener.stages:
                 listener.event.set()
 
-    def _insert(self, *, kb, stage, source_kind, source_id, mode, next_stages, parent_id=None) -> Job:
+    def _insert(self, *, kb, stage, source_kind, source_id, mode, next_stages, parent_id=None,
+                options=None) -> Job:
         if any(job.active and job.kb == kb and job.source == (source_kind, source_id)
                for job in self.jobs.values()):
             raise JobConflict("This source already has a queued or running job")
         now = self._now()
         job = Job(id=uuid4(), kb=kb, stage=stage, source_kind=source_kind, source_id=source_id,
                   mode=mode, next_stages=tuple(next_stages), status="queued", attempts=0,
-                  max_attempts=self.max_attempts, created_at=now, run_after=now, parent_id=parent_id)
+                  max_attempts=self.max_attempts, created_at=now, run_after=now, parent_id=parent_id,
+                  options=dict(options or {}))
         self.jobs[job.id] = job
         self._notify(stage)
         return job
 
-    async def enqueue(self, kb, stage, source_kind, source_id, *, mode=None, next_stages=()) -> Job:
+    async def enqueue(self, kb, stage, source_kind, source_id, *, mode=None, next_stages=(),
+                      options=None) -> Job:
         next_stages = _checked_job(kb, stage, source_kind, mode, next_stages)
         return self._insert(kb=kb, stage=stage, source_kind=source_kind, source_id=source_id,
-                            mode=mode, next_stages=next_stages)
+                            mode=mode, next_stages=next_stages, options=options)
 
     async def claim(self, stage, worker) -> Job | None:
         now = self._now()
@@ -536,7 +551,7 @@ class MemoryJobQueue:
         return self._insert(kb=current.kb, stage=current.next_stages[0],
                             source_kind=current.source_kind, source_id=current.source_id,
                             mode=current.mode, next_stages=current.next_stages[1:],
-                            parent_id=current.id)
+                            parent_id=current.id, options=current.options)
 
     async def fail(self, job, worker, error, *, retry) -> Job:
         current = self._owned(job, worker)

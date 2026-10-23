@@ -16,6 +16,14 @@ import {
 import type { KnowledgeBase } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   KnowledgePanel,
   TranscriptPanel,
 } from "@/components/knowledge/source-review";
@@ -33,17 +41,21 @@ import {
 } from "@/services/voice-display";
 import {
   convertManagedSource,
+  DuplicateContentError,
   extractManagedSource,
   getManagedSource,
   listManagedSources,
+  NearDuplicateError,
   originalDocumentUrl,
   reviewManagedChunk,
   sourceLink,
   withJob,
+  type DuplicateOf,
   type ExtractionMode,
   type ManagedChunk,
   type ManagedSource,
   type ManagedSourceDetail,
+  type OverlapMatch,
   type ProcessingState,
   type SourceJob,
   type SourceKind,
@@ -121,12 +133,178 @@ function JobNote({ processing }: { processing: ProcessingState }) {
   return null;
 }
 
+/** The earlier source that already holds the extraction of identical content. */
+function DuplicateNote({
+  kb,
+  duplicate,
+}: {
+  kb: string;
+  duplicate: DuplicateOf;
+}) {
+  const link = (
+    <Link
+      to={sourceLink({ kb, kind: duplicate.kind, id: duplicate.source_id })}
+    >
+      «{duplicate.name}»
+    </Link>
+  );
+  return (
+    <p className="vc-notice warn" role="status" data-testid="duplicate-note">
+      Nội dung trùng với {link}{" "}
+      {duplicate.status === "running"
+        ? "đang được trích xuất"
+        : `đã trích xuất lúc ${dateTime(duplicate.extracted_at)} (${MODES[duplicate.mode]})`}
+      {duplicate.same_logic === false
+        ? " bằng logic trích xuất cũ. Trích xuất lại có xác nhận chưa được hỗ trợ."
+        : ". Không trích xuất lặp; xem và duyệt kết quả ở nguồn đó."}
+    </p>
+  );
+}
+
+/** Labels after the earlier source's name: «ca-dem.txt» Chứa nội dung này. */
+const OVERLAP_LEVELS = {
+  near_duplicate: "Gần như trùng",
+  contained: "Chứa nội dung này",
+  similar: "Trùng một phần",
+};
+/** "<this source>: nằm trong «ca-dem.txt»" in the bulk result. */
+const OVERLAP_RELATIONS = {
+  near_duplicate: "gần như trùng với",
+  contained: "nằm trong",
+  similar: "trùng một phần với",
+};
+const percent = (value: number) => `${Math.round(value * 100)}%`;
+
+/** Scores of one match: Jaccard, and how much of each text the other holds. */
+function overlapScores(match: OverlapMatch) {
+  return `Jaccard ${percent(match.jaccard)} · ${percent(match.containment)} nội dung này nằm trong nguồn đó · nguồn đó có ${percent(match.coverage)} nằm ở đây`;
+}
+
+function OverlapList({ kb, matches }: { kb: string; matches: OverlapMatch[] }) {
+  return (
+    <ul data-testid="overlap-matches">
+      {matches.map((match) => (
+        <li key={match.run_id}>
+          <Link to={sourceLink({ kb, kind: match.kind, id: match.source_id })}>
+            «{match.name}»
+          </Link>{" "}
+          <strong>{OVERLAP_LEVELS[match.level]}</strong>
+          {match.status === "running" ? " (đang trích xuất)" : ""}:{" "}
+          <span className="vc-muted">{overlapScores(match)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Extracted sources whose text overlaps this one. A near-duplicate or
+ * contained match waits for the reviewer, who may still extract: the result
+ * is a separate draft, nothing is merged or overwritten. Similarity is only
+ * a warning; it never decides on its own.
+ */
+function OverlapNote({
+  kb,
+  processing,
+  busy,
+  onConfirm,
+}: {
+  kb: string;
+  processing: ProcessingState;
+  busy: boolean;
+  onConfirm(): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const matches = processing.overlaps ?? [];
+  if (processing.status === "near_duplicate" && matches.length)
+    return (
+      <div className="vc-notice warn" role="status" data-testid="overlap-note">
+        <p>
+          Chưa trích xuất: nội dung gần giống nguồn đã trích xuất
+          {processing.mode ? ` (${MODES[processing.mode]})` : ""}. Kiểm tra
+          nguồn đó trước để tránh tri thức lặp.
+        </p>
+        <OverlapList kb={kb} matches={matches} />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => setOpen(true)}
+          data-testid="confirm-overlap"
+        >
+          Vẫn trích xuất
+        </Button>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Vẫn trích xuất nguồn này?</DialogTitle>
+              <DialogDescription>
+                Kết quả là bản nháp riêng của nguồn này; nguồn cũ và tri thức đã
+                trích xuất không bị gộp hay ghi đè. Bản nháp vẫn cần duyệt.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOpen(false)}>
+                Hủy
+              </Button>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setOpen(false);
+                  onConfirm();
+                }}
+                data-testid="confirm-overlap-submit"
+              >
+                Vẫn trích xuất
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  // Overlaps recorded by the finished extraction: information only.
+  if (processing.status === "done" && matches.length)
+    return (
+      <div className="vc-muted" role="status" data-testid="overlap-info">
+        <p>
+          {processing.overlap_confirmed
+            ? "Đã trích xuất theo xác nhận dù nội dung gần giống:"
+            : "Nội dung có phần giống nguồn đã trích xuất (chỉ để tham khảo):"}
+        </p>
+        <OverlapList kb={kb} matches={matches} />
+      </div>
+    );
+  return null;
+}
+
 function SourceStatus({ source }: { source: ManagedSource }) {
   return (
     <div className="km-source-status">
       <span className={cn("km-stage", source.stage)}>
         {STAGES[source.stage]}
       </span>
+      {source.processing.status === "duplicate" && (
+        <span
+          className="vc-chip draft"
+          title={
+            source.processing.duplicate_of
+              ? `Trùng với «${source.processing.duplicate_of.name}»`
+              : undefined
+          }
+          data-testid="duplicate-chip"
+        >
+          Trùng nội dung
+        </span>
+      )}
+      {source.processing.status === "near_duplicate" && (
+        <span
+          className="vc-chip draft"
+          title="Chờ xác nhận trước khi trích xuất"
+          data-testid="near-duplicate-chip"
+        >
+          Gần giống · chờ xác nhận
+        </span>
+      )}
       {isRunning(source) ? (
         <span className="vc-muted" data-testid="source-progress">
           <Loader2 size={14} className="animate-spin" />{" "}
@@ -166,6 +344,10 @@ interface BulkResult {
   queued: number;
   skipped: number;
   failures: { name: string; error: string }[];
+  /** Refused: identical content was already extracted from another source. */
+  duplicates: { key: string; name: string; duplicateOf: DuplicateOf }[];
+  /** Waiting: nearly the same as an extracted source; confirm per source. */
+  nearDuplicates: { source: ManagedSource; matches: OverlapMatch[] }[];
 }
 
 /** Bulk Convert / Extract over the checked sources; both only queue jobs. */
@@ -198,9 +380,22 @@ function BulkActions({
     const results = await Promise.allSettled(targets.map(work));
     const queued: ManagedSource[] = [];
     const failures: BulkResult["failures"] = [];
+    const duplicates: BulkResult["duplicates"] = [];
+    const nearDuplicates: BulkResult["nearDuplicates"] = [];
     results.forEach((result, index) => {
       if (result.status === "fulfilled")
         queued.push(withJob(targets[index], result.value.job));
+      else if (result.reason instanceof DuplicateContentError)
+        duplicates.push({
+          key: key(targets[index]),
+          name: targets[index].name,
+          duplicateOf: result.reason.duplicateOf,
+        });
+      else if (result.reason instanceof NearDuplicateError)
+        nearDuplicates.push({
+          source: targets[index],
+          matches: result.reason.matches,
+        });
       else
         failures.push({
           name: targets[index].name,
@@ -213,6 +408,8 @@ function BulkActions({
       queued: queued.length,
       skipped: sources.length - targets.length,
       failures,
+      duplicates,
+      nearDuplicates,
     });
   }
 
@@ -277,13 +474,17 @@ function BulkActions({
   );
 }
 
-function BulkNotice({ result }: { result: BulkResult }) {
+function BulkNotice({ kb, result }: { kb: string; result: BulkResult }) {
   const verb = result.action === "convert" ? "chuyển đổi" : "trích xuất";
   return (
     <div
       className={cn(
         "vc-notice km-bulk-result",
-        result.failures.length ? "warn" : "ok",
+        result.failures.length ||
+          result.duplicates.length ||
+          result.nearDuplicates.length
+          ? "warn"
+          : "ok",
       )}
       role="status"
       data-testid="bulk-result"
@@ -294,6 +495,12 @@ function BulkNotice({ result }: { result: BulkResult }) {
           {result.skipped
             ? `; bỏ qua ${result.skipped} mục không hỗ trợ bước này`
             : ""}
+          {result.duplicates.length
+            ? `; ${result.duplicates.length} mục trùng nội dung đã trích xuất (không xếp hàng)`
+            : ""}
+          {result.nearDuplicates.length
+            ? `; ${result.nearDuplicates.length} mục gần giống nguồn đã trích xuất, chờ xác nhận (mở từng nguồn để xác nhận)`
+            : ""}
           {result.failures.length
             ? `; ${result.failures.length} mục lỗi (vẫn được chọn để thử lại):`
             : "."}
@@ -303,6 +510,51 @@ function BulkNotice({ result }: { result: BulkResult }) {
             {result.failures.map((failure) => (
               <li key={failure.name}>
                 {failure.name}: {failure.error}
+              </li>
+            ))}
+          </ul>
+        )}
+        {!!result.duplicates.length && (
+          <ul data-testid="bulk-duplicates">
+            {result.duplicates.map((item) => (
+              <li key={item.key}>
+                {item.name}: trùng với{" "}
+                <Link
+                  to={sourceLink({
+                    kb,
+                    kind: item.duplicateOf.kind,
+                    id: item.duplicateOf.source_id,
+                  })}
+                >
+                  «{item.duplicateOf.name}»
+                </Link>
+                {item.duplicateOf.status === "running"
+                  ? " (đang trích xuất)"
+                  : item.duplicateOf.same_logic === false
+                    ? " (logic trích xuất cũ)"
+                    : ""}
+              </li>
+            ))}
+          </ul>
+        )}
+        {!!result.nearDuplicates.length && (
+          <ul data-testid="bulk-near-duplicates">
+            {result.nearDuplicates.map(({ source, matches }) => (
+              <li key={key(source)}>
+                <Link to={sourceLink(source)}>{source.name}</Link>:{" "}
+                {OVERLAP_RELATIONS[matches[0].level]}{" "}
+                <Link
+                  to={sourceLink({
+                    kb,
+                    kind: matches[0].kind,
+                    id: matches[0].source_id,
+                  })}
+                >
+                  «{matches[0].name}»
+                </Link>
+                {matches.length > 1
+                  ? ` và ${matches.length - 1} nguồn khác`
+                  : ""}
               </li>
             ))}
           </ul>
@@ -412,10 +664,15 @@ export function KnowledgeManagementPage() {
     setSources((current) =>
       current.map((item) => byKey.get(key(item)) ?? item),
     );
-    // Failed items stay checked so they can be retried.
+    // Failed items stay checked so they can be retried; duplicates would be refused again
+    // and near-duplicates are confirmed one source at a time.
     setSelected((current) => {
       const remaining = new Set(current);
       byKey.forEach((_, itemKey) => remaining.delete(itemKey));
+      result.duplicates.forEach((item) => remaining.delete(item.key));
+      result.nearDuplicates.forEach((item) =>
+        remaining.delete(key(item.source)),
+      );
       return remaining;
     });
     setBulkResult(result);
@@ -542,7 +799,7 @@ export function KnowledgeManagementPage() {
           {warning}
         </p>
       ))}
-      {bulkResult && <BulkNotice result={bulkResult} />}
+      {bulkResult && <BulkNotice kb={kb} result={bulkResult} />}
       {!!visible.length && (
         <BulkActions
           key={qaMode}
@@ -727,7 +984,33 @@ export function KnowledgeSourcePage() {
       setSource((current) => current && withJob(current, job));
       refresh();
     } catch (reason) {
-      setError(errorText(reason));
+      if (reason instanceof DuplicateContentError)
+        setSource(
+          (current) =>
+            current && {
+              ...current,
+              processing: {
+                ...current.processing,
+                status: "duplicate",
+                duplicate_of: reason.duplicateOf,
+              },
+            },
+        );
+      else if (reason instanceof NearDuplicateError)
+        setSource(
+          (current) =>
+            current && {
+              ...current,
+              processing: {
+                ...current.processing,
+                status: "near_duplicate",
+                mode,
+                overlaps: reason.matches,
+                overlap_confirmed: undefined,
+              },
+            },
+        );
+      else setError(errorText(reason));
     } finally {
       setBusy(false);
     }
@@ -792,12 +1075,16 @@ export function KnowledgeSourcePage() {
   const counts = { draft: 0, approved: 0, deprecated: 0 };
   for (const item of [...source.records, ...source.chunks])
     counts[item.status]++;
+  const status = source.processing.status;
   const ingestion = {
     ...source.processing,
+    // The review panel knows job states only; a (near-)duplicate was not extracted here.
     status:
-      source.processing.status === "unavailable"
+      status === "unavailable"
         ? ("failed" as const)
-        : source.processing.status,
+        : status === "duplicate" || status === "near_duplicate"
+          ? ("off" as const)
+          : status,
   };
   const conversation: VoiceConversation = source.conversation
     ? {
@@ -952,6 +1239,26 @@ export function KnowledgeSourcePage() {
           </>
         )}
         <JobNote processing={source.processing} />
+        {source.processing.status === "duplicate" &&
+          source.processing.duplicate_of && (
+            <DuplicateNote kb={kb} duplicate={source.processing.duplicate_of} />
+          )}
+        <OverlapNote
+          kb={kb}
+          processing={source.processing}
+          busy={busy || running}
+          onConfirm={() =>
+            void action(() =>
+              extractManagedSource(
+                kb,
+                source.kind,
+                source.id,
+                source.processing.mode ?? mode,
+                { confirmOverlap: true },
+              ),
+            )
+          }
+        />
         {source.processing.status === "failed" &&
           !source.processing.job &&
           !source.processing.error && (

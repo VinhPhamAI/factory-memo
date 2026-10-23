@@ -7,7 +7,9 @@ import {
   LegacyCaptureReviewRedirect,
 } from "./knowledge-management";
 import type {
+  DuplicateOf,
   ManagedSourceDetail,
+  OverlapMatch,
   SourceJob,
 } from "@/services/knowledge-management";
 
@@ -26,6 +28,59 @@ const job = (overrides: Partial<SourceJob> = {}): SourceJob => ({
   retry_at: null,
   ...overrides,
 });
+
+const earlier = (overrides: Partial<DuplicateOf> = {}): DuplicateOf => ({
+  run_id: "run1",
+  evidence_id: "evidence0",
+  status: "done",
+  mode: "knowledge",
+  name: "ca-dem.txt",
+  kind: "upload",
+  source_id: "upload0",
+  same_logic: true,
+  extracted_at: "2026-10-22T00:00:00Z",
+  ...overrides,
+});
+
+const duplicateResponse = (duplicate: DuplicateOf) =>
+  Response.json(
+    {
+      detail: {
+        code: "duplicate_content",
+        message: `Nội dung này đã được trích xuất ở «${duplicate.name}».`,
+        duplicate_of: duplicate,
+      },
+    },
+    { status: 409 },
+  );
+
+const match = (overrides: Partial<OverlapMatch> = {}): OverlapMatch => ({
+  run_id: "run1",
+  evidence_id: "evidence0",
+  status: "done",
+  mode: "knowledge",
+  name: "ca-dem.txt",
+  kind: "upload",
+  source_id: "upload0",
+  extracted_at: "2026-10-22T00:00:00Z",
+  level: "near_duplicate",
+  jaccard: 0.94,
+  containment: 0.97,
+  coverage: 0.96,
+  ...overrides,
+});
+
+const nearDuplicateResponse = (matches: OverlapMatch[]) =>
+  Response.json(
+    {
+      detail: {
+        code: "near_duplicate",
+        message: `Nội dung gần như trùng với «${matches[0].name}».`,
+        matches,
+      },
+    },
+    { status: 409 },
+  );
 
 const rawText = (): ManagedSourceDetail => ({
   id: "upload1",
@@ -464,5 +519,255 @@ describe("knowledge management", () => {
       await screen.findByText(/Trích xuất lỗi \(lần thử 3\/3\)/),
     ).toBeInTheDocument();
     expect(screen.getByTestId("extract-source")).not.toBeDisabled();
+  });
+  it("reports identical content already extracted elsewhere instead of queueing it", async () => {
+    const raw = rawText();
+    const copy = {
+      ...rawText(),
+      id: "upload2",
+      name: "ca-dem (2).txt",
+      stage: "converted" as const,
+      processing: {
+        status: "duplicate" as const,
+        duplicate_of: earlier(),
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/knowledge-bases"))
+          return Response.json({
+            knowledge_bases: [{ name: "general", description: "General" }],
+          });
+        if (url.includes("/sources?"))
+          return Response.json({
+            sources: [raw, copy],
+            warnings: [],
+            next_offset: null,
+            qa_mode: "knowledge",
+          });
+        if (url.endsWith("/upload/upload1/extract"))
+          return duplicateResponse(earlier({ status: "running" }));
+        if (url.endsWith("/upload/upload2/extract"))
+          return duplicateResponse(earlier({ same_logic: false }));
+        throw new Error(`Unexpected request ${url}`);
+      }),
+    );
+    show("/knowledge");
+    await screen.findByText("notes.txt");
+    // The worker already skipped this copy; the chip names the earlier source.
+    expect(screen.getByTestId("duplicate-chip")).toHaveAttribute(
+      "title",
+      "Trùng với «ca-dem.txt»",
+    );
+    fireEvent.click(screen.getByTestId("select-all-sources"));
+    fireEvent.click(screen.getByTestId("bulk-extract"));
+
+    const result = await screen.findByTestId("bulk-result");
+    expect(result).toHaveTextContent(
+      "Đã xếp 0 job trích xuất vào hàng đợi; 2 mục trùng nội dung đã trích xuất (không xếp hàng).",
+    );
+    const items = screen.getByTestId("bulk-duplicates").querySelectorAll("li");
+    expect(items[0]).toHaveTextContent(
+      "notes.txt: trùng với «ca-dem.txt» (đang trích xuất)",
+    );
+    expect(items[1]).toHaveTextContent(
+      "ca-dem (2).txt: trùng với «ca-dem.txt» (logic trích xuất cũ)",
+    );
+    expect(items[0].querySelector("a")).toHaveAttribute(
+      "href",
+      "/knowledge/general/sources/upload/upload0",
+    );
+    // Duplicates would be refused again, so they are no longer checked.
+    const boxes = screen.getAllByTestId("select-source");
+    expect(boxes[0]).not.toBeChecked();
+    expect(boxes[1]).not.toBeChecked();
+  });
+
+  it("links the earlier source when Extract is refused as a duplicate", async () => {
+    const source = {
+      ...rawText(),
+      stage: "converted" as const,
+      text: "Ghi chú.",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/extract")) return duplicateResponse(earlier());
+        return Response.json(source);
+      }),
+    );
+    show("/knowledge/general/sources/upload/upload1");
+    fireEvent.click(await screen.findByTestId("extract-source"));
+    const note = await screen.findByTestId("duplicate-note");
+    expect(note).toHaveTextContent(
+      "Nội dung trùng với «ca-dem.txt» đã trích xuất lúc",
+    );
+    expect(note).toHaveTextContent(
+      "Không trích xuất lặp; xem và duyệt kết quả ở nguồn đó.",
+    );
+    expect(note.querySelector("a")).toHaveAttribute(
+      "href",
+      "/knowledge/general/sources/upload/upload0",
+    );
+    expect(screen.queryByText(/Nguồn đang được xử lý/)).toBeNull();
+  });
+
+  it("asks for confirmation before extracting content that nearly matches an extracted source", async () => {
+    const source = {
+      ...rawText(),
+      stage: "converted" as const,
+      text: "Ghi chú.",
+    };
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/extract")) {
+          const body = JSON.parse(String(init?.body));
+          bodies.push(body);
+          if (!body.confirm_overlap)
+            return nearDuplicateResponse([
+              match(),
+              match({
+                run_id: "run2",
+                name: "so-tay.txt",
+                source_id: "upload9",
+                level: "similar",
+                jaccard: 0.3,
+                containment: 0.65,
+                coverage: 0.31,
+              }),
+            ]);
+          return Response.json({
+            status: "queued",
+            mode: "knowledge",
+            job: job({ stage: "extract", mode: "knowledge", next_stages: [] }),
+          });
+        }
+        return Response.json(source);
+      }),
+    );
+    show("/knowledge/general/sources/upload/upload1");
+    fireEvent.click(await screen.findByTestId("extract-source"));
+    const note = await screen.findByTestId("overlap-note");
+    expect(note).toHaveTextContent(
+      "Chưa trích xuất: nội dung gần giống nguồn đã trích xuất (Knowledge items).",
+    );
+    const items = note.querySelectorAll("li");
+    expect(items[0]).toHaveTextContent(
+      "«ca-dem.txt» Gần như trùng: Jaccard 94% · 97% nội dung này nằm trong nguồn đó",
+    );
+    expect(items[1]).toHaveTextContent("«so-tay.txt» Trùng một phần");
+    expect(items[0].querySelector("a")).toHaveAttribute(
+      "href",
+      "/knowledge/general/sources/upload/upload0",
+    );
+    expect(screen.queryByText(/Nguồn đang được xử lý/)).toBeNull();
+
+    fireEvent.click(screen.getByTestId("confirm-overlap"));
+    expect(
+      await screen.findByText(/không bị gộp hay ghi đè/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("confirm-overlap-submit"));
+    await waitFor(() =>
+      expect(bodies).toEqual([
+        { mode: "knowledge" },
+        { mode: "knowledge", confirm_overlap: true },
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("overlap-note")).toBeNull(),
+    );
+  });
+
+  it("lists near-duplicates of a bulk Extract for confirmation per source", async () => {
+    const raw = rawText();
+    const waiting = {
+      ...rawText(),
+      id: "upload2",
+      name: "ca-dem (ghi lại).txt",
+      stage: "converted" as const,
+      processing: {
+        status: "near_duplicate" as const,
+        mode: "knowledge" as const,
+        overlaps: [match()],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/knowledge-bases"))
+          return Response.json({
+            knowledge_bases: [{ name: "general", description: "General" }],
+          });
+        if (url.includes("/sources?"))
+          return Response.json({
+            sources: [raw, waiting],
+            warnings: [],
+            next_offset: null,
+            qa_mode: "knowledge",
+          });
+        if (url.endsWith("/upload/upload1/extract"))
+          return Response.json({
+            status: "queued",
+            mode: "knowledge",
+            job: job({ mode: "knowledge" }),
+          });
+        if (url.endsWith("/upload/upload2/extract"))
+          return nearDuplicateResponse([
+            match({ level: "contained", jaccard: 0.4 }),
+            match({ run_id: "run2", name: "so-tay.txt" }),
+          ]);
+        throw new Error(`Unexpected request ${url}`);
+      }),
+    );
+    show("/knowledge");
+    await screen.findByText("notes.txt");
+    // The worker left this source waiting for confirmation.
+    expect(screen.getByTestId("near-duplicate-chip")).toHaveTextContent(
+      "Gần giống · chờ xác nhận",
+    );
+    fireEvent.click(screen.getByTestId("select-all-sources"));
+    fireEvent.click(screen.getByTestId("bulk-extract"));
+
+    const result = await screen.findByTestId("bulk-result");
+    expect(result).toHaveTextContent(
+      "Đã xếp 1 job trích xuất vào hàng đợi; 1 mục gần giống nguồn đã trích xuất, chờ xác nhận (mở từng nguồn để xác nhận).",
+    );
+    const item = screen.getByTestId("bulk-near-duplicates").querySelector("li");
+    expect(item).toHaveTextContent(
+      "ca-dem (ghi lại).txt: nằm trong «ca-dem.txt» và 1 nguồn khác",
+    );
+    expect(item?.querySelector("a")).toHaveAttribute(
+      "href",
+      "/knowledge/general/sources/upload/upload2",
+    );
+    const boxes = screen.getAllByTestId("select-source");
+    expect(boxes[1]).not.toBeChecked();
+  });
+
+  it("shows overlaps of a finished extraction as information only", async () => {
+    const source = {
+      ...rawText(),
+      stage: "extracted" as const,
+      text: "Ghi chú.",
+      processing: {
+        status: "done" as const,
+        mode: "knowledge" as const,
+        overlaps: [match()],
+        overlap_confirmed: true,
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(source)),
+    );
+    show("/knowledge/general/sources/upload/upload1");
+    const info = await screen.findByTestId("overlap-info");
+    expect(info).toHaveTextContent(
+      "Đã trích xuất theo xác nhận dù nội dung gần giống:",
+    );
+    expect(screen.queryByTestId("confirm-overlap")).toBeNull();
   });
 });
