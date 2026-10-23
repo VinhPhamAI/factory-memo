@@ -59,5 +59,13 @@ storage only. Listing, original downloads, text conversion, per-source extractio
 and human review are available separately in **Quản lý tri thức**; see the
 [management guide](knowledge-management.md). TXT files can be extracted directly
 without a manual Convert step. OCR for PDF/images/Office media is not implemented.
+
+**Auto mode.** With **Auto · chạy đến Extract** selected on the capture page, the
+upload also sends the form field `extract_mode` (`knowledge` or `documents`).
+The file is stored first, then a convert → extract pipeline is queued for the
+[job workers](knowledge-management.md#job-queue-and-workers); the response adds
+`job`. If nothing can be queued (no converter for the file type, or the queue is
+unavailable), the response keeps the stored upload and adds `job_error`; the file
+stays raw. Without `extract_mode` (**Chỉ lưu**) the upload stays raw as before.
 The legacy `POST /v1/voice/{kb}/texts` remains available for existing conversation
 clients; the document tab never calls it.

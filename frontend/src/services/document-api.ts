@@ -12,17 +12,22 @@ export interface StoredDocument {
   storage_key: string;
   uploaded_at: string;
   status: "stored";
+  /** Present only when Auto queued conversion and extraction. */
+  job?: { id: string; stage: string; status: string } | null;
+  job_error?: string | null;
 }
 
 export async function uploadDocument(
   kb: string,
   file: File,
+  extractMode?: "knowledge" | "documents" | null,
 ): Promise<StoredDocument> {
   if (!file.size) throw new Error("Tài liệu trống. Hãy chọn file có nội dung.");
   if (file.size > MAX_DOCUMENT_BYTES)
     throw new Error("Tài liệu quá lớn (tối đa 100 MiB mỗi file).");
   const data = new FormData();
   data.set("file", file);
+  if (extractMode) data.set("extract_mode", extractMode);
   let response: Response;
   try {
     response = await fetch(

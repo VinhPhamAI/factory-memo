@@ -20,10 +20,13 @@ function fileSize(bytes: number) {
 export function DocumentUpload({
   kb,
   disabled,
+  extractMode = null,
   onBusy,
 }: {
   kb: string;
   disabled: boolean;
+  /** Auto: queue conversion and extraction in this mode after each upload. */
+  extractMode?: "knowledge" | "documents" | null;
   onBusy(busy: boolean): void;
 }) {
   const [items, setItems] = useState<UploadItem[]>([]);
@@ -42,7 +45,7 @@ export function DocumentUpload({
         if (item.document) continue;
         setActive(index);
         try {
-          const document = await uploadDocument(kb, item.file);
+          const document = await uploadDocument(kb, item.file, extractMode);
           setItems((current) =>
             current.map((entry, i) =>
               i === index ? { file: entry.file, document } : entry,
@@ -97,8 +100,9 @@ export function DocumentUpload({
       <div className="vc-notice" role="note">
         <FileText size={18} />
         <p>
-          Tải lên chỉ lưu file gốc theo knowledge base. Chuyển đổi, trích xuất
-          và duyệt kết quả trong{" "}
+          {extractMode
+            ? "Auto: sau khi lưu file gốc, worker tự chuyển đổi và trích xuất. Theo dõi và duyệt kết quả trong "
+            : "Tải lên chỉ lưu file gốc theo knowledge base. Chuyển đổi, trích xuất và duyệt kết quả trong "}
           <Link to="/knowledge" className="link-button">
             Quản lý tri thức
           </Link>
@@ -122,6 +126,18 @@ export function DocumentUpload({
                   >
                     Xem / xử lý
                   </Link>
+                  {item.document.job && (
+                    <small data-testid="upload-job">
+                      {" "}
+                      · Đã xếp hàng chuyển đổi → trích xuất
+                    </small>
+                  )}
+                  {item.document.job_error && (
+                    <small className="vc-inline-error" data-testid="upload-job">
+                      {" "}
+                      · Chưa xếp được job tự động: {item.document.job_error}
+                    </small>
+                  )}
                 </span>
               ) : sending && active === index ? (
                 <span>Đang tải lên…</span>

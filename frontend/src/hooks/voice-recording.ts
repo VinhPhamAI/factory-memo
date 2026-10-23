@@ -4,7 +4,11 @@ import {
   micErrorFrom,
   MicRecorder,
 } from "@/services/mic-recorder";
-import { recordSocketUrl, uploadRecording } from "@/services/voice-api";
+import {
+  recordSocketUrl,
+  uploadRecording,
+  type SavedRecording,
+} from "@/services/voice-api";
 
 export interface LiveTurn {
   /** Same T01, T02 … numbering the server gives the saved transcript. */
@@ -29,7 +33,7 @@ export type ServerEvent =
   | { type: "turns"; turns: LiveTurn[] }
   | { type: "recognition_lost" }
   | { type: "saving" }
-  | { type: "saved"; conversation_id: string }
+  | ({ type: "saved" } & SavedRecording)
   | {
       type: "error";
       code: string;
@@ -80,6 +84,8 @@ export interface StartOptions {
   kb: string;
   name: string;
   clean: boolean;
+  /** Auto: queue extraction in this mode once the transcript is saved. */
+  extractMode?: "knowledge" | "documents" | null;
 }
 
 interface Session {
@@ -89,7 +95,7 @@ interface Session {
   sent: number;
   ready: boolean;
   recordedAt: Date;
-  saved?: (id: string) => void;
+  saved?: (saved: SavedRecording) => void;
   failed?: (message: string, canResend?: boolean) => void;
 }
 
@@ -113,7 +119,7 @@ class DefinitiveError extends Error {}
  * the browser; if the socket is gone at stop the whole WAV is uploaded, so
  * nothing said between Start and Stop is lost.
  */
-export function useVoiceRecording(onSaved: (conversationId: string) => void) {
+export function useVoiceRecording(onSaved: (saved: SavedRecording) => void) {
   const [phase, setPhase] = useState<RecordingPhase>("idle");
   const [transcript, setTranscript] = useState(emptyTranscript);
   const [seconds, setSeconds] = useState(0);
@@ -230,6 +236,7 @@ export function useVoiceRecording(onSaved: (conversationId: string) => void) {
             type: "start",
             name: current.options.name,
             clean: current.options.clean,
+            extract_mode: current.options.extractMode ?? null,
             sample_rate: current.mic.sampleRate,
           }),
         );
@@ -250,7 +257,7 @@ export function useVoiceRecording(onSaved: (conversationId: string) => void) {
         else if (event.type === "recognition_lost") setRecognitionLost(true);
         else if (event.type === "saving")
           setSavingNote("Đang chờ nhận dạng câu cuối…");
-        else if (event.type === "saved") current.saved?.(event.conversation_id);
+        else if (event.type === "saved") current.saved?.(event);
         else if (event.type === "error") {
           const text = serverErrorMessage(event);
           if (!opened) {
@@ -288,10 +295,10 @@ export function useVoiceRecording(onSaved: (conversationId: string) => void) {
     setSeconds(Math.floor(current.mic.sampleCount / current.mic.sampleRate));
     const socket = current.socket;
     try {
-      let conversationId: string;
+      let saved: SavedRecording;
       if (current.ready && socket?.readyState === WebSocket.OPEN) {
         sendPending(current);
-        conversationId = await new Promise<string>((resolve, reject) => {
+        saved = await new Promise<SavedRecording>((resolve, reject) => {
           const timer = setTimeout(
             () =>
               reject(
@@ -301,9 +308,9 @@ export function useVoiceRecording(onSaved: (conversationId: string) => void) {
               ),
             SAVE_TIMEOUT_MS,
           );
-          current.saved = (id) => {
+          current.saved = (event) => {
             clearTimeout(timer);
-            resolve(id);
+            resolve(event);
           };
           current.failed = (message, canResend = true) => {
             clearTimeout(timer);
@@ -317,16 +324,17 @@ export function useVoiceRecording(onSaved: (conversationId: string) => void) {
         // The live connection dropped: send the copy kept in the browser.
         setSavingNote("Đang gửi bản ghi từ trình duyệt và nhận dạng lại…");
         socket?.close();
-        conversationId = await uploadRecording(current.options.kb, {
+        saved = await uploadRecording(current.options.kb, {
           name: current.options.name,
           clean: current.options.clean,
           recordedAt: current.recordedAt,
           audio: current.mic.toWav(),
+          extractMode: current.options.extractMode,
         });
       }
       session.current = null;
       socket?.close();
-      savedCallback.current(conversationId);
+      savedCallback.current(saved);
     } catch (reason) {
       session.current = null;
       socket?.close();
@@ -347,14 +355,15 @@ export function useVoiceRecording(onSaved: (conversationId: string) => void) {
     setError("");
     setSavingNote("Đang gửi bản ghi từ trình duyệt và nhận dạng lại…");
     try {
-      const id = await uploadRecording(backup.options.kb, {
+      const saved = await uploadRecording(backup.options.kb, {
         name: backup.options.name,
         clean: backup.options.clean,
         recordedAt: backup.recordedAt,
         audio: backup.audio,
+        extractMode: backup.options.extractMode,
       });
       setBackup(null);
-      savedCallback.current(id);
+      savedCallback.current(saved);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setPhase("failed");

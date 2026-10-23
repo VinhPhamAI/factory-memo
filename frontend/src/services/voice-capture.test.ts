@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyTranscriptEvent,
   emptyTranscript,
@@ -7,7 +7,11 @@ import {
 import { kbNameProblem, suggestKbName } from "./knowledge-base-admin";
 import { encodeWav } from "./mic-recorder";
 import type { VoiceRecord } from "./voice-api";
-import { recordSocketUrl, typedTextProblem } from "./voice-api";
+import {
+  recordSocketUrl,
+  typedTextProblem,
+  uploadRecording,
+} from "./voice-api";
 import {
   claimText,
   clock,
@@ -195,5 +199,40 @@ describe("review display", () => {
       "done",
     ]);
     expect(states({ status: "failed" })[1]).toBe("failed");
+  });
+});
+
+describe("recording upload fallback", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("asks for Auto extraction only when a mode is chosen", async () => {
+    const forms: FormData[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        forms.push(init?.body as FormData);
+        return Response.json({
+          conversation_id: "c1",
+          job: { id: "j1", stage: "extract", status: "queued" },
+        });
+      }),
+    );
+    const form = {
+      name: "Ca đêm",
+      clean: false,
+      recordedAt: new Date("2026-10-23T00:00:00Z"),
+      audio: new Blob(["wav"]),
+    };
+    const saved = await uploadRecording("general", {
+      ...form,
+      extractMode: "knowledge",
+    });
+    expect(saved.job?.stage).toBe("extract");
+    await uploadRecording("general", form);
+    expect(forms.map((data) => data.get("extract_mode"))).toEqual([
+      "knowledge",
+      null,
+    ]);
+    expect(forms.every((data) => data.get("extract") === "false")).toBe(true);
   });
 });

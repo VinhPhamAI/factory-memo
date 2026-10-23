@@ -9,10 +9,13 @@ Live voice capture (React UI tab **Ghi âm**) records the microphone, transcribe
 it with the optional ASR + diarization service, stores the transcript as evidence
 and extracts draft knowledge for side-by-side review (see
 [voice capture](docs/voice-capture.md)). The **Tải lên tài liệu** tab stores original
-documents without automatic extraction (see [document uploads](docs/document-uploads.md)).
+documents (see [document uploads](docs/document-uploads.md)); its **Auto** option
+queues conversion and extraction right after saving.
 **Quản lý tri thức** tracks raw, converted and extracted sources, with per-source
 mode selection and shared review for transcripts, knowledge items and document
-chunks. TXT can be extracted directly without manual conversion. OCR is not yet
+chunks. Convert and Extract are queued jobs run by background workers
+(`uv run python -m backend.worker`, Compose service `worker`); Extract on a raw
+TXT converts it first. OCR is not yet
 implemented; see [knowledge management](docs/knowledge-management.md).
 Multimodal extraction, location awareness and
 QR identification are planned capabilities.
@@ -125,6 +128,18 @@ Document uploads use the separate Docker-managed `document_uploads` volume,
 mounted at `/app/data/uploads/`; host-run APIs default to `data/uploads/`.
 Rebuild with the same command after changing backend code or dependencies.
 
+**Job workers** run Convert/Extract jobs (Auto uploads and recordings, and the
+Convert/Extract buttons in **Quản lý tri thức**). Without a worker, jobs stay queued:
+
+```bash
+docker compose --env-file .env -f deployments/docker-compose.yml up -d --build worker
+docker compose -f deployments/docker-compose.yml logs -f worker
+```
+
+The `worker` service uses the API image and volumes and runs one process per
+stage slot (`WORKER_CONVERT_PROCESSES`, `WORKER_EXTRACT_PROCESSES`, default 1
+each). See [job queue and workers](docs/knowledge-management.md#job-queue-and-workers).
+
 Inside Compose, the API connects to `postgres:5432` and `speech-api:8080`;
 `API_DATABASE_URL` and `API_SPEECH_API_URL` override these defaults. For chat or
 embedding endpoints running on the Docker host, replace `localhost` in the
@@ -135,12 +150,13 @@ Speech is optional: prepare it with `deployments/speech/setup.sh`, then start it
 with `deployments/speech/up.sh` as above. After setup, the full stack can also be
 started with `docker compose --env-file .env -f deployments/docker-compose.yml
 --profile speech up -d --build`. Without that profile, `up -d --build` starts
-only the API and PostgreSQL. Document uploads and QA do not require speech.
+the API, the worker and PostgreSQL. Document uploads and QA do not require speech.
 
 **Alternative — API on the host:**
 
 ```bash
 uv run uvicorn backend.app:app --host 0.0.0.0 --port 8005
+uv run python -m backend.worker   # separate terminal; --convert N --extract M
 ```
 
 **Terminal 2 — React QA UI** (Node.js 22.12+, run from `frontend/`):

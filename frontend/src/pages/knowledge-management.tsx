@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -39,10 +39,13 @@ import {
   originalDocumentUrl,
   reviewManagedChunk,
   sourceLink,
+  withJob,
   type ExtractionMode,
   type ManagedChunk,
   type ManagedSource,
   type ManagedSourceDetail,
+  type ProcessingState,
+  type SourceJob,
   type SourceKind,
 } from "@/services/knowledge-management";
 import { cn } from "@/utils/cn";
@@ -59,10 +62,64 @@ const REVIEWS = {
   rejected: "Đã loại",
 };
 const MODES = { knowledge: "Knowledge items", documents: "Document chunks" };
+const MODE_OPTIONS = {
+  knowledge: "Knowledge items · Trích xuất tri thức bằng AI",
+  documents: "Document chunks · Chia đoạn văn bản",
+};
+const PROGRESS = {
+  convert: ["Đang chờ chuyển đổi", "Đang chuyển đổi"],
+  extract: ["Đang chờ trích xuất", "Đang trích xuất"],
+};
 const isRunning = (source: ManagedSource) =>
   ["queued", "running"].includes(source.processing.status ?? "");
+const canExtract = (source: ManagedSource) =>
+  source.kind !== "document" &&
+  (source.stage === "converted" ||
+    (source.stage === "raw" && source.can_extract_raw));
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+const key = (source: ManagedSource) => `${source.kind}:${source.id}`;
+
+/** "Đang chuyển đổi → sau đó trích xuất" while a job is queued or running. */
+function progressLabel(processing: ProcessingState) {
+  const job = processing.job;
+  const [queued, running] = PROGRESS[job?.stage ?? "extract"];
+  const label = processing.status === "queued" ? queued : running;
+  return job?.stage === "convert" && job.next_stages.includes("extract")
+    ? `${label} → sau đó trích xuất`
+    : label;
+}
+
+function failureLabel(processing: ProcessingState) {
+  if (processing.status === "interrupted") return "Bị gián đoạn";
+  if (processing.status === "unavailable") return "Không đọc được trạng thái";
+  return processing.job?.stage === "convert"
+    ? "Chuyển đổi lỗi"
+    : "Trích xuất lỗi";
+}
+
+/** Retry and failure details of the latest job. */
+function JobNote({ processing }: { processing: ProcessingState }) {
+  const job = processing.job;
+  if (job?.status === "queued" && job.retry_at)
+    return (
+      <p className="vc-muted" role="status">
+        Lần thử {job.attempts}/{job.max_attempts} lỗi
+        {job.error ? `: ${job.error}` : ""}. Tự thử lại lúc{" "}
+        {dateTime(job.retry_at)}.
+      </p>
+    );
+  if (processing.status === "failed" && processing.error)
+    return (
+      <p className="vc-inline-error">
+        {job
+          ? `${failureLabel(processing)} (lần thử ${job.attempts}/${job.max_attempts}): `
+          : ""}
+        {processing.error}
+      </p>
+    );
+  return null;
+}
 
 function SourceStatus({ source }: { source: ManagedSource }) {
   return (
@@ -71,13 +128,16 @@ function SourceStatus({ source }: { source: ManagedSource }) {
         {STAGES[source.stage]}
       </span>
       {isRunning(source) ? (
-        <span className="vc-muted">
-          <Loader2 size={14} className="animate-spin" /> Đang trích xuất
+        <span className="vc-muted" data-testid="source-progress">
+          <Loader2 size={14} className="animate-spin" />{" "}
+          {progressLabel(source.processing)}
         </span>
       ) : ["failed", "interrupted", "unavailable"].includes(
           source.processing.status ?? "",
         ) ? (
-        <span className="vc-inline-error">Xử lý lỗi / bị gián đoạn</span>
+        <span className="vc-inline-error">
+          {failureLabel(source.processing)}
+        </span>
       ) : null}
       {source.stage === "extracted" && (
         <span
@@ -97,17 +157,175 @@ function SourceStatus({ source }: { source: ManagedSource }) {
   );
 }
 
+/** A source the bulk Convert or Extract can queue now. */
+const isSelectable = (source: ManagedSource) =>
+  !isRunning(source) && (source.can_convert || canExtract(source));
+
+interface BulkResult {
+  action: "convert" | "extract";
+  queued: number;
+  skipped: number;
+  failures: { name: string; error: string }[];
+}
+
+/** Bulk Convert / Extract over the checked sources; both only queue jobs. */
+function BulkActions({
+  sources,
+  selectable,
+  defaultMode,
+  allSelected,
+  onToggleAll,
+  onQueued,
+}: {
+  sources: ManagedSource[];
+  selectable: number;
+  defaultMode: ExtractionMode;
+  allSelected: boolean;
+  onToggleAll(): void;
+  onQueued(sources: ManagedSource[], result: BulkResult): void;
+}) {
+  const [mode, setMode] = useState<ExtractionMode>(defaultMode);
+  const [busy, setBusy] = useState<BulkResult["action"]>();
+  const convertible = sources.filter((source) => source.can_convert);
+  const extractable = sources.filter(canExtract);
+
+  async function queue(
+    action: BulkResult["action"],
+    targets: ManagedSource[],
+    work: (source: ManagedSource) => Promise<{ job: SourceJob }>,
+  ) {
+    setBusy(action);
+    const results = await Promise.allSettled(targets.map(work));
+    const queued: ManagedSource[] = [];
+    const failures: BulkResult["failures"] = [];
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled")
+        queued.push(withJob(targets[index], result.value.job));
+      else
+        failures.push({
+          name: targets[index].name,
+          error: errorText(result.reason),
+        });
+    });
+    setBusy(undefined);
+    onQueued(queued, {
+      action,
+      queued: queued.length,
+      skipped: sources.length - targets.length,
+      failures,
+    });
+  }
+
+  return (
+    <div className="km-bulk" data-testid="bulk-actions">
+      <label className="km-bulk-all">
+        <input
+          type="checkbox"
+          checked={allSelected}
+          disabled={!selectable || !!busy}
+          onChange={onToggleAll}
+          aria-label="Chọn tất cả nguồn có thể xử lý"
+          data-testid="select-all-sources"
+        />
+        {sources.length ? `Đã chọn ${sources.length}` : "Chọn tất cả"}
+      </label>
+      <div className="km-bulk-actions">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!convertible.length || !!busy}
+          title="Chuyển các file đã chọn thành text"
+          onClick={() =>
+            void queue("convert", convertible, (source) =>
+              convertManagedSource(source.kb, source.id),
+            )
+          }
+          data-testid="bulk-convert"
+        >
+          {busy === "convert" && <Loader2 className="animate-spin" />}
+          Convert{convertible.length ? ` (${convertible.length})` : ""}
+        </Button>
+        <select
+          aria-label="Mode trích xuất cho các mục đã chọn"
+          value={mode}
+          disabled={!!busy}
+          onChange={(event) => setMode(event.target.value as ExtractionMode)}
+          data-testid="bulk-extraction-mode"
+        >
+          {Object.entries(MODE_OPTIONS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          disabled={!extractable.length || !!busy}
+          title="Raw được chuyển đổi trước rồi trích xuất"
+          onClick={() =>
+            void queue("extract", extractable, (source) =>
+              extractManagedSource(source.kb, source.kind, source.id, mode),
+            )
+          }
+          data-testid="bulk-extract"
+        >
+          {busy === "extract" && <Loader2 className="animate-spin" />}
+          Extract{extractable.length ? ` (${extractable.length})` : ""}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function BulkNotice({ result }: { result: BulkResult }) {
+  const verb = result.action === "convert" ? "chuyển đổi" : "trích xuất";
+  return (
+    <div
+      className={cn(
+        "vc-notice km-bulk-result",
+        result.failures.length ? "warn" : "ok",
+      )}
+      role="status"
+      data-testid="bulk-result"
+    >
+      <div>
+        <p>
+          Đã xếp {result.queued} job {verb} vào hàng đợi
+          {result.skipped
+            ? `; bỏ qua ${result.skipped} mục không hỗ trợ bước này`
+            : ""}
+          {result.failures.length
+            ? `; ${result.failures.length} mục lỗi (vẫn được chọn để thử lại):`
+            : "."}
+        </p>
+        {!!result.failures.length && (
+          <ul>
+            {result.failures.map((failure) => (
+              <li key={failure.name}>
+                {failure.name}: {failure.error}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function KnowledgeManagementPage() {
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
   const [kb, setKb] = useState("");
   const [sources, setSources] = useState<ManagedSource[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [next, setNext] = useState<number | null>(null);
+  const [qaMode, setQaMode] = useState<ExtractionMode>("knowledge");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [reload, setReload] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkResult, setBulkResult] = useState<BulkResult>();
 
   useEffect(() => {
     const abort = new AbortController();
@@ -141,34 +359,75 @@ export function KnowledgeManagementPage() {
   useEffect(() => {
     if (!kb) return;
     const abort = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
     setSources([]);
     setNext(null);
+    setSelected(new Set());
+    setBulkResult(undefined);
     setLoading(true);
     setError("");
-    const load = async () => {
-      try {
-        const inventory = await listManagedSources(kb, abort.signal);
-        if (abort.signal.aborted) return;
+    listManagedSources(kb, abort.signal)
+      .then((inventory) => {
         setSources(inventory.sources);
         setWarnings(inventory.warnings);
         setNext(inventory.next_offset);
+        setQaMode(inventory.qa_mode);
         setLoading(false);
-        if (inventory.sources.some(isRunning))
-          timer = setTimeout(() => void load(), 2000);
-      } catch (reason) {
+      })
+      .catch((reason) => {
         if (!abort.signal.aborted) {
           setError(errorText(reason));
           setLoading(false);
         }
-      }
-    };
-    void load();
+      });
+    return () => abort.abort();
+  }, [kb, reload]);
+
+  // While jobs are queued or running, refresh the first page in place.
+  const polling = sources.some(isRunning);
+  useEffect(() => {
+    if (!kb || !polling) return;
+    const abort = new AbortController();
+    const timer = setInterval(() => {
+      listManagedSources(kb, abort.signal)
+        .then((inventory) => {
+          const fresh = new Map(
+            inventory.sources.map((item) => [key(item), item]),
+          );
+          setSources((current) => [
+            ...inventory.sources,
+            ...current.filter((item) => !fresh.has(key(item))),
+          ]);
+          setWarnings(inventory.warnings);
+        })
+        .catch(() => undefined);
+    }, 2000);
     return () => {
       abort.abort();
-      clearTimeout(timer);
+      clearInterval(timer);
     };
-  }, [kb, reload]);
+  }, [kb, polling]);
+
+  function queued(updated: ManagedSource[], result: BulkResult) {
+    const byKey = new Map(updated.map((item) => [key(item), item]));
+    setSources((current) =>
+      current.map((item) => byKey.get(key(item)) ?? item),
+    );
+    // Failed items stay checked so they can be retried.
+    setSelected((current) => {
+      const remaining = new Set(current);
+      byKey.forEach((_, itemKey) => remaining.delete(itemKey));
+      return remaining;
+    });
+    setBulkResult(result);
+  }
+
+  function toggle(source: ManagedSource) {
+    setSelected((current) => {
+      const updated = new Set(current);
+      if (!updated.delete(key(source))) updated.add(key(source));
+      return updated;
+    });
+  }
 
   async function loadMore() {
     if (next === null || loading) return;
@@ -177,10 +436,7 @@ export function KnowledgeManagementPage() {
       const inventory = await listManagedSources(kb, undefined, next);
       setSources((current) => [
         ...new Map(
-          [...current, ...inventory.sources].map((item) => [
-            `${item.kind}:${item.id}`,
-            item,
-          ]),
+          [...current, ...inventory.sources].map((item) => [key(item), item]),
         ).values(),
       ]);
       setNext(inventory.next_offset);
@@ -199,6 +455,20 @@ export function KnowledgeManagementPage() {
         (filter === "pending" && source.review === "pending")) &&
       source.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
   );
+  // Actions apply to what is checked on screen: visible and still actionable.
+  const selectable = visible.filter(isSelectable);
+  const checked = selectable.filter((source) => selected.has(key(source)));
+  const allSelected =
+    !!selectable.length && checked.length === selectable.length;
+  function toggleAll() {
+    setSelected((current) => {
+      const updated = new Set(current);
+      selectable.forEach((source) =>
+        allSelected ? updated.delete(key(source)) : updated.add(key(source)),
+      );
+      return updated;
+    });
+  }
 
   return (
     <main className="vc-page km-page" data-testid="knowledge-management">
@@ -272,6 +542,18 @@ export function KnowledgeManagementPage() {
           {warning}
         </p>
       ))}
+      {bulkResult && <BulkNotice result={bulkResult} />}
+      {!!visible.length && (
+        <BulkActions
+          key={qaMode}
+          sources={checked}
+          selectable={selectable.length}
+          defaultMode={qaMode}
+          allSelected={allSelected}
+          onToggleAll={toggleAll}
+          onQueued={queued}
+        />
+      )}
       {loading && !sources.length ? (
         <p className="vc-muted">
           <Loader2 className="animate-spin" size={16} /> Đang tải dữ liệu…
@@ -289,7 +571,23 @@ export function KnowledgeManagementPage() {
       ) : (
         <ul className="km-source-list">
           {visible.map((source) => (
-            <li key={`${source.kind}:${source.id}`}>
+            <li key={key(source)} data-testid="managed-source">
+              <input
+                type="checkbox"
+                className="km-select"
+                aria-label={`Chọn ${source.name}`}
+                checked={isSelectable(source) && selected.has(key(source))}
+                disabled={!isSelectable(source)}
+                title={
+                  isSelectable(source)
+                    ? undefined
+                    : isRunning(source)
+                      ? "Đang xử lý"
+                      : "Không có bước Convert/Extract cho nguồn này"
+                }
+                onChange={() => toggle(source)}
+                data-testid="select-source"
+              />
               <div className="km-source-icon">
                 {source.source_kind === "voice_recording" ? (
                   <Mic />
@@ -312,6 +610,7 @@ export function KnowledgeManagementPage() {
                 {source.conversion_note && (
                   <p className="vc-muted">{source.conversion_note}</p>
                 )}
+                <JobNote processing={source.processing} />
                 {source.review === "pending" && (
                   <small>{source.counts.draft ?? 0} mục chờ duyệt</small>
                 )}
@@ -338,8 +637,10 @@ export function KnowledgeManagementPage() {
         </Button>
       )}
       <p className="vc-muted km-footnote">
-        Trạng thái xử lý và trạng thái duyệt được lưu riêng. “Extracted” chưa có
-        nghĩa là đã được chuyên gia duyệt.
+        Chọn các nguồn rồi bấm Convert hoặc Extract ở đầu danh sách; hai nút chỉ
+        xếp job, worker chạy nền theo thứ tự chuyển đổi → trích xuất (Extract
+        trên Raw tự chuyển đổi trước). Trạng thái xử lý và trạng thái duyệt được
+        lưu riêng. “Extracted” chưa có nghĩa là đã được chuyên gia duyệt.
       </p>
     </main>
   );
@@ -358,6 +659,8 @@ export function LegacyCaptureReviewRedirect() {
 export function KnowledgeSourcePage() {
   const { kb = "", kind = "", sourceId = "" } = useParams();
   const validKind = ["upload", "conversation", "document"].includes(kind);
+  // A capture that saved the source but could not queue Auto processing.
+  const notice = (useLocation().state as { notice?: string } | null)?.notice;
   const [source, setSource] = useState<ManagedSourceDetail>();
   const [mode, setMode] = useState<ExtractionMode>("knowledge");
   const [error, setError] = useState("");
@@ -375,11 +678,14 @@ export function KnowledgeSourcePage() {
   const refresh = useCallback(() => setReload((value) => value + 1), []);
 
   useEffect(() => {
+    setSource(undefined);
+    setError("");
+  }, [kb, kind, sourceId]);
+
+  useEffect(() => {
     if (!validKind) return;
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    setSource(undefined);
-    setError("");
     const load = async () => {
       try {
         const detail = await getManagedSource(
@@ -413,11 +719,12 @@ export function KnowledgeSourcePage() {
     };
   }, [kb, kind, sourceId, validKind, reload]);
 
-  async function action(work: () => Promise<unknown>) {
+  async function action(work: () => Promise<{ job: SourceJob }>) {
     setBusy(true);
     setError("");
     try {
-      await work();
+      const { job } = await work();
+      setSource((current) => current && withJob(current, job));
       refresh();
     } catch (reason) {
       setError(errorText(reason));
@@ -485,10 +792,17 @@ export function KnowledgeSourcePage() {
   const counts = { draft: 0, approved: 0, deprecated: 0 };
   for (const item of [...source.records, ...source.chunks])
     counts[item.status]++;
+  const ingestion = {
+    ...source.processing,
+    status:
+      source.processing.status === "unavailable"
+        ? ("failed" as const)
+        : source.processing.status,
+  };
   const conversation: VoiceConversation = source.conversation
     ? {
         ...source.conversation,
-        ingestion: source.processing,
+        ingestion,
       }
     : {
         id: source.evidence_id ?? source.id,
@@ -503,7 +817,7 @@ export function KnowledgeSourcePage() {
         speakers: [],
         turns: [],
         cleaning: { status: "off" },
-        ingestion: source.processing,
+        ingestion,
         records: source.records,
         merged_into: [],
       };
@@ -550,70 +864,7 @@ export function KnowledgeSourcePage() {
         ))}
       </ol>
       <section className="km-processing" aria-label="Xử lý nguồn dữ liệu">
-        {source.stage === "raw" && !source.can_extract_raw ? (
-          <>
-            <p>
-              {source.can_convert
-                ? "Chuyển file text thành bản văn bản để xem và trích xuất. File gốc được giữ nguyên."
-                : source.conversion_note}
-            </p>
-            {source.can_convert && (
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  void action(() => convertManagedSource(kb, source.id))
-                }
-                data-testid="convert-source"
-              >
-                {busy && <Loader2 className="animate-spin" />}Chuyển thành text
-              </Button>
-            )}
-          </>
-        ) : source.stage !== "extracted" ? (
-          <>
-            {source.can_extract_raw && (
-              <p>
-                File TXT đã là văn bản: có thể trích xuất trực tiếp, không cần
-                bước Convert.
-              </p>
-            )}
-            <label className="vc-field">
-              <span>Mode trích xuất cho nguồn này</span>
-              <select
-                value={mode}
-                disabled={busy || running}
-                onChange={(event) =>
-                  setMode(event.target.value as ExtractionMode)
-                }
-                data-testid="extraction-mode"
-              >
-                <option value="knowledge">
-                  Knowledge items · Trích xuất tri thức bằng AI
-                </option>
-                <option value="documents">
-                  Document chunks · Chia đoạn văn bản
-                </option>
-              </select>
-            </label>
-            <p className="vc-muted">
-              Mode được chọn riêng cho từng nguồn. Hỏi đáp vẫn dùng cấu hình
-              truy xuất của knowledge base; không phải mọi mode đều được tìm
-              kiếm trong mọi KB.
-            </p>
-            <Button
-              disabled={busy || running}
-              onClick={() =>
-                void action(() =>
-                  extractManagedSource(kb, source.kind, source.id, mode),
-                )
-              }
-              data-testid="extract-source"
-            >
-              {(busy || running) && <Loader2 className="animate-spin" />}
-              {running ? "Đang trích xuất…" : "Trích xuất"}
-            </Button>
-          </>
-        ) : (
+        {source.stage === "extracted" ? (
           <p>
             <strong>
               {counts.draft
@@ -623,16 +874,104 @@ export function KnowledgeSourcePage() {
             · {MODES[source.mode ?? "knowledge"]}. Đối chiếu với bằng chứng
             trước khi duyệt; mỗi quyết định được lưu lại.
           </p>
+        ) : (
+          <>
+            {running ? (
+              <p data-testid="source-progress">
+                <Loader2 size={16} className="animate-spin" />{" "}
+                <strong>{progressLabel(source.processing)}</strong>. Worker xử
+                lý nền; có thể rời trang này.
+              </p>
+            ) : source.stage === "raw" && !source.can_convert ? (
+              <p>{source.conversion_note}</p>
+            ) : source.stage === "raw" ? (
+              <p>
+                File TXT đã là văn bản: Trích xuất sẽ tự chuyển thành text rồi
+                trích xuất, không cần bước Convert. Convert chỉ tạo bản text để
+                xem trước. File gốc được giữ nguyên.
+              </p>
+            ) : null}
+            {canExtract(source) && (
+              <>
+                <label className="vc-field">
+                  <span>Mode trích xuất cho nguồn này</span>
+                  <select
+                    value={mode}
+                    disabled={busy || running}
+                    onChange={(event) =>
+                      setMode(event.target.value as ExtractionMode)
+                    }
+                    data-testid="extraction-mode"
+                  >
+                    {Object.entries(MODE_OPTIONS).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="vc-muted">
+                  Mode được chọn riêng cho từng nguồn. Hỏi đáp vẫn dùng cấu hình
+                  truy xuất của knowledge base; không phải mọi mode đều được tìm
+                  kiếm trong mọi KB.
+                </p>
+              </>
+            )}
+            {(source.can_convert || canExtract(source)) && (
+              <div className="km-actions">
+                {source.can_convert && (
+                  <Button
+                    variant="outline"
+                    disabled={busy || running}
+                    onClick={() =>
+                      void action(() => convertManagedSource(kb, source.id))
+                    }
+                    data-testid="convert-source"
+                  >
+                    Chuyển thành text
+                  </Button>
+                )}
+                {canExtract(source) && (
+                  <Button
+                    disabled={busy || running}
+                    onClick={() =>
+                      void action(() =>
+                        extractManagedSource(kb, source.kind, source.id, mode),
+                      )
+                    }
+                    data-testid="extract-source"
+                  >
+                    {(busy || running) && <Loader2 className="animate-spin" />}
+                    {source.stage === "raw"
+                      ? "Chuyển đổi & trích xuất"
+                      : "Trích xuất"}
+                  </Button>
+                )}
+              </div>
+            )}
+          </>
         )}
-        {source.processing.error && (
-          <p className="vc-inline-error">{source.processing.error}</p>
-        )}
+        <JobNote processing={source.processing} />
+        {source.processing.status === "failed" &&
+          !source.processing.job &&
+          !source.processing.error && (
+            <p className="vc-inline-error">Lần xử lý trước bị lỗi.</p>
+          )}
         {source.processing.status === "interrupted" && (
           <p className="vc-inline-error">
-            Lần xử lý trước bị gián đoạn. Có thể thử trích xuất lại.
+            Lần xử lý trước bị gián đoạn. Có thể chạy lại.
           </p>
         )}
+        {source.processing.status === "unavailable" &&
+          source.processing.error && (
+            <p className="vc-inline-error">{source.processing.error}</p>
+          )}
       </section>
+      {notice && (
+        <p className="vc-notice warn" role="status">
+          {notice}
+        </p>
+      )}
       {error && (
         <p className="vc-notice error" role="alert">
           {error}

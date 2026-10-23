@@ -76,6 +76,7 @@ router = APIRouter(prefix="/v1/voice", tags=["voice"])
 MAX_NAME_LENGTH = 120
 MAX_SPEAKER_NAME_LENGTH = 60
 MAX_UPLOAD_BYTES = 1 << 30
+ExtractMode = Literal["knowledge", "documents"]
 LIST_METADATA_KEYS = (
     "source_kind", "name", "recorded_at", "audio", "speakers", "cleaning", "ingestion",
 )
@@ -711,8 +712,13 @@ async def upload_recording(
     clean: Annotated[bool, Form()] = True,
     recorded_at: Annotated[datetime | None, Form()] = None,
     extract: Annotated[bool, Form()] = True,
-) -> dict[str, str]:
-    """A whole WAV recording, e.g. kept by the browser when the live socket dropped."""
+    extract_mode: Annotated[ExtractMode | None, Form()] = None,
+) -> dict[str, Any]:
+    """A whole WAV recording, e.g. kept by the browser when the live socket dropped.
+
+    `extract_mode` queues extraction for the job workers (Auto); `extract`
+    is the legacy in-process extraction, used only without a mode.
+    """
 
     service = _service(request)
     service.spec(kb)
@@ -747,7 +753,7 @@ async def upload_recording(
             clean=clean,
             capture_mode="upload", language=client.settings.language,
             endpointing_ms=client.settings.endpointing_ms,
-            extract=extract,
+            extract=extract and extract_mode is None,
         )
     except (SpeechServiceError, OSError) as exc:
         raise HTTPException(502, f"Speech recognition failed; the audio is kept as {path.name}") from exc
@@ -755,7 +761,18 @@ async def upload_recording(
         raise HTTPException(422, f"{exc}; the audio is kept as {path.name}")
     except StorageError as exc:
         raise _storage_error(exc)
-    return {"conversation_id": str(conversation_id)}
+    return {"conversation_id": str(conversation_id),
+            **await _queue_extraction(request, kb, conversation_id, extract_mode)}
+
+
+async def _queue_extraction(connection, kb: str, conversation_id: UUID,
+                            mode: str | None) -> dict[str, Any]:
+    if mode is None:
+        return {}
+    from backend.api.document_uploads import queue_processing
+
+    job, error = await queue_processing(connection, kb, "conversation", str(conversation_id), mode)
+    return {"job": job, "job_error": error}
 
 
 class TypedConversation(BaseModel):
@@ -791,7 +808,9 @@ class StartMessage(BaseModel):
     name: str
     sample_rate: int = Field(ge=8_000, le=96_000)
     clean: bool = True
+    # Legacy in-process extraction; ignored when `extract_mode` queues a job.
     extract: bool = True
+    extract_mode: ExtractMode | None = None
 
     @field_validator("name")
     @classmethod
@@ -880,7 +899,7 @@ async def record(websocket: WebSocket, kb: str) -> None:
             kb, name=start.name, recorded_at=started, recorder=recorder, outcome=outcome,
             clean=start.clean, capture_mode="live", language=client.settings.language,
             endpointing_ms=client.settings.endpointing_ms,
-            extract=start.extract,
+            extract=start.extract and start.extract_mode is None,
         )
     except EmptyRecordingError as exc:
         await fail(f"{exc}. The audio is kept as {recorder.path.name}.", "empty", recorder.path.name)
@@ -895,5 +914,6 @@ async def record(websocket: WebSocket, kb: str) -> None:
             recorder.path.name,
         )
         return
-    await send({"type": "saved", "conversation_id": str(conversation_id)})
+    await send({"type": "saved", "conversation_id": str(conversation_id),
+                **await _queue_extraction(websocket, kb, conversation_id, start.extract_mode)})
     await websocket.close()

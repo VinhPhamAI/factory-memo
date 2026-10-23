@@ -264,21 +264,34 @@ export function audioUrl(kb: string, id: string) {
 }
 
 /** Whole recording kept by the browser, sent when the live socket was lost. */
+/** Saved recording; `job`/`job_error` only when Auto queued extraction. */
+export interface SavedRecording {
+  conversation_id: string;
+  job?: { id: string; stage: string; status: string } | null;
+  job_error?: string | null;
+}
+
 export async function uploadRecording(
   kb: string,
-  form: { name: string; clean: boolean; recordedAt: Date; audio: Blob },
-): Promise<string> {
+  form: {
+    name: string;
+    clean: boolean;
+    recordedAt: Date;
+    audio: Blob;
+    extractMode?: "knowledge" | "documents" | null;
+  },
+): Promise<SavedRecording> {
   const data = new FormData();
   data.set("name", form.name);
   data.set("clean", String(form.clean));
   data.set("extract", "false");
+  if (form.extractMode) data.set("extract_mode", form.extractMode);
   data.set("recorded_at", form.recordedAt.toISOString());
   data.set("audio", form.audio, "recording.wav");
-  const body = await request<{ conversation_id: string }>(
-    `${kbPath(kb)}/recordings`,
-    { method: "POST", body: data },
-  );
-  return body.conversation_id;
+  return request<SavedRecording>(`${kbPath(kb)}/recordings`, {
+    method: "POST",
+    body: data,
+  });
 }
 
 export function recordSocketUrl(kb: string, origin = window.location) {

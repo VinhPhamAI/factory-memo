@@ -31,6 +31,10 @@ import { listKnowledgeBases } from "@/services/knowledge-api";
 const KB_KEY = "voice-capture:kb";
 const CLEAN_KEY = "voice-capture:clean";
 const MODE_KEY = "voice-capture:mode";
+const AUTO_KEY = "voice-capture:auto";
+const EXTRACT_MODE_KEY = "voice-capture:extract-mode";
+
+type ExtractMode = "knowledge" | "documents";
 
 type Mode = "voice" | "documents";
 
@@ -73,13 +77,22 @@ export function CapturePage() {
       ? "documents"
       : "voice",
   );
+  const [auto, setAuto] = useState(() => readSetting(AUTO_KEY) === "true");
+  const [extractMode, setExtractMode] = useState<ExtractMode>(() =>
+    readSetting(EXTRACT_MODE_KEY) === "documents" ? "documents" : "knowledge",
+  );
   const [sending, setSending] = useState(false);
   // Set just before navigating to the saved conversation, which the blocker allows.
   const saved = useRef(false);
-  const recording = useVoiceRecording((id) => {
+  const recording = useVoiceRecording((result) => {
     saved.current = true;
     void navigate(
-      `/knowledge/${encodeURIComponent(kb)}/sources/conversation/${id}`,
+      `/knowledge/${encodeURIComponent(kb)}/sources/conversation/${result.conversation_id}`,
+      {
+        state: result.job_error
+          ? { notice: queueNotice(result.job_error) }
+          : null,
+      },
     );
   });
   const live = recording.phase === "recording" || recording.phase === "saving";
@@ -138,7 +151,12 @@ export function CapturePage() {
     if (!canStart) return;
     writeSetting(KB_KEY, kb);
     writeSetting(CLEAN_KEY, String(clean));
-    void recording.start({ kb, name: trimmedName, clean });
+    void recording.start({
+      kb,
+      name: trimmedName,
+      clean,
+      extractMode: auto ? extractMode : null,
+    });
   }
 
   if (recording.phase === "recording" || recording.phase === "saving")
@@ -169,8 +187,8 @@ export function CapturePage() {
           <h1>{mode === "voice" ? "Ghi lại hội thoại" : "Tải lên tài liệu"}</h1>
           <p>
             {mode === "voice"
-              ? "Ghi âm trao đổi tại hiện trường. Sau khi lưu transcript, chọn cách trích xuất và duyệt trong Quản lý tri thức."
-              : "Lưu tài liệu và hình ảnh vào kho lưu trữ của knowledge base."}
+              ? "Ghi âm trao đổi tại hiện trường. Sau khi lưu transcript, trích xuất (hoặc để Auto chạy) và duyệt trong Quản lý tri thức."
+              : "Lưu tài liệu và hình ảnh vào kho lưu trữ của knowledge base. Chọn Auto để tự chuyển đổi và trích xuất sau khi tải lên."}
           </p>
         </header>
 
@@ -267,10 +285,25 @@ export function CapturePage() {
             )}
           </label>
 
+          <ProcessingChoice
+            auto={auto}
+            extractMode={extractMode}
+            disabled={recording.phase === "starting" || sending}
+            onAuto={(value) => {
+              setAuto(value);
+              writeSetting(AUTO_KEY, String(value));
+            }}
+            onExtractMode={(value) => {
+              setExtractMode(value);
+              writeSetting(EXTRACT_MODE_KEY, value);
+            }}
+          />
+
           {mode === "documents" ? (
             <DocumentUpload
               kb={kb}
               disabled={kbState !== "ready" || !kb}
+              extractMode={auto ? extractMode : null}
               onBusy={setSending}
             />
           ) : (
@@ -338,6 +371,78 @@ export function CapturePage() {
         />
       </div>
     </main>
+  );
+}
+
+const queueNotice = (error: string) =>
+  `Đã lưu nhưng chưa xếp được job trích xuất tự động: ${error}. Có thể trích xuất lại tại đây.`;
+
+/** "Chỉ lưu" keeps the source as stored; Auto queues conversion and extraction. */
+function ProcessingChoice({
+  auto,
+  extractMode,
+  disabled,
+  onAuto,
+  onExtractMode,
+}: {
+  auto: boolean;
+  extractMode: ExtractMode;
+  disabled: boolean;
+  onAuto(auto: boolean): void;
+  onExtractMode(mode: ExtractMode): void;
+}) {
+  return (
+    <fieldset className="vc-field vc-processing" disabled={disabled}>
+      <legend>Xử lý sau khi lưu</legend>
+      <div className="vc-mode" role="radiogroup" aria-label="Xử lý sau khi lưu">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!auto}
+          onClick={() => onAuto(false)}
+          data-testid="processing-store"
+        >
+          Chỉ lưu
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={auto}
+          onClick={() => onAuto(true)}
+          data-testid="processing-auto"
+        >
+          Auto · chạy đến Extract
+        </button>
+      </div>
+      {auto ? (
+        <>
+          <select
+            aria-label="Mode trích xuất"
+            value={extractMode}
+            onChange={(event) =>
+              onExtractMode(event.target.value as ExtractMode)
+            }
+            data-testid="capture-extract-mode"
+          >
+            <option value="knowledge">
+              Knowledge items · Trích xuất tri thức bằng AI
+            </option>
+            <option value="documents">
+              Document chunks · Chia đoạn văn bản
+            </option>
+          </select>
+          <small>
+            Worker chạy nền: chuyển thành text (nếu cần) rồi trích xuất. Kết quả
+            là bản nháp, cần duyệt trong Quản lý tri thức. File chưa có bộ
+            chuyển đổi (PDF, hình ảnh, Office) vẫn được lưu ở Raw.
+          </small>
+        </>
+      ) : (
+        <small>
+          Chỉ lưu dữ liệu; chuyển đổi và trích xuất sau trong Quản lý tri thức.
+        </small>
+      )}
+    </fieldset>
   );
 }
 

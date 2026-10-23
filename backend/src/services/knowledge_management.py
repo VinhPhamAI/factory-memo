@@ -1,26 +1,27 @@
-"""Inventory and processing of source evidence, independently of its capture UI."""
+"""Inventory, processing requests and review of source evidence.
+
+Processing runs in the job workers (`backend.worker`): this service validates
+a request, queues the first stage, and reports each source's latest job next
+to the state its handlers wrote.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import logging
 from collections import Counter
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from backend.api.voice_capture import VoiceCaptureService, default_ingestion_factory, record_json
-from backend.src.agents.rag import Document, DocumentStore, chunk_document
-from backend.src.agents.rag.indexing import index_config
-from backend.src.services.knowledge_ingestion import transcript_sha256
+from backend.src.services.source_pipeline import NO_CONVERTER, SourcePipeline, open_documents
 from backend.src.services.voice_capture import CAPTURE_SOURCE_KINDS, MAX_TEXT_CHARS
-from backend.src.storage import KnowledgeStore
+from backend.src.storage import KnowledgeStore, StorageError
 from backend.src.storage.document_uploads import DocumentUploadStore, text_convertible
+from backend.src.storage.job_queue import Job, JobConflict, JobQueue
 from backend.src.storage.models import ConversationStatus, KnowledgeStatus
 
 
@@ -58,61 +59,52 @@ def review_state(counts: dict[str, int], extracted: bool) -> str:
     return "reviewed"
 
 
-async def open_documents(spec):
-    return await DocumentStore.for_database(
-        spec.database, table=spec.document_table,
-        text_search_config=spec.text_search_config,
-        query_instruction=spec.embedding_query_instruction,
-    )
+def job_state(state, job: Job | None, *, legacy_running=False, known=True):
+    """Processing state of a source: the handlers' record, overlaid by its latest job."""
+
+    state = dict(state)
+    if job is not None:
+        state["job"] = job.to_json()
+        if job.active:
+            state.update(status=job.status, mode=job.mode or state.get("mode"), error=None)
+            return state
+        if job.status == "failed" and state.get("status") != "done":
+            state.update(status="failed", mode=job.mode or state.get("mode"), error=job.error)
+            return state
+    # A run whose job is gone (or a legacy in-process run that stopped with the API).
+    if state.get("status") in {"queued", "running"} and not legacy_running and known:
+        state["status"] = "interrupted"
+    return state
 
 
-class KnowledgeManagementService:
+class KnowledgeManagementService(SourcePipeline):
     def __init__(self, specs, uploads: DocumentUploadStore, capture: VoiceCaptureService, *,
-                 open_store=KnowledgeStore.for_kb, open_document_store=open_documents,
+                 queue=None, open_store=KnowledgeStore.for_kb, open_document_store=open_documents,
                  ingestion_factory=default_ingestion_factory):
-        self.specs = dict(specs)
-        self.uploads = uploads
+        super().__init__(specs, uploads, open_store=open_store, open_document_store=open_document_store,
+                         ingestion_factory=ingestion_factory)
         self.capture = capture
-        self._open_store = open_store
-        self._open_documents = open_document_store
-        self._ingestion_factory = ingestion_factory
-        self._stores: dict[str, Any] = {}
-        self._documents: dict[str, Any] = {}
-        self._jobs: dict[tuple[str, str], asyncio.Task] = {}
-        self._locks: dict[tuple[str, str], asyncio.Lock] = {}
-        self._store_lock = asyncio.Lock()
-
-    def add(self, spec):
-        self.specs[spec.name] = spec
+        self.queue = queue if queue is not None else JobQueue()
 
     def spec(self, kb):
         if kb not in self.specs:
             raise HTTPException(404, "Knowledge base not found")
         return self.specs[kb]
 
-    async def store(self, kb):
-        spec = self.spec(kb)
-        async with self._store_lock:
-            if kb not in self._stores:
-                self._stores[kb] = await self._open_store(spec)
-        return self._stores[kb]
+    async def jobs(self, kb, sources=None) -> tuple[dict, bool]:
+        """Latest job per source, and whether the queue could be read."""
 
-    async def documents(self, kb):
-        spec = self.spec(kb)
-        async with self._store_lock:
-            if kb not in self._documents:
-                self._documents[kb] = await self._open_documents(spec)
-        return self._documents[kb]
+        try:
+            return await self.queue.latest(kb, sources), True
+        except StorageError as exc:
+            logger.warning("Could not read processing jobs for %s: %s", kb, exc)
+        except Exception:
+            logger.warning("Could not read processing jobs for %s", kb, exc_info=True)
+        return {}, False
 
-    def lock(self, kb, source_id):
-        return self._locks.setdefault((kb, source_id), asyncio.Lock())
-
-    def processing(self, kb, row):
-        state = dict(row.metadata.get("management") or row.metadata.get("ingestion") or {})
-        running = (kb, str(row.id)) in self._jobs or self.capture.running(row.id, "ingestion")
-        if state.get("status") in {"queued", "running"} and not running:
-            state["status"] = "interrupted"
-        return state
+    def processing(self, kb, row, job=None, known=True):
+        state = row.metadata.get("management") or row.metadata.get("ingestion") or {}
+        return job_state(state, job, legacy_running=bool(self.capture.running(row.id, "ingestion")), known=known)
 
     def _summary(self, *, kb, kind, source_id, name, created_at, content_type,
                  converted, extracted, counts, mode=None, processing=None,
@@ -130,6 +122,9 @@ class KnowledgeManagementService:
     async def inventory(self, kb, offset=0):
         spec = self.spec(kb)
         items, warnings = [], []
+        jobs, known = await self.jobs(kb)
+        if not known:
+            warnings.append("Không đọc được hàng đợi xử lý; trạng thái job có thể chưa cập nhật.")
         uploads = await run_in_threadpool(self.uploads.list, kb)
         linked_ids = set()
         for upload in uploads:
@@ -137,7 +132,7 @@ class KnowledgeManagementService:
             if state.get("evidence_id"):
                 linked_ids.add(state["evidence_id"])
             if offset == 0:
-                items.append(await self.upload_summary(kb, upload, state))
+                items.append(await self.upload_summary(kb, upload, state, jobs.get(("upload", upload.id)), known))
         rows, docs = [], []
         try:
             store = await self.store(kb)
@@ -150,10 +145,9 @@ class KnowledgeManagementService:
                     continue
                 # List rows omit the transcript; it is loaded only in the detail view.
                 metadata = row["metadata"]
-                state = dict(metadata.get("management") or metadata.get("ingestion") or {})
-                running = (kb, str(row["id"])) in self._jobs or self.capture.running(row["id"], "ingestion")
-                if state.get("status") in {"queued", "running"} and not running:
-                    state["status"] = "interrupted"
+                state = job_state(metadata.get("management") or metadata.get("ingestion") or {},
+                                  jobs.get(("conversation", str(row["id"]))),
+                                  legacy_running=bool(self.capture.running(row["id"], "ingestion")), known=known)
                 counts = dict(row["knowledge_counts"])
                 if state.get("mode") == "documents":
                     chunks = await (await self.documents(kb)).get_document(str(row["id"]))
@@ -189,12 +183,12 @@ class KnowledgeManagementService:
                 "next_offset": offset + PAGE_SIZE if len(rows) == PAGE_SIZE or len(docs) == PAGE_SIZE else None,
                 "qa_mode": spec.retrieval.value}
 
-    async def upload_summary(self, kb, upload, state):
+    async def upload_summary(self, kb, upload, state, job=None, known=True):
         converted = state.get("conversion", {}).get("status") == "done"
-        processing, counts, extracted = {}, {}, False
+        processing, counts, extracted = job_state({}, job, known=known), {}, False
         if state.get("evidence_id"):
             try:
-                detail = await self.evidence_detail(kb, UUID(state["evidence_id"]))
+                detail = await self.evidence_detail(kb, UUID(state["evidence_id"]), job=job, known=known)
                 processing, counts = detail["processing"], detail["counts"]
                 extracted = detail["stage"] == "extracted"
             except Exception:
@@ -206,18 +200,22 @@ class KnowledgeManagementService:
             converted=converted, extracted=extracted, counts=counts,
             mode=processing.get("mode"), processing=processing,
             can_convert=not converted and convertible,
-            conversion_note=None if converted or convertible else "Chưa có OCR/bộ chuyển đổi cho loại file này. File gốc đã được lưu.",
+            conversion_note=None if converted or convertible else NO_CONVERTER,
             source_kind="document_upload",
         )
-        summary["can_extract_raw"] = not converted and Path(upload.filename).suffix.lower() == ".txt"
+        # Extract on a raw file queues conversion first, then extraction.
+        summary["can_extract_raw"] = not converted and convertible
         return summary
 
-    async def evidence_detail(self, kb, evidence_id):
+    async def evidence_detail(self, kb, evidence_id, *, job=None, known=None):
         store = await self.store(kb)
         row = await store.get_conversation(evidence_id)
         if row is None:
             raise HTTPException(404, "Source not found")
-        state = self.processing(kb, row)
+        if known is None:
+            jobs, known = await self.jobs(kb, [("conversation", str(row.id))])
+            job = jobs.get(("conversation", str(row.id)))
+        state = self.processing(kb, row, job, known)
         mode = state.get("mode") or "knowledge"
         records = await store.knowledge_for_evidence(row.id)
         chunks = await (await self.documents(kb)).get_document(str(row.id)) if mode == "documents" else []
@@ -263,107 +261,72 @@ class KnowledgeManagementService:
                     "conversation": None, "conversion_note": "Chỉ có chunks đã lập chỉ mục; bản gốc không nằm trong kho tài liệu tải lên."}
         upload = await run_in_threadpool(self.uploads.get, kb, source_id)
         state = await run_in_threadpool(self.uploads.processing, kb, source_id)
-        summary = await self.upload_summary(kb, upload, state)
+        jobs, known = await self.jobs(kb, [("upload", source_id)])
+        summary = await self.upload_summary(kb, upload, state, jobs.get(("upload", source_id)), known)
         if state.get("evidence_id"):
-            detail = await self.evidence_detail(kb, UUID(state["evidence_id"]))
+            detail = await self.evidence_detail(kb, UUID(state["evidence_id"]),
+                                                job=jobs.get(("upload", source_id)), known=known)
             return {**detail, **summary}
         text = await run_in_threadpool(self.uploads.converted_text, kb, source_id)
         return {**summary, "text": text[:PREVIEW_CHARS] if text is not None else None,
                 "text_truncated": text is not None and len(text) > PREVIEW_CHARS,
                 "records": [], "chunks": [], "conversation": None}
 
+    # ----------------------------------------------------------- requests
+
+    async def enqueue(self, kb, stage, kind, source_id, *, mode=None, next_stages=()):
+        try:
+            job = await self.queue.enqueue(kb, stage, kind, source_id, mode=mode, next_stages=next_stages)
+        except JobConflict as exc:
+            raise HTTPException(409, "This source is already being processed") from exc
+        return {"job": job.to_json()}
+
     async def convert(self, kb, source_id):
+        """Queues text conversion of an uploaded original (raw -> converted)."""
+
         self.spec(kb)
-        async with self.lock(kb, "upload:" + source_id):
-            await run_in_threadpool(self.uploads.convert_text, kb, source_id)
-        return await self.detail(kb, "upload", source_id)
+        upload = await run_in_threadpool(self.uploads.get, kb, source_id)
+        state = await run_in_threadpool(self.uploads.processing, kb, source_id)
+        if state.get("conversion", {}).get("status") == "done":
+            raise HTTPException(409, "This file is already converted")
+        if not text_convertible(upload):
+            raise HTTPException(422, NO_CONVERTER)
+        return await self.enqueue(kb, "convert", "upload", source_id)
 
     async def extract(self, kb, kind, source_id, mode):
+        """Queues extraction; a raw upload is converted first, in the same pipeline."""
+
         self.spec(kb)
         if kind == "document":
             raise HTTPException(409, "This source is already extracted")
-        async with self.lock(kb, kind + ":" + source_id):
-            store = await self.store(kb)
-            if kind == "upload":
-                upload = await run_in_threadpool(self.uploads.get, kb, source_id)
-                state = await run_in_threadpool(self.uploads.processing, kb, source_id)
+        store = await self.store(kb)
+        row = None
+        if kind == "upload":
+            upload = await run_in_threadpool(self.uploads.get, kb, source_id)
+            state = await run_in_threadpool(self.uploads.processing, kb, source_id)
+            if state.get("evidence_id"):
+                row = await store.get_conversation(UUID(state["evidence_id"]))
+            if row is None:
                 text = await run_in_threadpool(self.uploads.converted_text, kb, source_id)
-                if text is None and Path(upload.filename).suffix.lower() == ".txt":
-                    state = await run_in_threadpool(self.uploads.convert_text, kb, source_id)
-                    text = await run_in_threadpool(self.uploads.converted_text, kb, source_id)
                 if text is None:
-                    raise HTTPException(409, "Convert the original file to text first")
-                if state.get("evidence_id"):
-                    row = await store.get_conversation(UUID(state["evidence_id"]))
-                else:
-                    row = await store.add_conversation(text, metadata={
-                        "source_kind": "document_upload", "upload_id": upload.id,
-                        "name": upload.filename, "filename": upload.filename,
-                        "original_sha256": upload.sha256, "storage_key": upload.storage_key,
-                        "transcript_sha256": transcript_sha256(text),
-                    })
-                    state["evidence_id"] = str(row.id)
-                    await run_in_threadpool(self.uploads.update_processing, kb, source_id, state)
-            else:
-                row = await store.get_conversation(UUID(source_id))
+                    if not text_convertible(upload):
+                        raise HTTPException(409, NO_CONVERTER)
+                    return await self.enqueue(kb, "convert", "upload", source_id,
+                                              mode=mode, next_stages=("extract",))
+                if mode == "knowledge" and len(text) > MAX_TEXT_CHARS:
+                    raise HTTPException(422, f"Knowledge extraction accepts at most {MAX_TEXT_CHARS} characters")
+                return await self.enqueue(kb, "extract", "upload", source_id, mode=mode)
+        else:
+            row = await store.get_conversation(UUID(source_id))
             if row is None:
                 raise HTTPException(404, "Source not found")
-            key = (kb, str(row.id))
-            if key in self._jobs or self.capture.running(row.id, "ingestion"):
+            if self.capture.running(row.id, "ingestion"):
                 raise HTTPException(409, "Extraction is already running")
-            previous = row.metadata.get("management") or {}
-            if (row.status is ConversationStatus.PROCESSED
-                or await store.knowledge_for_evidence(row.id)
-                or (previous.get("mode") == "documents" and await (await self.documents(kb)).get_document(str(row.id)))):
-                raise HTTPException(409, "This source already has extracted results; review them first")
-            if mode == "knowledge" and len(row.transcript) > MAX_TEXT_CHARS:
-                raise HTTPException(422, f"Knowledge extraction accepts at most {MAX_TEXT_CHARS} characters")
-            await store.update_conversation_metadata(row.id, {"management": {"status": "queued", "mode": mode}})
-            task = asyncio.create_task(self._extract(kb, row, mode))
-            self._jobs[key] = task
-            def finished(task):
-                self._jobs.pop(key, None)
-                if not task.cancelled() and (error := task.exception()) is not None:
-                    logger.warning("Source processing task %s failed (%s)", row.id, type(error).__name__)
-            task.add_done_callback(finished)
-
-    async def _extract(self, kb, row, mode):
-        store = await self.store(kb)
-        started = now()
-        state = {"status": "running", "mode": mode, "started_at": started}
-        try:
-            await store.update_conversation_metadata(row.id, {"management": state})
-            if mode == "knowledge":
-                ingestion, provenance = self._ingestion_factory(self.spec(kb), store)
-                await store.update_conversation_metadata(row.id, {"extraction": provenance})
-                result = await ingestion.ingest_stored(row)
-                state.update(stored=len(result.records), merged=[{
-                    "subject": record.subject, "claim": record.claim, "type": record.type.value,
-                    "target": (record.revision.get("consolidation") or {}).get("target"),
-                } for record in result.merged])
-            else:
-                spec = self.spec(kb)
-                chunks = chunk_document(Document(
-                    id=str(row.id), text=row.transcript,
-                    title=row.metadata.get("name", ""), metadata={
-                        "evidence_id": str(row.id), "review_status": "draft", "created_at": started,
-                        "source_kind": row.metadata.get("source_kind", "text"),
-                        "upload_id": row.metadata.get("upload_id"),
-                        "transcript_sha256": transcript_sha256(row.transcript),
-                    }), spec.chunking)
-                documents = await self.documents(kb)
-                await documents.ensure_config(index_config(spec.chunking))
-                state["stored"] = await documents.add_chunks(chunks)
-                await store.mark_conversation(row.id, ConversationStatus.PROCESSED)
-            state.update(status="done", finished_at=now())
-        except asyncio.CancelledError:
-            state.update(status="interrupted", finished_at=now())
-            raise
-        except Exception as exc:
-            logger.warning("Source processing %s failed (%s)", row.id, type(exc).__name__)
-            state.update(status="failed", finished_at=now(), error=f"Xử lý thất bại ({type(exc).__name__}). Kiểm tra cấu hình dịch vụ rồi thử lại.")
-        finally:
-            await store.update_conversation_metadata(row.id, {"management": state})
+        if await self.has_results(kb, row):
+            raise HTTPException(409, "This source already has extracted results; review them first")
+        if mode == "knowledge" and len(row.transcript) > MAX_TEXT_CHARS:
+            raise HTTPException(422, f"Knowledge extraction accepts at most {MAX_TEXT_CHARS} characters")
+        return await self.enqueue(kb, "extract", kind, source_id, mode=mode)
 
     async def review_record(self, kb, record_id, decision, note):
         status = DECISIONS[decision]
@@ -391,9 +354,5 @@ class KnowledgeManagementService:
         return await self.detail(kb, kind, source_id)
 
     async def aclose(self):
-        tasks = list(self._jobs.values())
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        for store in [*self._stores.values(), *self._documents.values()]:
-            await store.aclose()
+        await super().aclose()
+        await self.queue.aclose()

@@ -547,6 +547,41 @@ class VoiceCaptureApiTest(unittest.TestCase):
         self.assertEqual(detail["records"], [])
         self.assertEqual(self.store.records, {})
 
+    def test_auto_recording_queues_extraction_for_the_workers(self) -> None:
+        from backend.src.services.knowledge_management import KnowledgeManagementService
+        from backend.src.storage.document_uploads import DocumentUploadStore
+        from backend.src.storage.job_queue import MemoryJobQueue
+
+        queue = MemoryJobQueue()
+
+        async def open_store(spec):
+            return self.store
+
+        manager = KnowledgeManagementService(
+            {"general": get_kb("general")}, DocumentUploadStore(Path(self.tmp.name) / "uploads"),
+            self.service, queue=queue, open_store=open_store,
+        )
+        self.client.__exit__(None, None, None)
+        self.client = TestClient(create_app(voice_capture=self.service, knowledge_management=manager))
+        self.client.__enter__()
+        with self.client.websocket_connect("/v1/voice/general/record") as socket:
+            socket.send_text(json.dumps({"type": "start", "name": "Ca sáng", "sample_rate": 16000,
+                                         "clean": False, "extract_mode": "knowledge"}))
+            self.assertEqual(socket.receive_json()["type"], "ready")
+            socket.send_bytes(b"\x00\x00" * 1600)
+            socket.send_text(json.dumps({"type": "stop"}))
+            while (saved := socket.receive_json())["type"] not in {"saved", "error"}:
+                pass
+        self.assertEqual(saved["type"], "saved", saved)
+        self.assertEqual((saved["job"]["stage"], saved["job"]["mode"], saved["job_error"]),
+                         ("extract", "knowledge", None))
+        # Nothing is extracted in the API process; the extract worker runs the job.
+        detail = self.client.get(f"/v1/voice/general/conversations/{saved['conversation_id']}").json()
+        self.assertEqual(detail["ingestion"]["status"], "off")
+        self.assertEqual(self.store.records, {})
+        (job,) = queue.jobs.values()
+        self.assertEqual((job.source_kind, job.source_id), ("conversation", saved["conversation_id"]))
+
     def test_typed_dialogue_is_stored_and_extracted_without_audio(self) -> None:
         response = self.client.post("/v1/voice/general/texts", json={
             "name": " Ca đêm ", "text": "Anh Minh: Trục Z kêu.\nChị Lan: Từ bao giờ?", "dialogue": True,

@@ -3814,6 +3814,16 @@ button.ref-chip:hover,
 .km-source-name { font-size: 16px; font-weight: 600; color: #16365e; overflow-wrap: anywhere; }
 .km-source-main p { margin: 6px 0; overflow-wrap: anywhere; font-size: 13px; }
 .km-source-main small { display: inline-block; margin-top: 8px; color: #946018; }
+.km-select { align-self: flex-start; margin-top: 12px; width: 18px; height: 18px; flex-shrink: 0; accent-color: #1263eb; cursor: pointer; }
+.km-select:disabled { cursor: not-allowed; opacity: .45; }
+.km-bulk { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 10px 20px; border: 1px solid #e1e8f3; border-radius: 12px; background: #f8fbff; }
+.km-bulk-all { display: flex; align-items: center; gap: 18px; font-size: 14px; font-weight: 600; color: #26364d; cursor: pointer; }
+.km-bulk-all input { width: 18px; height: 18px; accent-color: #1263eb; }
+.km-bulk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.km-bulk-actions select { max-width: 100%; min-width: 0; font-size: 13px; padding: 6px 8px; border: 1px solid #d7e1ef; border-radius: 8px; background: white; }
+.km-bulk-result { margin-bottom: 12px; }
+.km-bulk-result.ok { background: #edf8f1; color: #1f6340; border: 1px solid #cfe9d9; }
+.km-bulk-result ul { margin: 6px 0 0; padding-left: 18px; }
 .km-source-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .km-stage { border-radius: 6px; font-size: 12px; padding: 4px 8px; color: #52647c; background: #f0f3f8; }
 .km-stage.converted { background: #eaf2ff; color: #215cad; }
@@ -3844,7 +3854,7 @@ button.ref-chip:hover,
   .km-heading h1 { font-size: 23px; }
   .km-toolbar { grid-template-columns: 1fr; }
   .km-source-list > li { flex-wrap: wrap; gap: 12px; padding: 16px; }
-  .km-source-list > li > [data-slot="button"] { margin-left: 54px; }
+  .km-source-list > li > [data-slot="button"] { margin-left: 84px; }
   .km-lifecycle { flex-direction: column; gap: 7px; }
   .km-lifecycle li { padding: 10px 12px; }
   .km-processing { padding: 16px; }
@@ -4026,6 +4036,22 @@ button.ref-chip:hover,
 }
 .vc-kb-form textarea {
   min-height: 0;
+}
+.vc-processing {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.vc-processing legend {
+  padding: 0;
+  margin-bottom: 7px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #2f4566;
+}
+.vc-processing .vc-mode button {
+  min-height: 40px;
 }
 .vc-mode {
   display: grid;

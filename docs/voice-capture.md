@@ -3,8 +3,11 @@
 Live microphone recording in the React UI (`/capture`, tab **Ghi âm**), turned
 into stored transcript evidence. New UI recordings wait for per-source extraction
 mode selection and side-by-side review in **Quản lý tri thức** (`/knowledge`);
-see the [management guide](knowledge-management.md). Legacy API clients still
-extract automatically by default unless they send `extract=false`. The
+see the [management guide](knowledge-management.md), unless **Auto · chạy đến
+Extract** is selected: the recording then sends `extract_mode` and, once saved,
+an extraction job is queued for the [job workers](knowledge-management.md#job-queue-and-workers).
+Legacy API clients without `extract_mode` still extract in the API process by
+default unless they send `extract=false`. The
 same page offers **Tải lên tài liệu** for storage-only document uploads, independent
 of conversations; see [document uploads](document-uploads.md). The typed-text API
 remains available to existing clients (see [Typed text](#typed-text)).
@@ -157,8 +160,10 @@ the unauthenticated review UI.
 
 WebSocket events from the server: `ready`, `partial` (text appended to the
 utterance in progress), `final` (finished turns with speaker letters),
-`recognition_lost`, `saving`, `saved` (`conversation_id`), `error` (`code`,
-`message`, `audio_file`).
+`recognition_lost`, `saving`, `saved` (`conversation_id`; with `extract_mode`
+also `job` or `job_error`), `error` (`code`, `message`, `audio_file`). The WS
+`start` message and the `/recordings` form accept `extract_mode`
+(`knowledge|documents`); a queueing failure never loses the saved transcript.
 
 Settings: `VOICE_AUDIO_DIR`, `VOICE_VERIFY` (`off|quotes|llm`, default `quotes`),
 `VOICE_CONSOLIDATE` (default `true`), `CLEANING_*`, plus the `SPEECH_*` settings.
@@ -173,6 +178,6 @@ where that file omits `verify`/`consolidate`.
   been evaluated; diarization can split one person into two letters or flip a
   short word to another letter.
 - The microphone needs HTTPS or localhost.
-- Job progress is in memory; restarting the API interrupts running jobs (they can
-  be retried). There is no user authentication or per-user review identity.
+- Legacy in-process extraction and cleaning progress is in memory; restarting
+  the API interrupts them (they can be retried). Queued jobs survive restarts. There is no user authentication or per-user review identity.
 - Verification checks quotes against the transcript, not engineering correctness.

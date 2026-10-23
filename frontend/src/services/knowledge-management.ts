@@ -1,6 +1,7 @@
 import { apiBaseUrl } from "./config";
 import type {
   IngestionStatus,
+  JobState,
   ReviewStatus,
   VoiceConversation,
   VoiceRecord,
@@ -8,6 +9,32 @@ import type {
 
 export type SourceKind = "upload" | "conversation" | "document";
 export type ExtractionMode = "knowledge" | "documents";
+
+/** A queued stage for a source; the job workers run convert, then extract. */
+export interface SourceJob {
+  id: string;
+  stage: "convert" | "extract";
+  status: "queued" | "running" | "done" | "failed";
+  mode: ExtractionMode | null;
+  /** Stages queued automatically after this one (Extract on a raw file). */
+  next_stages: string[];
+  attempts: number;
+  max_attempts: number;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  /** Set while a failed attempt waits for its retry. */
+  retry_at: string | null;
+}
+
+export type ProcessingState = Omit<IngestionStatus, "status"> & {
+  /** "unavailable" when the evidence row could not be read. */
+  status?: JobState | "unavailable";
+  mode?: ExtractionMode;
+  job?: SourceJob;
+};
+
 export interface ManagedSource {
   id: string;
   kb: string;
@@ -19,7 +46,7 @@ export interface ManagedSource {
   mode: ExtractionMode | null;
   review: "none" | "pending" | "reviewed" | "rejected";
   counts: Partial<Record<ReviewStatus, number>>;
-  processing: IngestionStatus & { mode?: ExtractionMode };
+  processing: ProcessingState;
   can_convert: boolean;
   can_extract_raw: boolean;
   conversion_note?: string | null;
@@ -105,7 +132,7 @@ export const getManagedSource = (
   signal?: AbortSignal,
 ) => request<ManagedSourceDetail>(sourcePath(kb, kind, id), { signal });
 export const convertManagedSource = (kb: string, id: string) =>
-  request<ManagedSourceDetail>(`${sourcePath(kb, "upload", id)}/convert`, {
+  request<{ job: SourceJob }>(`${sourcePath(kb, "upload", id)}/convert`, {
     method: "POST",
   });
 export const extractManagedSource = (
@@ -114,11 +141,30 @@ export const extractManagedSource = (
   id: string,
   mode: ExtractionMode,
 ) =>
-  request(`${sourcePath(kb, kind, id)}/extract`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mode }),
-  });
+  request<{ status: "queued"; mode: ExtractionMode; job: SourceJob }>(
+    `${sourcePath(kb, kind, id)}/extract`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode }),
+    },
+  );
+
+/** The source as it looks right after a job was queued, until the next refresh. */
+export const withJob = <T extends ManagedSource>(
+  source: T,
+  job: SourceJob,
+): T => ({
+  ...source,
+  mode: job.mode ?? source.mode,
+  processing: {
+    ...source.processing,
+    status: job.status,
+    mode: job.mode ?? source.processing.mode,
+    error: undefined,
+    job,
+  },
+});
 export const reviewManagedChunk = (
   source: ManagedSource,
   chunkId: string,

@@ -2,7 +2,9 @@
 
 The **Quản lý tri thức** tab (`/knowledge`) is the shared source inventory and
 review workspace. **Thêm dữ liệu** (`/capture`) only captures microphone audio or
-uploads original files. It links to management after saving. Existing
+uploads original files. It links to management after saving. Its **Auto · chạy
+đến Extract** option queues the whole pipeline at save time instead (see
+[Job queue and workers](#job-queue-and-workers)). Existing
 `/capture/<kb>/<conversation_id>` bookmarks redirect to the shared workspace.
 
 ## Source lifecycle
@@ -15,8 +17,12 @@ Processing and human review are independent:
 | `converted` | Text is available: a microphone transcript, an existing text evidence record, or a strictly decoded text upload. |
 | `extracted` | Knowledge items or document chunks have been generated. Results still need human review. A completed run can also contain zero new items, e.g. consolidation only added support. |
 
-TXT uploads can go **directly from raw to extraction**. The extraction request
-reads UTF-8 (optionally with BOM) or BOM-marked UTF-16, preserves line endings,
+TXT uploads can go **directly from raw to extraction**. In the source list, check
+one or more sources (or **select all** visible ones) and use **Convert** or
+**Extract** in the bar above the list; Extract on a raw source queues conversion
+followed by extraction. Each button applies only to the checked sources that
+support that step and shows how many; running sources and sources without a
+converter cannot be checked. Sources whose request fails stay checked for a retry. Conversion reads UTF-8 (optionally with BOM) or BOM-marked UTF-16, preserves line endings,
 and saves a converted-text snapshot automatically. No manual Convert action is
 required. Invalid encodings, empty text and NUL-containing text are refused;
 original bytes remain intact. Other text formats (MD, CSV, TSV, JSON, XML, YAML,
@@ -45,8 +51,9 @@ Choose a mode **per source**, before extraction:
   configuration, then embeds and persists chunks. No LLM extraction is involved.
   A configuration with no word limit produces one full-document chunk.
 
-Extraction runs in the background, records status and the selected mode, and
-surfaces failures or interruptions. Retrying reuses the evidence ID. A source
+Convert and Extract only queue jobs (HTTP 202 with the job); the workers run
+them in the background, and the page shows the queued/running stage, scheduled
+retries and failures. Retrying reuses the evidence ID. A source
 with existing results cannot be extracted again or switched to another mode;
 its results remain available for review. This avoids silently replacing reviewed
 claims. New microphone captures made by the UI send `extract: false` and wait for
@@ -82,7 +89,7 @@ volume. Evidence and knowledge records use existing KB database tables. The
 `document_upload` evidence kind distinguishes an uploaded document from a
 conversation; it has no invented speakers or dialogue turns. Chunk metadata
 retains evidence IDs, original upload IDs, transcript hashes and review history.
-The UI does not implement user authentication or multi-worker job coordination.
+The UI does not implement user authentication.
 
 All endpoints below are under `/v1/knowledge-management/{kb}`:
 
@@ -91,8 +98,8 @@ All endpoints below are under `/v1/knowledge-management/{kb}`:
 | GET | `/sources?offset=0` | Source inventory and partial-availability warnings |
 | GET | `/sources/{kind}/{id}` | Source, text preview, processing and review results |
 | GET | `/sources/upload/{id}/original` | Download original bytes |
-| POST | `/sources/upload/{id}/convert` | Decode a supported text file |
-| POST | `/sources/{kind}/{id}/extract` | `{"mode":"knowledge"}` or `{"mode":"documents"}`; TXT can skip Convert |
+| POST | `/sources/upload/{id}/convert` | Queue decoding of a supported text file (202 `{job}`) |
+| POST | `/sources/{kind}/{id}/extract` | `{"mode":"knowledge"}` or `{"mode":"documents"}`; queues convert → extract for a raw upload (202 `{status, mode, job}`) |
 | POST | `/knowledge/{record_id}/review` | Knowledge decision and optional note |
 | POST | `/sources/{kind}/{id}/review-chunk` | Source-scoped chunk decision, chunk ID and optional note |
 
@@ -100,3 +107,49 @@ Kinds are `upload`, `conversation` (existing evidence-table IDs) and `document`
 (URL-safe token for an indexed document ID). The legacy voice review endpoints
 remain available for existing clients. Text previews are limited to 100,000
 characters; document chunk processing still reads the whole converted text.
+
+A queued or running job returns 409 for a second request on the same source.
+Source details include the latest job in `processing.job` (stage, status, mode,
+next stages, attempts, error and retry time).
+
+## Job queue and workers
+
+Each stage is a job row in `ingestion_jobs` in the `DATABASE_URL` database
+(shared by all KBs). The pattern is notify-consume:
+
+```text
+upload (Auto) / Extract on raw ─► convert job ─ NOTIFY ─► convert worker
+                                       │ done: next job in the same transaction
+                                       ▼
+          Extract on converted ─► extract job ─ NOTIFY ─► extract worker ─► draft items/chunks
+```
+
+- Enqueueing inserts the job and calls `pg_notify` on the stage's channel in one
+  transaction. Workers `LISTEN`, claim with `FOR UPDATE SKIP LOCKED` and also
+  poll (`WORKER_POLL_S`, default 15 s), so a missed notification only delays a job.
+- A job lists the stages that follow it. Completing it creates the next job in
+  the same transaction, so a pipeline neither stops between stages nor runs a
+  stage twice. A failed convert queues no extraction.
+- At most one queued/running job per source (unique partial index).
+- Running jobs heartbeat (`WORKER_HEARTBEAT_S`). A job without a heartbeat for
+  `WORKER_STALE_S` (a crashed worker or killed container) is requeued.
+  Transient errors retry with exponential backoff (`JOB_RETRY_DELAY_S`, up to
+  `JOB_MAX_ATTEMPTS`); a missing converter or unreadable text fails at once.
+  A stage whose results already exist completes without running again.
+- On SIGTERM a worker finishes its current job within
+  `WORKER_SHUTDOWN_GRACE_S` or hands it back to the queue.
+
+Workers run in one container (Compose service `worker`, same image as the API)
+with a supervisor and one process per stage slot:
+
+```sh
+uv run python -m backend.worker                     # convert x1, extract x1
+uv run python -m backend.worker --convert 1 --extract 2
+uv run python -m backend.worker --stage extract     # one worker, no supervisor
+```
+
+`WORKER_CONVERT_PROCESSES`/`WORKER_EXTRACT_PROCESSES` set the default counts;
+several worker containers can share the queue. Without a running worker, jobs
+stay queued. Conversion covers plain-text uploads only; OCR and speech-to-text
+for uploaded media are not implemented, so such files stay raw. Legacy voice API
+clients that do not send `extract_mode` still extract in the API process.

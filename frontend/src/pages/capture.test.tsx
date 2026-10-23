@@ -142,4 +142,72 @@ describe("document upload tab", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("queues conversion and extraction for each upload in Auto mode", async () => {
+    const modes: (string | null)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/knowledge-bases")) return Response.json(kbs);
+        const form = init?.body as FormData;
+        const file = form.get("file") as File;
+        modes.push(form.get("extract_mode") as string | null);
+        return Response.json(
+          file.name === "manual.pdf"
+            ? {
+                id: "pdf1",
+                kb: "general",
+                status: "stored",
+                job_error: "Chưa có OCR/bộ chuyển đổi cho loại file này.",
+              }
+            : {
+                id: "txt1",
+                kb: "general",
+                status: "stored",
+                job: { id: "job1", stage: "convert", status: "queued" },
+              },
+          { status: 201 },
+        );
+      }),
+    );
+    localStorage.setItem("voice-capture:mode", "documents");
+    showCapture();
+    await waitFor(() =>
+      expect(screen.getByTestId("capture-kb")).not.toBeDisabled(),
+    );
+    expect(screen.getByTestId("processing-store")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(screen.getByTestId("processing-auto"));
+    fireEvent.change(screen.getByTestId("capture-extract-mode"), {
+      target: { value: "documents" },
+    });
+    fireEvent.change(screen.getByTestId("document-files"), {
+      target: {
+        files: [
+          new File(["notes"], "notes.txt"),
+          new File(["%PDF"], "manual.pdf"),
+        ],
+      },
+    });
+    fireEvent.click(screen.getByTestId("document-upload"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("upload-job")).toHaveLength(2),
+    );
+    const [queued, failed] = screen.getAllByTestId("upload-job");
+    expect(queued).toHaveTextContent("Đã xếp hàng chuyển đổi → trích xuất");
+    expect(failed).toHaveTextContent("Chưa có OCR");
+    expect(modes).toEqual(["documents", "documents"]);
+    expect(localStorage.getItem("voice-capture:auto")).toBe("true");
+
+    // "Chỉ lưu" uploads the original only.
+    fireEvent.click(screen.getByTestId("processing-store"));
+    fireEvent.change(screen.getByTestId("document-files"), {
+      target: { files: [new File(["more"], "more.txt")] },
+    });
+    fireEvent.click(screen.getByTestId("document-upload"));
+    await waitFor(() => expect(modes).toHaveLength(3));
+    expect(modes[2]).toBeNull();
+  });
 });

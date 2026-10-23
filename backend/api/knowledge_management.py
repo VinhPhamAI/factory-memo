@@ -67,8 +67,10 @@ async def original(request: Request, kb: str, source_id: UUID):
                         filename=document.filename, media_type="application/octet-stream")
 
 
-@router.post("/{kb}/sources/upload/{source_id}/convert")
+@router.post("/{kb}/sources/upload/{source_id}/convert", status_code=202)
 async def convert(request: Request, kb: str, source_id: UUID):
+    """Queues conversion only; the convert worker runs it."""
+
     manager = await service(request, kb)
     return await result(manager.convert(kb, source_id.hex))
 
@@ -79,9 +81,11 @@ class ExtractRequest(BaseModel):
 
 @router.post("/{kb}/sources/{kind}/{source_id}/extract", status_code=202)
 async def extract(request: Request, kb: str, kind: Kind, source_id: str, body: ExtractRequest):
+    """Queues extraction; a raw upload is queued for conversion, then extraction."""
+
     manager = await service(request, kb)
-    await result(manager.extract(kb, kind, normalized_id(kind, source_id), body.mode))
-    return {"status": "queued", "mode": body.mode}
+    queued = await result(manager.extract(kb, kind, normalized_id(kind, source_id), body.mode))
+    return {"status": "queued", "mode": body.mode, **queued}
 
 
 @router.post("/{kb}/knowledge/{record_id}/review")
