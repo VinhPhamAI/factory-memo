@@ -2,9 +2,9 @@
 
 Live microphone recording in the React UI (`/capture`, tab **Ghi âm**), turned
 into stored evidence, extracted knowledge drafts and a side-by-side review. The
-same page also accepts a typed or pasted conversation (**Nhập văn bản**; see
-[Typed text](#typed-text)), which goes through the same extraction and review
-without audio.
+same page offers **Tải lên tài liệu** for storage-only document uploads, independent
+of conversations; see [document uploads](document-uploads.md). The typed-text API
+remains available to existing clients (see [Typed text](#typed-text)).
 
 ```text
 Browser mic ─ AudioWorklet (PCM16, 16 kHz) ─ WS /v1/voice/{kb}/record ─ FastAPI

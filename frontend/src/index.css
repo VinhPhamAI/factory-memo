@@ -3862,6 +3862,50 @@ button.ref-chip:hover,
   color: #7b8a9e;
   font-size: 12.5px;
 }
+.vc-document-picker input[type="file"] {
+  height: auto;
+  padding: 18px;
+  border-style: dashed;
+  background: #f7faff;
+  cursor: pointer;
+  max-width: 100%;
+  min-width: 0;
+}
+.vc-document-picker input::file-selector-button {
+  padding: 8px 12px;
+  margin-right: 12px;
+  border: 0;
+  border-radius: 7px;
+  background: #e7efff;
+  color: #155bc2;
+  cursor: pointer;
+}
+.vc-upload-list {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.vc-upload-list li {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid #e1e8f3;
+  border-radius: 9px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  color: #52647c;
+}
+.vc-upload-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: #23734a;
+}
+.vc-upload-success svg {
+  flex-shrink: 0;
+}
 .vc-field textarea {
   height: auto;
   min-height: 220px;

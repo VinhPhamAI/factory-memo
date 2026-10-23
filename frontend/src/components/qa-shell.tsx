@@ -1,10 +1,10 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
-import { MessagesSquare, Mic } from "lucide-react";
+import { FolderPlus, MessagesSquare } from "lucide-react";
 import { BrandMark } from "./brand";
 import { useWorkspace } from "@/hooks/workspace";
 import { cn } from "@/utils/cn";
 
-/** Live mode: QA chat plus voice capture and review against the backend. */
+/** Live mode: QA chat, voice capture, document uploads and review. */
 export function QaShell() {
   const workspace = useWorkspace();
   return (
@@ -31,8 +31,8 @@ export function QaShell() {
             }
             data-testid="nav-capture"
           >
-            <Mic size={16} />
-            Ghi âm
+            <FolderPlus size={16} />
+            Thêm dữ liệu
           </NavLink>
         </nav>
       </header>

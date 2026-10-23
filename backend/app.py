@@ -10,6 +10,7 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI
 
+from backend.api.document_uploads import router as document_uploads_router
 from backend.api.knowledge_agent import KnowledgeAgentPool
 from backend.api.knowledge_agent import router as knowledge_agent_router
 from backend.api.knowledge_bases import KnowledgeBaseCatalog
@@ -17,6 +18,7 @@ from backend.api.knowledge_bases import router as knowledge_bases_router
 from backend.api.voice_capture import VoiceCaptureService
 from backend.api.voice_capture import router as voice_capture_router
 from backend.knowledge_bases import KNOWLEDGE_BASES
+from backend.src.storage.document_uploads import DocumentUploadStore
 
 
 def create_app(
@@ -24,6 +26,7 @@ def create_app(
     knowledge_agents: Mapping[str, Any] | None = None,
     voice_capture: VoiceCaptureService | None = None,
     kb_catalog: KnowledgeBaseCatalog | None = None,
+    document_uploads: DocumentUploadStore | None = None,
 ) -> FastAPI:
     """Build the API; injected agents and services keep HTTP tests dependency-free."""
 
@@ -33,10 +36,12 @@ def create_app(
             app.state.knowledge_agents = KnowledgeAgentPool({}, agents=knowledge_agents or {})
             app.state.voice_capture = voice_capture or VoiceCaptureService({})
             app.state.kb_catalog = kb_catalog
+            app.state.document_uploads = document_uploads or DocumentUploadStore()
             yield
             return
 
         load_dotenv()
+        app.state.document_uploads = document_uploads or DocumentUploadStore()
         # Each knowledge base's store and agent open on its first request.
         pool = KnowledgeAgentPool(KNOWLEDGE_BASES)
         capture = VoiceCaptureService(KNOWLEDGE_BASES)
@@ -67,6 +72,7 @@ def create_app(
     api.include_router(knowledge_agent_router)
     api.include_router(knowledge_bases_router)
     api.include_router(voice_capture_router)
+    api.include_router(document_uploads_router)
 
     @api.get("/healthz")
     async def healthcheck() -> dict[str, str]:

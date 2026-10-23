@@ -15,10 +15,12 @@ services:
       DATABASE_URL: "${API_DATABASE_URL:-postgresql+psycopg://voice_agent:voice_agent@postgres:5432/voice_agent}"
       SPEECH_API_URL: "${API_SPEECH_API_URL:-http://speech-api:8080}"
       VOICE_AUDIO_DIR: /app/data/audio
+      DOCUMENT_UPLOAD_DIR: /app/data/uploads
     ports:
       - "${API_PORT:-8005}:8005"
     volumes:
       - ../data:/app/data
+      - document_uploads:/app/data/uploads
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -108,3 +110,4 @@ services:
 
 volumes:
   pgdata:
+  document_uploads:

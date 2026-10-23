@@ -7,9 +7,10 @@ and evidence-grounded answers, with a synthetic benchmark, a React QA UI and a
 Streamlit trace UI.
 Live voice capture (React UI tab **Ghi âm**) records the microphone, transcribes
 it with the optional ASR + diarization service, stores the transcript as evidence
-and extracts draft knowledge for side-by-side review; the same tab accepts typed
-or pasted conversations (see
-[voice capture](docs/voice-capture.md)). Multimodal capture, location awareness and
+and extracts draft knowledge for side-by-side review (see
+[voice capture](docs/voice-capture.md)). The **Tải lên tài liệu** tab stores original
+documents without extraction (see [document uploads](docs/document-uploads.md)).
+Multimodal extraction, location awareness and
 QR identification are planned capabilities.
 
 ## 1. Environment setup
@@ -116,6 +117,8 @@ This also starts PostgreSQL and waits for it to be healthy. The API is available
 at **http://localhost:8005** (`/healthz` for health, `/docs` for API documentation).
 Set `API_PORT` in `.env` to change the host port. Recordings and other runtime
 data persist in the host's `data/` directory across container recreation.
+Document uploads use the separate Docker-managed `document_uploads` volume,
+mounted at `/app/data/uploads/`; host-run APIs default to `data/uploads/`.
 Rebuild with the same command after changing backend code or dependencies.
 
 Inside Compose, the API connects to `postgres:5432` and `speech-api:8080`;
@@ -128,7 +131,7 @@ Speech is optional: prepare it with `deployments/speech/setup.sh`, then start it
 with `deployments/speech/up.sh` as above. After setup, the full stack can also be
 started with `docker compose --env-file .env -f deployments/docker-compose.yml
 --profile speech up -d --build`. Without that profile, `up -d --build` starts
-only the API and PostgreSQL. Text capture and QA do not require speech.
+only the API and PostgreSQL. Document uploads and QA do not require speech.
 
 **Alternative — API on the host:**
 
@@ -149,7 +152,8 @@ default `VITE_DATA_MODE=api` connects QA to FastAPI through the Vite `/v1` proxy
 If you already have `.env.local`, set its data mode to `api` and restart Vite.
 The **Ghi âm** tab records a conversation (needs the speech service and HTTPS or
 localhost for the microphone); after Stop it shows the transcript next to the
-extracted knowledge for approval. Document uploads are outside this integration. See the
+extracted knowledge for approval. **Tải lên tài liệu** stores original documents
+without creating a conversation or extracting content; see [document uploads](docs/document-uploads.md). See the
 [frontend guide](frontend/README.md) for configuration, tests and optional mock demo.
 
 **Alternative — Streamlit trace UI:**
