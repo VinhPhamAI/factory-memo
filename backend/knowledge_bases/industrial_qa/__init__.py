@@ -3,13 +3,13 @@
 
 from pathlib import Path
 
-from backend.knowledge_bases.base import ONTOLOGY_FILE, AnswerPipeline, ContextFilter, KnowledgeBaseSpec
-from backend.knowledge_bases.industrial_qa.catalog import Catalog
+from backend.knowledge_bases.base import AnswerPipeline, ContextFilter, KnowledgeBaseSpec
+from backend.knowledge_bases.industrial_qa.catalog import ONTOLOGY_PATH, Catalog
 from backend.knowledge_bases.industrial_qa.schema import IndustrialQaExtraction
 
 
 DIRECTORY = Path(__file__).parent
-# Canonical equipment names (catalog_types.yaml + catalog_assets.yaml).
+# Canonical equipment names (catalog/catalog_types.yaml + catalog/catalog_assets.yaml).
 CATALOG = Catalog.from_files()
 
 
@@ -44,7 +44,7 @@ SPEC = KnowledgeBaseSpec.from_directory(
     embedding_context_keys=("machine_id", "machine_model", "machine_model_specific", "component_model", "condition"),
     extraction_version="industrial-qa-case-lesson-v3",
     extraction_output_model=IndustrialQaExtraction,
-    ontology=CATALOG.ontology(DIRECTORY / ONTOLOGY_FILE),
+    ontology=CATALOG.ontology(ONTOLOGY_PATH),
     record_normalizer=CATALOG.normalize_records,
     knowledge_filter_builder=CATALOG.knowledge_filter,
     ingestion_factory=ingestion_factory,

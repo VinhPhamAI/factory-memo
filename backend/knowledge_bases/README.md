@@ -16,10 +16,11 @@ backend/knowledge_bases/
   stores.py            # open_store(): the store a KB's agent searches
   maintenance/
     __init__.py        # SPEC: dataset path/columns, retrieval mode, filters, ...
-    extract.md         # extraction prompt; must contain {RAW_CONVERSATION}
-    agent.md           # agent prompt for knowledge retrieval
-    agent_documents.md # agent prompt for document retrieval
-    embedding_query.md # optional query-side embedding instruction
+    prompts/
+      extract.md         # extraction prompt; must contain {RAW_CONVERSATION}
+      agent.md           # agent prompt for knowledge retrieval
+      agent_documents.md # agent prompt for document retrieval
+      embedding_query.md # optional query-side embedding instruction
   general/             # general-purpose conversations (see general/README.md)
   enterprise_rag/      # EnterpriseRAG-Bench (see below)
     prepare.py         # downloads the questions and their gold documents
@@ -56,9 +57,9 @@ on their catalogs, manuals and benchmarks.
 
 | | `knowledge` (default) | `documents` |
 |---|---|---|
-| `ingest` | LLM extracts knowledge records (`extract.md`) | chunks + embeds sources as they are, no LLM |
+| `ingest` | LLM extracts knowledge records (`prompts/extract.md`) | chunks + embeds sources as they are, no LLM |
 | Index | `knowledge_items` + `raw_conversations` | `chunks_<label>` (`backend/src/agents/rag`) |
-| Agent prompt | `agent.md` | `agent_documents.md` |
+| Agent prompt | `prompts/agent.md` | `prompts/agent_documents.md` |
 | Tools | `search_knowledge`, `get_knowledge`, `get_evidence` | `search_documents` (hybrid: vector + BM25, RRF), `get_document` |
 | Citations | `[K:<knowledge_id>]` | `[D:<doc_id>]`, doc id = `DatasetSpec.id_column` |
 | Evaluation | — | `kb evaluate` on `retrieval_questions` |
@@ -88,7 +89,7 @@ source ids separated by `;`), lists the questions whose top result is not gold,
 and saves per-question rankings to `data/kb_eval/<kb>/`. `--query-instruction`
 compares embedding instructions without re-indexing.
 
-Query embedding instructions belong to each KB's optional `embedding_query.md`,
+Query embedding instructions belong to each KB's optional `prompts/embedding_query.md`,
 loaded as `KnowledgeBaseSpec.embedding_query_instruction`. Maintenance uses a
 factory troubleshooting instruction; EnterpriseRAG uses an internal company
 knowledge instruction. The shared embedding client receives the selected KB's
@@ -116,14 +117,14 @@ differs per KB is which `context` keys matter:
 - `DatasetSpec.id_column`: rows whose id is already processed are skipped by
   `ingest`, so an interrupted run continues where it stopped (`--no-resume`
   to disable).
-- `ontology` (optional `ontology.yaml`): canonical values, aliases and implied
+- `ontology` (optional `ontology.yaml`; Industrial QA uses `catalog/ontology.yaml`): canonical values, aliases and implied
   keys of context keys; extracted context is normalized to it and the changes
   and unknown values are kept in `revision["ontology"]`.
 - `record_normalizer`: called with the transcript and its records before the
   ontology, for fixes an exact lookup cannot make. `industrial_qa` uses its
   equipment catalog: curated families, component models and sites in
-  `catalog_types.yaml`, plus the asset IDs, lines and stations of the public
-  conversations in the generated `catalog_assets.yaml` (rebuild with
+  `catalog/catalog_types.yaml`, plus the asset IDs, lines and stations of the public
+  conversations in the generated `catalog/catalog_assets.yaml` (rebuild with
   `uv run python -m backend.knowledge_bases.industrial_qa.catalog build`). It
   moves asset IDs into `machine_id`, splits "Dong Nai Line 1", fills a missing
   asset from the cited cases or the conversation, and records its changes in

@@ -11,9 +11,10 @@ retrieval/rerank/answer workflow, equipment catalog or ontology. Unlike
 general/
   __init__.py          # SPEC: knowledge retrieval, typed output, no filters
   schema.py            # GeneralExtraction: flat list of typed items
-  extract.md           # extraction prompt ({RAW_CONVERSATION})
-  agent.md             # ReAct agent prompt
-  embedding_query.md   # query-side embedding instruction
+  prompts/
+    extract.md         # extraction prompt ({RAW_CONVERSATION})
+    agent.md           # ReAct agent prompt
+    embedding_query.md # query-side embedding instruction
 ```
 
 ## Storage
@@ -59,7 +60,7 @@ the validation error before failing.
 
 The agent is the shared LangGraph ReAct agent (`create_agent`) with
 `search_knowledge` (hybrid vector + full-text, at most three searches per question),
-`get_knowledge` and `get_evidence`. `agent.md` makes it keep certainty, scope
+`get_knowledge` and `get_evidence`. `prompts/agent.md` makes it keep certainty, scope
 and draft status visible. It presents disagreements, abstains without
 evidence and cites every important claim. There are no KB-specific
 `context_filters`: scope values are free text, so exact-match filters would

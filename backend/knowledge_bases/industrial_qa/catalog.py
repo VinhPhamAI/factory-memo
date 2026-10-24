@@ -1,6 +1,6 @@
 """Equipment catalog of the industrial QA benchmark: one spelling per asset.
 
-Two files in this package:
+Two catalog files in this package's catalog/ directory:
 
 - catalog_types.yaml (curated): equipment families (the canonical
   machine_model) with their asset-ID prefix and manual, component models from
@@ -10,7 +10,7 @@ Two files in this package:
   station stated in the turn that introduces it, plus the line and station
   spellings the conversations use.
 
-ontology() merges both into the knowledge base's ontology.yaml, so ingestion
+ontology() merges both with catalog/ontology.yaml, so ingestion
 resolves aliases and fills the keys an asset implies. normalize_records() runs
 first and fixes what an exact lookup cannot: asset IDs inside longer strings or
 under the wrong key, "Dong Nai Line 1", "LINE11", a bare "cell C", and records
@@ -34,7 +34,7 @@ from typing import Any
 
 import yaml
 
-from backend.knowledge_bases.base import PROJECT_ROOT
+from backend.knowledge_bases.base import ONTOLOGY_FILE, PROJECT_ROOT
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.services.ontology import Ontology
 from backend.src.storage import KnowledgeRecord
@@ -42,8 +42,10 @@ from backend.src.storage.knowledge_store import build_knowledge_filter
 
 
 DIRECTORY = Path(__file__).parent
-TYPES_FILE = DIRECTORY / "catalog_types.yaml"
-ASSETS_FILE = DIRECTORY / "catalog_assets.yaml"
+CATALOG_DIR = DIRECTORY / "catalog"
+TYPES_FILE = CATALOG_DIR / "catalog_types.yaml"
+ASSETS_FILE = CATALOG_DIR / "catalog_assets.yaml"
+ONTOLOGY_PATH = CATALOG_DIR / ONTOLOGY_FILE
 PUBLIC_DIR = PROJECT_ROOT / "benchmark" / "public"
 
 LOCATION_KEYS = ("site", "line_id", "station")
@@ -708,7 +710,7 @@ def main() -> int:
             f"{name} ({count})" for name, count in missing.most_common(30)
         ))
     # The generated catalog must load as an ontology.
-    Catalog.from_files(assets=args.out).ontology(DIRECTORY / "ontology.yaml")
+    Catalog.from_files(assets=args.out).ontology(ONTOLOGY_PATH)
     return 0
 
 

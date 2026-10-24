@@ -34,7 +34,7 @@ from backend.tests.test_knowledge_ingestion_service import FakeExtractor
 from backend.tests.test_knowledge_management import ChunkStore, SourceStore, memory_runs
 
 
-PROMPT = (Path(__file__).parents[1] / "knowledge_bases/industrial_qa/conflict.md").read_text(encoding="utf-8")
+PROMPT = (Path(__file__).parents[1] / "knowledge_bases/industrial_qa/prompts/conflict.md").read_text(encoding="utf-8")
 NEW_SOURCE, OLD_SOURCE = uuid4(), uuid4()
 
 

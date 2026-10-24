@@ -40,10 +40,11 @@ and [dependency manifest](pyproject.toml) for supporting details.
 | --- | --- |
 | KB definitions | `backend/knowledge_bases/`: registry, `KnowledgeBaseSpec`, dataset mappings, retrieval mode, extraction/agent prompts, schemas, context filters and optional ontology/catalog. Keep domain policy here. KBs created in the UI (`backend/api/knowledge_bases.py`, `custom.py`) copy the `general` policy and are persisted in the `knowledge_base_registry` table. |
 | Extraction and ingestion | `backend/src/services/`: structured extraction, catalog/ontology normalization, optional verification and consolidation, then embedding/persistence. Ingestion saves source evidence first so failed extraction remains traceable. |
+| Source job queue | `backend/src/storage/job_queue.py` (`ingestion_jobs` in the `DATABASE_URL` database, notify-consume with `pg_notify`/`LISTEN` and `FOR UPDATE SKIP LOCKED`, heartbeat leases, retry/backoff, at most one active job per source), `backend/src/services/source_pipeline.py` (convert/extract/conflict stage handlers), `backend/src/services/job_worker.py` and `backend/worker.py` (one supervisor, one process per stage slot). Completing a job creates its next stage in the same transaction. Knowledge-mode extraction in a KB with `conflict_factory` queues a `conflict` job (`backend/src/services/knowledge_conflicts.py`, `knowledge_conflicts` table in the KB database); it records suspected conflicts for review and never changes record status. |
 | Storage and embeddings | `backend/src/storage/`: source conversations, knowledge records, lifecycle/link metadata, PostgreSQL + pgvector, embeddings and knowledge search. Each KB normally uses its own `kb_<name>` database on the configured server. |
 | Document retrieval | `backend/src/agents/rag/`: chunking, document indexes, vector/keyword hybrid retrieval and evaluation. In document mode, standard ingest indexes sources without LLM extraction. |
 | Knowledge agent | `backend/src/agents/agent/`: tools, evidence access, citations, conversation state and normalized stream events. Industrial QA supplies its specialized shared pipeline. |
-| Application | `backend/app.py` and `backend/api/knowledge_agent.py`: FastAPI API; `backend/api/voice_capture.py`: voice capture API; `frontend/`: React UI; `streamlit_app.py`: trace UI. Preserve the HTTP, SSE, WebSocket and citation contracts when changing either side. |
+| Application | `backend/app.py` and `backend/api/knowledge_agent.py`: FastAPI API; `backend/api/voice_capture.py`: voice capture API; `backend/api/document_uploads.py`: original document uploads; `backend/api/knowledge_management.py`: shared source lifecycle, extraction and review; `frontend/`: React UI; `streamlit_app.py`: trace UI. Preserve the HTTP, SSE, WebSocket and citation contracts when changing either side. |
 
 Available domain packages in this checkout:
 
@@ -59,6 +60,13 @@ Available domain packages in this checkout:
   Its retrieval, rerank mode, LLM step and prompt settings live in
   `industrial_qa/config.toml` (or `INDUSTRIAL_QA_CONFIG` / runner `--config`);
   runner manifests record the resolved values and file hash.
+  Conflict detection after Extract (`[conflicts]`, `[llm.conflict]`, `prompts/conflict.md`,
+  `industrial_qa/conflicts.py`) has detection, review/recheck APIs and a review tab
+  in **Quản lý tri thức** (`frontend/src/components/knowledge/conflict-review.tsx`).
+  Confirm/dismiss do not approve records; supersede retires the unselected record.
+  A conflict evaluation set is not implemented; when enabled, inline consolidation
+  no longer marks conflicts. See
+  [conflict detection](docs/industrial-qa-conflict-detection.md).
 - **General:** a general-purpose ReAct knowledge agent over conversations on any
   topic: a flat typed item schema (type, certainty, scope, speaker, verbatim
   quotes) on the shared tables, with no catalog, ontology or fixed answer
@@ -95,7 +103,8 @@ do not expose raw transcripts, secrets, embeddings or model reasoning.
 - Verification checks source faithfulness, not engineering correctness. Quote and
   number checks and an optional LLM judge are advisory; they do not automatically
   approve or discard records. Human review remains necessary for uncertain or
-  conflicting knowledge; do not imply that a complete review UI already exists.
+  conflicting knowledge. The conflict review tab covers pair decisions, not a
+  complete engineering approval workflow.
 - Consolidation adds support/conflict links or creates a replacement record; it
   does not overwrite historical claims. Preserve revision history and the
   distinction between case-specific observations and generalized lessons.
@@ -179,14 +188,18 @@ Run commands from the repository root with Python >= 3.12 and `uv`. Configure lo
 services using [`.env.example`](.env.example); never commit populated credentials.
 These commands describe the intended entrypoints, not a passing startup check.
 
-Install dependencies and start local services (API and UI in separate terminals):
+Install dependencies and start local services (API, workers and UI in separate terminals):
 
 ```sh
 uv sync
 docker compose -f deployments/docker-compose.yml up -d postgres
 uv run uvicorn backend.app:app --host 0.0.0.0 --port 8005
+uv run python -m backend.worker   # --convert N --extract M --conflict K, or --stage extract
 uv run streamlit run streamlit_app.py
 ```
+
+Compose runs the same workers as the `worker` service (API image, shared volumes).
+Without a worker, Convert/Extract/conflict jobs stay queued.
 
 The optional `speech-api` service (NeMo-Speech.cpp: Nemotron 3.5 streaming ASR +
 Nemotron 3 diarization with server-side endpointing) is built from a pinned
@@ -196,8 +209,36 @@ source checkout; use `deployments/speech/setup.sh`, `up.sh` and `smoke_test.sh`
 Voice capture (`backend/src/services/voice_capture.py`, `backend/api/voice_capture.py`,
 frontend `/capture`) streams microphone PCM over `WS /v1/voice/{kb}/record`, writes
 every frame to `data/audio/` before recognition, stores `[Tnn] Speaker X: text`
-transcripts in `raw_conversations` and extracts drafts in the background; typed
-or pasted text (`POST /v1/voice/{kb}/texts`) is stored verbatim the same way. Optional
+transcripts in `raw_conversations`. New UI recordings wait for extraction mode
+selection in **Quản lý tri thức** (`/knowledge`) unless **Auto · chạy đến Extract**
+is selected on `/capture`, which sends `extract_mode` and queues an extract job
+after saving; legacy API clients without `extract_mode` still extract in the API
+process by default (`extract=false` opts out). Typed
+or pasted text (`POST /v1/voice/{kb}/texts`) remains a legacy API stored verbatim the same way.
+The UI replaces typed text with **Tải lên tài liệu**, using
+`POST /v1/documents/{kb}/uploads` for original files; only Auto (`extract_mode`)
+queues convert → extract jobs, and the upload is kept if queueing fails (`job_error`). `DOCUMENT_UPLOAD_DIR` defaults to project `data/uploads/` for a
+host-run API; Compose mounts a Docker-managed `document_uploads` volume there.
+See [document uploads](docs/document-uploads.md). **Quản lý tri thức** lists uploaded
+objects, transcript evidence and indexed documents with separate raw/converted/extracted
+and review states. Convert and Extract return 202 with a queued job; the list applies
+them to checked sources from a bulk bar (one request per source), and Extract on a
+raw source queues convert → extract. Extraction is recorded per evidence row in
+`extraction_runs` (`backend/src/storage/extraction_runs.py`) with a normalized
+content SHA-256 and an extraction-logic fingerprint; the API (409
+`duplicate_content`) and the extract worker refuse identical content already
+running or done in the same mode, and the UI links the earlier source.
+Near-duplicates in the same KB and mode (MinHash/LSH over 5-word shingles in
+`content_signatures`, exact Jaccard/containment, `backend/src/storage/content_signatures.py`)
+get 409 `near_duplicate` and wait for `confirm_overlap` (UI **Vẫn trích xuất**); scores
+are warnings only, never merge or discard, and `NEAR_DUPLICATE_*` set the thresholds
+(read-only tuning report: `backend/scripts/near_duplicate_report.py`). Re-extraction of
+identical content and near-duplicate merging are not implemented.
+Choose knowledge items or document chunks per source. Conversion decodes plain-text
+formats only; PDF/image/Office OCR and STT for uploaded media are not implemented.
+Knowledge items and chunks start as searchable drafts; rejected results remain for
+history/citations but are excluded from search. Source mode does not change the KB
+QA retrieval policy. See [knowledge management](docs/knowledge-management.md). Optional
 LLM cleaning (`CLEANING_*`) is a reading aid and never replaces the evidence
 transcript. See [voice capture](docs/voice-capture.md). Accuracy on Vietnamese
 factory audio has not been evaluated.
@@ -215,6 +256,8 @@ for broader backend changes:
 ```sh
 uv run python -m unittest backend.tests.test_rag -v
 uv run python -m unittest backend.tests.test_knowledge_extraction_service backend.tests.test_knowledge_ingestion_service -v
+uv run python -m unittest backend.tests.test_job_queue backend.tests.test_knowledge_management -v
+uv run python -m unittest backend.tests.test_knowledge_conflicts -v
 uv run python -m unittest discover -s backend/tests -t . -v
 git diff --check
 cmp AGENTS.md CLAUDE.md
@@ -225,7 +268,7 @@ inside the selected database. Use a local test database:
 
 ```sh
 TEST_DATABASE_URL=postgresql+psycopg://voice_agent:voice_agent@localhost:5434/voice_agent \
-  uv run python -m unittest backend.tests.test_knowledge_store_integration backend.tests.test_rag -v
+  uv run python -m unittest backend.tests.test_knowledge_store_integration backend.tests.test_rag backend.tests.test_job_queue -v
 ```
 
 Retrieval/MC evaluation without LLM calls (replace placeholder paths with the run's
@@ -239,9 +282,9 @@ Remove `--skip-llm` for answer judging; add `--facts` for optional capture judgi
 These judge modes, extraction, embedding and live agent calls require configured
 endpoints and can incur costs. Directly running `backend/tests/test_llm.py` is a
 live extraction exercise; `test_td.py` is an optional model demo, not an offline
-unit-test guarantee. The repo has no configured lint/build toolchain; do not
-invent npm, Ruff, Black or mypy checks. The deleted frontend is not an active
-startup path.
+unit-test guarantee. The React frontend has scripts in `frontend/package.json`; run `npm run build`,
+`npm run lint` and targeted `npm run test -- <path>` from `frontend/` when relevant.
+There is no configured backend lint toolchain; do not invent Ruff, Black or mypy checks.
 
 **Known baseline (2026-10-10):** discovery with the existing environment
 (`uv run --no-sync python -m unittest discover -s backend/tests -t . -v`)

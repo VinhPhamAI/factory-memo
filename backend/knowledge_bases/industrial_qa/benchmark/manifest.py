@@ -18,10 +18,11 @@ from backend.knowledge_bases.industrial_qa.config import sha
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
 # Relative to the industrial_qa package. The extraction contract decides
 # whether a run may reuse older extractions.
-EXTRACTION_SOURCES = ("schema.py", "extract.md", "catalog_types.yaml", "catalog_assets.yaml", "ontology.yaml")
+EXTRACTION_SOURCES = ("schema.py", "prompts/extract.md", "catalog/catalog_types.yaml",
+                      "catalog/catalog_assets.yaml", "catalog/ontology.yaml")
 PIPELINE_SOURCES = ("catalog.py", "scope.py", "prompts.py", "query_rewrite.py", "retrieval.py", "answering.py",
                     "pipeline.py", "config.py", "benchmark/adapter.py", "benchmark/evidence.py",
-                    "rerank.md", "query.md", "answer.md")
+                    "prompts/rerank.md", "prompts/query.md", "prompts/answer.md")
 # Benchmark code shared by the runners that ingest, answer and evaluate.
 RUNNER_SOURCES = ("benchmark/data.py", "benchmark/runs.py", "benchmark/manifest.py", "benchmark/ingest.py",
                   "benchmark/predictions.py", "benchmark/evaluation.py")

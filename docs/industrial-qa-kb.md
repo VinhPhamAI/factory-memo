@@ -14,12 +14,12 @@ Pipeline có hai pha:
 | Thành phần | File chính | Vai trò |
 | --- | --- | --- |
 | Spec của KB | `__init__.py` | Đăng ký KB, context filter, extraction model, normalizer |
-| Catalog thiết bị | `catalog.py`, `catalog_types.yaml`, `catalog_assets.yaml`, `ontology.yaml` | Tên chuẩn của family, asset, component; luật lọc phạm vi |
-| Trích xuất | `schema.py`, `extract.md` | Schema case/lesson và prompt trích xuất |
-| Truy xuất + rerank | `retrieval.py`, `rerank.md` | Lọc theo phạm vi, tìm kiếm, rerank, cắt theo ngân sách ký tự |
-| Answer writer | `answering.py`, `answer.md` | Checklist + câu trả lời + nhãn nguồn |
+| Catalog thiết bị | `catalog.py`, `catalog/catalog_types.yaml`, `catalog/catalog_assets.yaml`, `catalog/ontology.yaml` | Tên chuẩn của family, asset, component; luật lọc phạm vi |
+| Trích xuất | `schema.py`, `prompts/extract.md` | Schema case/lesson và prompt trích xuất |
+| Truy xuất + rerank | `retrieval.py`, `prompts/rerank.md` | Lọc theo phạm vi, tìm kiếm, rerank, cắt theo ngân sách ký tự |
+| Answer writer | `answering.py`, `prompts/answer.md` | Checklist + câu trả lời + nhãn nguồn |
 | Pipeline / service | `pipeline.py`, `service.py` | Ghép truy xuất + writer; stream sự kiện, lịch sử hội thoại, đổi nhãn thành citation |
-| Phạm vi + prompt | `scope.py`, `query_rewrite.py`, `prompts.py`, `query.md` | Nhận diện family trong câu hỏi, kế thừa phạm vi follow-up, viết lại truy vấn, điền template prompt |
+| Phạm vi + prompt | `scope.py`, `query_rewrite.py`, `prompts.py`, `prompts/query.md` | Nhận diện family trong câu hỏi, kế thừa phạm vi follow-up, viết lại truy vấn, điền template prompt |
 | Benchmark | `benchmark/` (`adapter.py`, `pilot.py`, `train.py`, `holdout.py`, `reanswer.py`, `runner.py`, cùng data/runs/manifest/ingest/renormalize/evidence/predictions/evaluation), `snapshot.py` | Chạy, đo và lưu snapshot trên `benchmark/` (thư mục dữ liệu ở gốc repo) |
 | Thử nghiệm | `experiments/` (`prefilter.py`, `train_report.py`) | Thí nghiệm chỉ trên train, không thuộc runner chính thức |
 
@@ -31,10 +31,10 @@ KB có ba loại đầu vào. Hệ thống chỉ đọc `benchmark/public/`. Fil
 | --- | --- | --- | --- |
 | Hội thoại chuyên gia ↔ kỹ thuật viên | `conversations.jsonl` (`speakers`, `turns[turn_id, speaker, text]`) | 195 hội thoại, mỗi hội thoại xoay quanh **một asset** | Knowledge records (case + lesson) trong `knowledge_items`, qua LLM extraction |
 | Manual thiết bị | `corpus_chunks.jsonl` (`chunk_id`, `doc_id`, `section_path`, trang, `text`) | 1067 chunk: `fx5_comm` 846, `omron_i4l` 114, `melservo_je` 107 | Document chunks (embedding + từ khoá), không qua LLM |
-| Catalog thiết bị | `catalog_types.yaml` (viết tay) + `catalog_assets.yaml` (sinh bằng `catalog build`) | 3 family, 195 asset, các line/site/component | Bộ lọc scope lúc ingest và lúc truy hồi |
-| Ontology | `ontology.yaml` | `failure_mode` đóng, 12 giá trị | Chuẩn hoá trường `failure_mode` |
+| Catalog thiết bị | `catalog/catalog_types.yaml` (viết tay) + `catalog/catalog_assets.yaml` (sinh bằng `catalog build`) | 3 family, 195 asset, các line/site/component | Bộ lọc scope lúc ingest và lúc truy hồi |
+| Ontology | `catalog/ontology.yaml` | `failure_mode` đóng, 12 giá trị | Chuẩn hoá trường `failure_mode` |
 
-**Ba family thiết bị** (catalog_types.yaml):
+**Ba family thiết bị** (catalog/catalog_types.yaml):
 
 | Family | Loại | Manual | Tiền tố asset ID |
 | --- | --- | --- | --- |
@@ -55,7 +55,7 @@ Cả hai mang `context` (scope): `machine_id`, `machine_model`, `machine_model_s
 
 ```mermaid
 flowchart LR
-    conv["Hội thoại chuyên gia (195)"] --> ex["1. Extract<br/>LLM, extract.md"]
+    conv["Hội thoại chuyên gia (195)"] --> ex["1. Extract<br/>LLM, prompts/extract.md"]
     ex --> norm["2. Normalize scope<br/>catalog.normalize_records"]
     cat[("Catalog + ontology")] --> norm
     norm --> ver["3. Verify<br/>KnowledgeVerifier"]
@@ -69,8 +69,8 @@ flowchart LR
 
 Hai nhánh chạy độc lập. Chỉ hội thoại đi qua LLM; manual được index nguyên chunk.
 
-1. **Extract** (`EXTRACTION_MODEL`, prompt `extract.md`, output theo `schema.py`). Mỗi hội thoại cho ra các **case** (sự cố cụ thể kèm case_card và quote theo `turn_id`) và các **lesson** (kinh nghiệm tái dùng, trỏ về case qua `case_refs`).
-2. **Normalize**. `catalog.normalize_records` đưa scope về ID chuẩn: asset ID → `machine_id`, family → `machine_model`, biến thể → `machine_model_specific`, cùng line/component. `ontology.yaml` ép `failure_mode` về 12 giá trị đóng. Mọi thay đổi được ghi vào `record.revision` để review.
+1. **Extract** (`EXTRACTION_MODEL`, prompt `prompts/extract.md`, output theo `schema.py`). Mỗi hội thoại cho ra các **case** (sự cố cụ thể kèm case_card và quote theo `turn_id`) và các **lesson** (kinh nghiệm tái dùng, trỏ về case qua `case_refs`).
+2. **Normalize**. `catalog.normalize_records` đưa scope về ID chuẩn: asset ID → `machine_id`, family → `machine_model`, biến thể → `machine_model_specific`, cùng line/component. `catalog/ontology.yaml` ép `failure_mode` về 12 giá trị đóng. Mọi thay đổi được ghi vào `record.revision` để review.
 3. **Verify** (`KnowledgeVerifier`). Kiểm tra record có được transcript chống đỡ hay không.
 4. **Consolidate**. Gộp hoặc link với record trùng. Phạm vi bị khoá trong `benchmark_run_id` của run, nên một run không sửa record của run khác.
 
@@ -87,7 +87,7 @@ flowchart TD
     q["Câu hỏi + lịch sử thread"] --> sc["detected_scope → CATALOG.lookup_scope"]
     sc --> ks["Knowledge search<br/>20 ứng viên"]
     sc --> ms["Manual search<br/>48 ứng viên → 16 + chunk kề"]
-    ks --> rr["LLM rerank (rerank.md)"]
+    ks --> rr["LLM rerank (prompts/rerank.md)"]
     ms --> rr
     rr --> bud["Budget: ≤8 K + ≤8 D, ≤24000 ký tự, đánh lại nhãn"]
     bud --> w["Answer writer<br/>checklist → answer ≤200 từ → sources"]
@@ -107,7 +107,7 @@ Runtime (`service.py`) và benchmark (`benchmark/adapter.py`) gọi **cùng mộ
 - **Thủ tục không bị cắt giữa chừng.** Chunk nằm trong top 3 có dạng procedure/steps/connect/configure được bổ sung các chunk kề cùng section, cách không quá 2 trang.
 - **Rerank bằng LLM rồi cắt theo budget.** Một lần gọi LLM xếp hạng toàn bộ ứng viên. Sau đó lấy lần lượt theo thứ hạng cho đến khi hết 8 slot mỗi loại hoặc hết 24 000 ký tự. Record được render gọn thành `[K1] case|lesson: subject {scope}` + claim, không kèm case_card/quote. Passage được render thành `[D1] manual <doc_id>, p. N, <section>` + text.
 
-**Answer writer: viết câu trả lời** (`answering.py`, `answer.md`)
+**Answer writer: viết câu trả lời** (`answering.py`, `prompts/answer.md`)
 
 - Một lần gọi `ANSWER_MODEL` với JSON schema. Thứ tự field là thứ tự sinh: **checklist** (tối đa 8 điểm bắt buộc, mỗi điểm kèm nhãn nguồn) → **answer** (viết cho tai nghe, tối đa khoảng 200 từ, không list/heading, nêu đủ mọi điểm của checklist) → **sources**. Checklist đóng vai trò kế hoạch nên answer ít bị sót ý.
 - Các quy tắc trung thực: kết hợp thực hành của chuyên gia với ý nghĩa/remedy trong manual; không biến đề xuất thành việc đã làm; không tự dựng thứ tự cho các bước có điều kiện; nói rõ khi thiếu bằng chứng; không điền từ trí nhớ.
@@ -218,7 +218,7 @@ Các số khác gần như không đổi giữa các run: `mc_accuracy` 0.98–1
 3. **Giới hạn 200 từ chỉ là mềm.** 16–25/100 câu trả lời vượt quá. Với voice, cần quyết định chấp nhận hay cắt cứng/tóm lại.
 4. **`expert_and_docs` (khoảng 0.77) là lỗ hổng chất lượng lớn nhất.** Writer hay bỏ bước trong manual khi đã có thao tác của chuyên gia.
 5. **Phụ thuộc vào catalog đóng.**
-   - Chỉ có 3 family. `catalog_assets.yaml` được sinh từ chính các hội thoại benchmark.
+   - Chỉ có 3 family. `catalog/catalog_assets.yaml` được sinh từ chính các hội thoại benchmark.
    - Máy mới phải chạy lại `catalog build` / `renormalize`.
    - Câu hỏi nhắc nhiều family sẽ không được lọc theo family.
 6. **Một database cho mọi run.** Ingest mới ghi đè corpus, nên `reanswer.py` trên run cũ chỉ chạy được sau khi restore snapshot (nay đã có check báo lỗi rõ).

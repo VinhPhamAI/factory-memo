@@ -107,7 +107,7 @@ Status: Verified (8/8 quotes) · Result recorded 2026-10-09
 
 ## Dữ liệu hỏi đáp (bước 5)
 
-Câu hỏi trong video là tiếng Việt: "MR-JE-AX167 trục Z kêu rít khi chạy nhanh, không có alarm. Do vòng bi hay do máy? Cần làm gì?". Backend thật trả lời theo ngôn ngữ của câu hỏi (`answer.md`), nên câu trả lời hiển thị là bản tiếng Việt của câu trả lời tiếng Anh dưới đây, cùng dữ kiện (`frontend/src/fixtures/ax167.ts`, `ANSWER_VI`).
+Câu hỏi trong video là tiếng Việt: "MR-JE-AX167 trục Z kêu rít khi chạy nhanh, không có alarm. Do vòng bi hay do máy? Cần làm gì?". Backend thật trả lời theo ngôn ngữ của câu hỏi (`prompts/answer.md`), nên câu trả lời hiển thị là bản tiếng Việt của câu trả lời tiếng Anh dưới đây, cùng dữ kiện (`frontend/src/fixtures/ax167.ts`, `ANSWER_VI`).
 
 **Hình:** Màn hình **Ask**. Góc trên ghi `Night shift · Technician junior_02` [GIẢ LẬP]. Câu hỏi được gõ từng chữ:
 

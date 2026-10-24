@@ -32,7 +32,7 @@ prefilter_manual = 8
 second_hop_records = 0
 second_hop_per_record = 4
 second_hop_manual = 4
-# Query rewriting ([llm.query], query.md): "off"; "auto" rewrites only API
+# Query rewriting ([llm.query], prompts/query.md): "off"; "auto" rewrites only API
 # follow-ups (no scope of their own, scoped history) and non-English questions;
 # "always" rewrites every question (benchmark arm). The original question stays
 # one search branch, rewritten queries only add candidates, scope still comes
@@ -57,7 +57,7 @@ validation_retries = 0     # re-ask once per retry when output fails the schema
 # scope keys equal or unset, overlapping validity; case x case only with
 # compare_cases), at most candidates_per_record (max 8) each and
 # max_pairs_per_source per source.
-# "list" judges a record's candidates in one call ([llm.conflict], conflict.md)
+# "list" judges a record's candidates in one call ([llm.conflict], prompts/conflict.md)
 # and confirms a conflict with one pairwise call; "pair" (evaluation baseline)
 # judges every pair alone. Only conflicts confirmed with link_min_confidence and
 # verbatim quotes are linked; records stay drafts. While enabled, API
@@ -129,7 +129,7 @@ max_tokens = 4096
 
 # Paths relative to this file.
 [prompts]
-rerank = "rerank.md"
-answer = "answer.md"
-query = "query.md"
-conflict = "conflict.md"
+rerank = "prompts/rerank.md"
+answer = "prompts/answer.md"
+query = "prompts/query.md"
+conflict = "prompts/conflict.md"

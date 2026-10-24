@@ -56,10 +56,10 @@ def written(sources=('K1','D1'), answer='Isolate power, then check CN2.'):
 class PipelineConfigTests(unittest.TestCase):
     def write(self, directory, text):
         path = Path(directory) / 'config.toml'
-        path.write_text(DEFAULT_PATH.read_text().replace('"rerank.md"', json.dumps(str(DEFAULT_PATH.with_name('rerank.md'))))
-                        .replace('"answer.md"', json.dumps(str(DEFAULT_PATH.with_name('answer.md'))))
-                        .replace('"query.md"', json.dumps(str(DEFAULT_PATH.with_name('query.md'))))
-                        .replace('"conflict.md"', json.dumps(str(DEFAULT_PATH.with_name('conflict.md')))) + text)
+        path.write_text(DEFAULT_PATH.read_text().replace('"prompts/rerank.md"', json.dumps(str(DEFAULT_PATH.parent / 'prompts/rerank.md')))
+                        .replace('"prompts/answer.md"', json.dumps(str(DEFAULT_PATH.parent / 'prompts/answer.md')))
+                        .replace('"prompts/query.md"', json.dumps(str(DEFAULT_PATH.parent / 'prompts/query.md')))
+                        .replace('"prompts/conflict.md"', json.dumps(str(DEFAULT_PATH.parent / 'prompts/conflict.md'))) + text)
         return path
 
     def test_packaged_config_matches_code_defaults(self):
@@ -73,7 +73,7 @@ class PipelineConfigTests(unittest.TestCase):
                          ('EXTRACTION', 8192, 'disabled'))
         self.assertEqual((config.ingestion.verify, config.ingestion.consolidate), ('quotes', True))
         self.assertEqual((config.conversation.history_characters, config.conversation.history_turns), (6000, 5))
-        self.assertEqual(config.prompts['rerank'], DEFAULT_PATH.with_name('rerank.md').read_text().strip())
+        self.assertEqual(config.prompts['rerank'], (DEFAULT_PATH.parent / 'prompts/rerank.md').read_text().strip())
         provenance = config.provenance()
         self.assertEqual(provenance['retrieval']['rerank_mode'], 'hybrid')
         self.assertNotIn('api_key', json.dumps(provenance).lower())

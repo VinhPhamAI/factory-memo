@@ -1,6 +1,6 @@
 """Registry of knowledge bases.
 
-To add one, copy the `maintenance` package (extract.md, agent.md, SPEC) under a
+To add one, copy the `maintenance` package (prompts/, SPEC) under a
 new name and register its SPEC below.
 """
 

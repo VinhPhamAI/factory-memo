@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
+PROMPTS_DIR = "prompts"
 EXTRACT_PROMPT_FILE = "extract.md"
 AGENT_PROMPT_FILE = "agent.md"
 DOCUMENTS_AGENT_PROMPT_FILE = "agent_documents.md"
@@ -213,17 +214,18 @@ class KnowledgeBaseSpec:
 
     @classmethod
     def from_directory(cls, directory: Path, **fields) -> "KnowledgeBaseSpec":
-        """Load prompts and the optional ontology.yaml and embedding_query.md.
+        """Load prompts from prompts/ and the optional ontology.yaml from the KB root.
 
-        The agent prompt is agent.md for knowledge retrieval and
-        agent_documents.md for document retrieval; extract.md is optional for
-        document retrieval. An explicit embedding_query_instruction overrides
-        the file, including an empty string to disable the query prefix for
-        this knowledge base.
+        The agent prompt is prompts/agent.md for knowledge retrieval and
+        prompts/agent_documents.md for document retrieval; prompts/extract.md
+        is optional for document retrieval. An explicit embedding_query_instruction
+        overrides prompts/embedding_query.md, including an empty string to disable
+        the query prefix for this knowledge base.
         """
 
+        prompts = directory / PROMPTS_DIR
         if "embedding_query_instruction" not in fields:
-            query_prompt = directory / EMBEDDING_QUERY_PROMPT_FILE
+            query_prompt = prompts / EMBEDDING_QUERY_PROMPT_FILE
             fields["embedding_query_instruction"] = (
                 query_prompt.read_text(encoding="utf-8").strip()
                 if query_prompt.is_file()
@@ -234,8 +236,8 @@ class KnowledgeBaseSpec:
             fields["ontology"] = Ontology.from_file(directory / ONTOLOGY_FILE)
 
         documents = Retrieval(fields.get("retrieval", Retrieval.KNOWLEDGE)) is Retrieval.DOCUMENTS
-        extract_prompt = directory / EXTRACT_PROMPT_FILE
-        agent_prompt = directory / (DOCUMENTS_AGENT_PROMPT_FILE if documents else AGENT_PROMPT_FILE)
+        extract_prompt = prompts / EXTRACT_PROMPT_FILE
+        agent_prompt = prompts / (DOCUMENTS_AGENT_PROMPT_FILE if documents else AGENT_PROMPT_FILE)
         return cls(
             name=fields.pop("name", directory.name),
             extract_prompt=(

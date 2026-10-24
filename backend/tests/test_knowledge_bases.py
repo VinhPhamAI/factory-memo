@@ -59,12 +59,14 @@ class KnowledgeBaseSpecTest(unittest.TestCase):
     def test_embedding_query_file_is_optional_and_can_be_overridden(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
-            (path / "extract.md").write_text("Extract {RAW_CONVERSATION}")
-            (path / "agent.md").write_text("Answer from evidence")
+            prompts = path / "prompts"
+            prompts.mkdir()
+            (prompts / "extract.md").write_text("Extract {RAW_CONVERSATION}")
+            (prompts / "agent.md").write_text("Answer from evidence")
             self.assertEqual(
                 KnowledgeBaseSpec.from_directory(path, name="test").embedding_query_instruction, ""
             )
-            (path / "embedding_query.md").write_text("  Retrieve company knowledge\n")
+            (prompts / "embedding_query.md").write_text("  Retrieve company knowledge\n")
             self.assertEqual(
                 KnowledgeBaseSpec.from_directory(path, name="test").embedding_query_instruction,
                 "Retrieve company knowledge",
@@ -75,7 +77,7 @@ class KnowledgeBaseSpecTest(unittest.TestCase):
                         path, name="test", embedding_query_instruction=instruction
                     )
                     self.assertEqual(spec.embedding_query_instruction, instruction)
-            (path / "embedding_query.md").write_text(" \n")
+            (prompts / "embedding_query.md").write_text(" \n")
             self.assertEqual(
                 KnowledgeBaseSpec.from_directory(path, name="test").embedding_query_instruction, ""
             )
@@ -98,8 +100,10 @@ class KnowledgeBaseSpecTest(unittest.TestCase):
     def test_retrieval_mode_picks_prompts_and_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
-            (path / "agent.md").write_text("Cite [K:<id>]")
-            (path / "agent_documents.md").write_text("Cite [D:<id>]")
+            prompts = path / "prompts"
+            prompts.mkdir()
+            (prompts / "agent.md").write_text("Cite [K:<id>]")
+            (prompts / "agent_documents.md").write_text("Cite [D:<id>]")
             with self.assertRaises(FileNotFoundError):
                 KnowledgeBaseSpec.from_directory(path, name="test")
             spec = KnowledgeBaseSpec.from_directory(

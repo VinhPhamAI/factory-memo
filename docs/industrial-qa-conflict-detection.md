@@ -178,7 +178,7 @@ Giảm rủi ro của listwise:
    quả), prompt nói rõ `unrelated` / `scope_difference` là đáp án bình thường.
 4. **Loãng chú ý:** K ≤ 8, rút gọn case_card, giới hạn số quote mỗi ứng viên.
 
-Nguyên tắc trong `conflict.md` (thư mục KB): giả thuyết cạnh nguyên nhân đã xác
+Nguyên tắc trong `prompts/conflict.md` (thư mục KB): giả thuyết cạnh nguyên nhân đã xác
 nhận chưa phải mâu thuẫn; giá trị khác dưới điều kiện khác là `scope_difference`;
 thêm điều kiện là `refinement`; workaround cục bộ chỉ mâu thuẫn với quy định
 chung khi cùng phạm vi.
@@ -244,10 +244,10 @@ max_tokens = 4096
 ```
 
 `[conflicts]` có thể bỏ trống (dùng mặc định); `[llm.conflict]` và prompt
-`conflict = "conflict.md"` là bắt buộc. Engine chung ở
+`conflict = "prompts/conflict.md"` là bắt buộc. Engine chung ở
 `backend/src/services/knowledge_conflicts.py`, bảng ở
 `backend/src/storage/knowledge_conflicts.py`; KB khai báo policy (hard/soft key,
-regex anchor trong `industrial_qa/conflicts.py`, prompt `conflict.md`) qua
+regex anchor trong `industrial_qa/conflicts.py`, prompt `prompts/conflict.md`) qua
 `ConflictPolicy` và `KnowledgeBaseSpec.conflict_factory`, để KB `general` có thể
 dùng sau với policy khác. Fingerprint và cấu hình đã resolve được ghi vào kết
 quả job; `[conflicts]` cũng nằm trong provenance của cấu hình.
