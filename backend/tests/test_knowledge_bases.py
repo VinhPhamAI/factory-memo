@@ -82,19 +82,14 @@ class KnowledgeBaseSpecTest(unittest.TestCase):
                 KnowledgeBaseSpec.from_directory(path, name="test").embedding_query_instruction, ""
             )
 
-    def test_maintenance_is_registered_with_its_prompts(self) -> None:
-        spec = get_kb("maintenance")
-        self.assertIs(KNOWLEDGE_BASES["maintenance"], spec)
-        self.assertEqual(spec.database, "kb_maintenance")
-        self.assertIs(spec.retrieval, Retrieval.DOCUMENTS)
-        self.assertEqual(spec.document_table, "chunks_full")
-        self.assertEqual(spec.dataset.id_column, "case_id")
-        self.assertTrue(spec.dataset.path.is_file())
-        self.assertTrue(spec.retrieval_questions.path.is_file())
-        # extract.md stays loaded so switching back to knowledge retrieval is one line.
+    def test_builtin_registry_contains_current_knowledge_bases(self) -> None:
+        self.assertEqual(set(KNOWLEDGE_BASES), {"general", "industrial_qa"})
+        spec = get_kb("general")
+        self.assertIs(KNOWLEDGE_BASES["general"], spec)
+        self.assertEqual(spec.database, "kb_general")
+        self.assertIs(spec.retrieval, Retrieval.KNOWLEDGE)
         self.assertIn("{RAW_CONVERSATION}", spec.extract_prompt)
-        self.assertIn("maintenance knowledge assistant", spec.agent_prompt)
-        self.assertIn("[D:<doc_id>]", spec.agent_prompt)
+        self.assertTrue(spec.agent_prompt.strip())
         self.assertEqual(spec.text_search_config, "english")
 
     def test_retrieval_mode_picks_prompts_and_tools(self) -> None:
@@ -127,11 +122,11 @@ class KnowledgeBaseSpecTest(unittest.TestCase):
             _spec("test", retrieval="graph")
 
     def test_unknown_knowledge_base_lists_available_ones(self) -> None:
-        with self.assertRaisesRegex(ValueError, "available: .*maintenance"):
+        with self.assertRaisesRegex(ValueError, "available: general, industrial_qa"):
             get_kb("missing")
 
     def test_rejects_names_that_are_not_plain_identifiers(self) -> None:
-        for name in ("", "Maintenance", "1kb", "kb-name", 'kb"; drop'):
+        for name in ("", "Uppercase", "1kb", "kb-name", 'kb"; drop'):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 _spec(name)
 
@@ -175,7 +170,7 @@ class KnowledgeBaseSpecTest(unittest.TestCase):
         base = build_search_tool().tool_call_schema.model_json_schema()["properties"]
         self.assertNotIn("machine_id", base)
 
-        spec = get_kb("maintenance")
+        spec = get_kb("industrial_qa")
         properties = build_search_tool(
             spec.context_filters
         ).tool_call_schema.model_json_schema()["properties"]

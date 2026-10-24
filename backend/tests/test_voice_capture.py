@@ -623,7 +623,7 @@ class VoiceCaptureApiTest(unittest.TestCase):
         self.assertEqual(self.client.post(url, json={"name": " ", "text": "x"}).status_code, 422)
         self.assertEqual(self.client.post(url, json={
             "name": "a", "text": "không có tên", "dialogue": True}).status_code, 422)
-        self.assertEqual(self.client.post("/v1/voice/maintenance/texts",
+        self.assertEqual(self.client.post("/v1/voice/missing/texts",
                                           json={"name": "a", "text": "x"}).status_code, 404)
         self.assertEqual(self.store.conversations, {})
 
@@ -677,7 +677,7 @@ class VoiceCaptureApiTest(unittest.TestCase):
         self.assertTrue((Path(self.tmp.name) / event["audio_file"]).is_file())
 
     def test_unknown_kb_and_unready_speech_service_are_refused(self) -> None:
-        with self.client.websocket_connect("/v1/voice/maintenance/record") as socket:
+        with self.client.websocket_connect("/v1/voice/missing/record") as socket:
             self.assertEqual(socket.receive_json()["code"], "kb")
 
         async def down():

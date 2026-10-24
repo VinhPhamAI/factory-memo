@@ -6,10 +6,11 @@ import io
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from backend.knowledge_bases import RetrievalQuestions, get_kb
+from backend.knowledge_bases import DatasetSpec, Retrieval, RetrievalQuestions, get_kb
 from backend.scripts.kb import (
     TranscriptInput,
     build_parser,
@@ -83,30 +84,30 @@ class IngestEntrypointTest(unittest.TestCase):
                 list(read_transcripts(path))
 
     def test_ingest_parser_requires_only_a_knowledge_base(self) -> None:
-        args = build_parser().parse_args(["ingest", "maintenance"])
-        self.assertEqual(args.kb, "maintenance")
+        args = build_parser().parse_args(["ingest", "general"])
+        self.assertEqual(args.kb, "general")
         self.assertIsNone(args.file)
         self.assertEqual(args.batch_size, 1)
         self.assertIsNone(args.concurrency)
 
     def test_ingest_parser_accepts_batch_options(self) -> None:
         args = build_parser().parse_args(
-            ["ingest", "maintenance", "--batch-size", "8", "--concurrency", "4"]
+            ["ingest", "general", "--batch-size", "8", "--concurrency", "4"]
         )
         self.assertEqual((args.batch_size, args.concurrency), (8, 4))
         with self.assertRaises(SystemExit):
-            build_parser().parse_args(["ingest", "maintenance", "--batch-size", "0"])
+            build_parser().parse_args(["ingest", "general", "--batch-size", "0"])
 
     def test_ingest_parser_accepts_a_file_override(self) -> None:
         args = build_parser().parse_args(
-            ["ingest", "maintenance", "--file", "conversation.txt", "--limit", "3"]
+            ["ingest", "general", "--file", "conversation.txt", "--limit", "3"]
         )
         self.assertEqual(args.file, Path("conversation.txt"))
         self.assertEqual(args.limit, 3)
 
     def test_ingest_parser_rejects_non_positive_limit(self) -> None:
         with self.assertRaises(SystemExit):
-            build_parser().parse_args(["ingest", "maintenance", "--limit", "0"])
+            build_parser().parse_args(["ingest", "general", "--limit", "0"])
 
 
 class DocumentRetrievalEntrypointTest(unittest.TestCase):
@@ -127,13 +128,6 @@ class DocumentRetrievalEntrypointTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "gold_doc_ids"):
                 load_retrieval_questions(RetrievalQuestions(path))
 
-    def test_maintenance_questions_reference_indexed_cases(self) -> None:
-        spec = get_kb("maintenance")
-        queries, qrels = load_retrieval_questions(spec.retrieval_questions)
-        case_ids = {item.metadata["case_id"] for item in read_transcripts(spec.dataset.path)}
-        self.assertEqual(len(queries), 156)
-        self.assertLessEqual({doc for gold in qrels.values() for doc in gold}, case_ids)
-
     def test_documents_are_keyed_by_the_id_column(self) -> None:
         items = [
             TranscriptInput("Expert: a.", None, {"case_id": "7", "topic": "Lens"}, "f.csv:2"),
@@ -145,7 +139,7 @@ class DocumentRetrievalEntrypointTest(unittest.TestCase):
             to_documents([items[0], items[0]], id_column="case_id", title_column=None)
 
     def test_evaluate_parser_defaults(self) -> None:
-        args = build_parser().parse_args(["evaluate", "maintenance"])
+        args = build_parser().parse_args(["evaluate", "general"])
         self.assertEqual(args.modes, ["semantic", "keyword", "hybrid"])
         self.assertEqual(args.k_values, [1, 3, 5, 10])
         self.assertIsNone(args.query_instruction)
@@ -153,18 +147,18 @@ class DocumentRetrievalEntrypointTest(unittest.TestCase):
 
 class QueryEntrypointTest(unittest.TestCase):
     def test_query_parser_takes_knowledge_base_and_question(self) -> None:
-        args = build_parser().parse_args(["query", "maintenance", "How do I clean M01?"])
-        self.assertEqual(args.kb, "maintenance")
+        args = build_parser().parse_args(["query", "general", "How do I clean M01?"])
+        self.assertEqual(args.kb, "general")
         self.assertEqual(args.question, "How do I clean M01?")
 
     def test_reset_requires_explicit_confirmation_flag(self) -> None:
-        args = build_parser().parse_args(["reset", "maintenance"])
+        args = build_parser().parse_args(["reset", "general"])
         self.assertFalse(args.yes)
 
 
 class IngestionCommandTest(unittest.IsolatedAsyncioTestCase):
     async def test_command_saves_active_extraction_version_and_prompt(self) -> None:
-        spec = get_kb("enterprise_rag")
+        spec = get_kb("general")
         extractor = KnowledgeExtractionService(FakeLLM('{"knowledge_items":[]}'), spec.extract_prompt)
         store = FakeStore()
         store.processed_metadata_values = mock.AsyncMock(return_value=set())
@@ -173,7 +167,7 @@ class IngestionCommandTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "source.txt"
             path.write_text("A document to extract.")
-            args = build_parser().parse_args(["ingest", "enterprise_rag", "--file", str(path)])
+            args = build_parser().parse_args(["ingest", "general", "--file", str(path), "--no-consolidate"])
             with (
                 mock.patch("backend.scripts.kb.KnowledgeExtractionService.from_env", return_value=extractor),
                 mock.patch("backend.scripts.kb.KnowledgeStore.for_kb", new_callable=mock.AsyncMock, return_value=store),
@@ -182,44 +176,50 @@ class IngestionCommandTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await ingest(spec, args), 0)
         conversation, = store.conversations.values()
         self.assertEqual(conversation.metadata["extraction"], {
-            "version": "complete-units-v2", **extractor.provenance,
+            "version": spec.extraction_version, **extractor.provenance,
         })
         store.aclose.assert_awaited_once()
 
     async def test_documents_ingest_indexes_without_extraction(self) -> None:
-        args = build_parser().parse_args(["ingest", "maintenance", "--limit", "2", "--reindex"])
-        with (
-            mock.patch("backend.scripts.kb.KnowledgeExtractionService.from_env") as extractor,
-            mock.patch(
-                "backend.scripts.kb.index_kb_documents", new_callable=mock.AsyncMock, return_value=0
-            ) as index,
-        ):
-            self.assertEqual(await ingest(get_kb("maintenance"), args), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "conversations.csv"
+            path.write_text("case_id,raw_conversation\n1,Expert: Clean the lens.\n2,Expert: Inspect the cable.\n3,Expert: Check power.\n")
+            spec = replace(get_kb("general"), retrieval=Retrieval.DOCUMENTS,
+                           dataset=DatasetSpec(path, id_column="case_id"))
+            args = build_parser().parse_args(["ingest", "general", "--limit", "2", "--reindex"])
+            with (
+                mock.patch("backend.scripts.kb.KnowledgeExtractionService.from_env") as extractor,
+                mock.patch(
+                    "backend.scripts.kb.index_kb_documents", new_callable=mock.AsyncMock, return_value=0
+                ) as index,
+            ):
+                self.assertEqual(await ingest(spec, args), 0)
         extractor.assert_not_called()
-        spec, documents = index.await_args.args
+        indexed_spec, documents = index.await_args.args
+        self.assertIs(indexed_spec, spec)
         self.assertEqual([document.id for document in documents], ["1", "2"])
         self.assertTrue(documents[0].text.strip())
         self.assertEqual(index.await_args.kwargs, {"reindex": True})
 
     async def test_evaluate_and_reembed_follow_the_retrieval_mode(self) -> None:
-        args = build_parser().parse_args(["evaluate", "enterprise_rag"])
+        args = build_parser().parse_args(["evaluate", "general"])
         with self.assertRaisesRegex(ValueError, "needs documents"):
-            await evaluate(get_kb("enterprise_rag"), args)
+            await evaluate(get_kb("general"), args)
         with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
-            self.assertEqual(await reembed(get_kb("maintenance")), 2)
+            self.assertEqual(await reembed(replace(get_kb("general"), retrieval=Retrieval.DOCUMENTS)), 2)
         self.assertIn("--reindex", stderr.getvalue())
 
-    async def test_reset_requires_yes_and_targets_only_enterprise_database(self) -> None:
+    async def test_reset_requires_yes_and_targets_only_selected_database(self) -> None:
         with (
             mock.patch("backend.scripts.kb.drop_database", new_callable=mock.AsyncMock, return_value=True) as drop,
             mock.patch("backend.scripts.kb.server_url_from_env", return_value="server"),
             mock.patch("sys.stdout", new_callable=io.StringIO),
             mock.patch("sys.stderr", new_callable=io.StringIO),
         ):
-            self.assertEqual(await reset(get_kb("enterprise_rag"), confirmed=False), 2)
+            self.assertEqual(await reset(get_kb("general"), confirmed=False), 2)
             drop.assert_not_awaited()
-            self.assertEqual(await reset(get_kb("enterprise_rag"), confirmed=True), 0)
-            drop.assert_awaited_once_with("server", "kb_enterprise_rag")
+            self.assertEqual(await reset(get_kb("general"), confirmed=True), 0)
+            drop.assert_awaited_once_with("server", "kb_general")
 
 
 if __name__ == "__main__":

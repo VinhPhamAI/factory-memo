@@ -78,7 +78,7 @@ class QueueContract:
         with self.assertRaises(JobConflict):
             await self.queue.enqueue("general", "convert", "conversation", "c1")
         # Another KB or source is independent.
-        await self.queue.enqueue("maintenance", "extract", "conversation", "c1", mode="knowledge")
+        await self.queue.enqueue("industrial_qa", "extract", "conversation", "c1", mode="knowledge")
         with self.assertRaises(ValueError):
             await self.queue.enqueue("general", "ocr", "upload", "x")
 

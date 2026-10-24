@@ -145,7 +145,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
     def test_registered_official_policy_and_compatibility(self):
         self.assertIs(get_kb('industrial_qa'), SPEC)
         self.assertIs(SPEC.answer_pipeline, AnswerPipeline.INDUSTRIAL_QA)
-        self.assertIs(get_kb('maintenance').answer_pipeline, AnswerPipeline.AGENT)
+        self.assertIs(get_kb('general').answer_pipeline, AnswerPipeline.AGENT)
         with self.assertRaises(ValueError):
             replace(SPEC, retrieval='documents')
 

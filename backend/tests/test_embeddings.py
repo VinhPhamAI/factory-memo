@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -47,7 +48,7 @@ LOCAL_ENV = {
 class QueryInstructionEmbeddingsTest(unittest.IsolatedAsyncioTestCase):
     async def test_only_queries_get_the_instruction(self) -> None:
         inner = RecordingEmbeddings()
-        embeddings = QueryInstructionEmbeddings(inner, "Retrieve maintenance knowledge")
+        embeddings = QueryInstructionEmbeddings(inner, "Retrieve factory knowledge")
 
         embeddings.embed_documents(["doc"])
         await embeddings.aembed_documents(["doc 2"])
@@ -58,8 +59,8 @@ class QueryInstructionEmbeddingsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             inner.queries,
             [
-                "Instruct: Retrieve maintenance knowledge\nQuery: jig alignment",
-                "Instruct: Retrieve maintenance knowledge\nQuery: sensor",
+                "Instruct: Retrieve factory knowledge\nQuery: jig alignment",
+                "Instruct: Retrieve factory knowledge\nQuery: sensor",
             ],
         )
 
@@ -87,10 +88,10 @@ class BuildEmbeddingsFromEnvTest(unittest.TestCase):
         }
         with patch.dict("os.environ", env, clear=True):
             embeddings = build_embeddings_from_env(
-                query_instruction="  Retrieve maintenance knowledge  "
+                query_instruction="  Retrieve factory knowledge  "
             )
         self.assertIsInstance(embeddings, QueryInstructionEmbeddings)
-        self.assertEqual(embeddings.instruction, "Retrieve maintenance knowledge")
+        self.assertEqual(embeddings.instruction, "Retrieve factory knowledge")
         self.assertEqual(embeddings.embeddings.chunk_size, 32)
 
     def test_legacy_env_cannot_override_or_supply_kb_instruction(self) -> None:
@@ -113,6 +114,10 @@ class BuildEmbeddingsFromEnvTest(unittest.TestCase):
 
 class KnowledgeBaseEmbeddingTest(unittest.IsolatedAsyncioTestCase):
     async def test_store_uses_each_kbs_instruction_without_touching_documents(self):
+        specs = [
+            get_kb("general"),
+            replace(get_kb("general"), name="other_test", embedding_query_instruction="Retrieve factory knowledge"),
+        ]
         inner = [RecordingEmbeddings(), RecordingEmbeddings()]
         env = {
             **LOCAL_ENV,
@@ -125,8 +130,7 @@ class KnowledgeBaseEmbeddingTest(unittest.IsolatedAsyncioTestCase):
             patch("backend.src.storage.embeddings.OpenAIEmbeddings", side_effect=inner),
             patch.object(KnowledgeStore, "from_url") as from_url,
         ):
-            for name in ("maintenance", "enterprise_rag"):
-                spec = get_kb(name)
+            for spec in specs:
                 await KnowledgeStore.for_kb(spec, init_schema=False)
                 ensure.assert_awaited_with(env["DATABASE_URL"], spec.database)
                 embeddings = from_url.call_args.args[1]
@@ -134,9 +138,9 @@ class KnowledgeBaseEmbeddingTest(unittest.IsolatedAsyncioTestCase):
                 await embeddings.aembed_documents(["Original document"])
 
         self.assertNotEqual(inner[0].queries, inner[1].queries)
-        for client, name in zip(inner, ("maintenance", "enterprise_rag")):
+        for client, spec in zip(inner, specs):
             self.assertEqual(client.queries, [
-                f"Instruct: {get_kb(name).embedding_query_instruction}\nQuery: Who owns this?"
+                f"Instruct: {spec.embedding_query_instruction}\nQuery: Who owns this?"
             ])
             self.assertEqual(client.documents, ["Original document"])
 
@@ -151,7 +155,7 @@ class KnowledgeBaseEmbeddingTest(unittest.IsolatedAsyncioTestCase):
             patch("backend.src.storage.embeddings.build_embeddings_from_env") as build,
             patch.object(KnowledgeStore, "from_url") as from_url,
         ):
-            await KnowledgeStore.for_kb(get_kb("enterprise_rag"), embeddings=supplied, init_schema=False)
+            await KnowledgeStore.for_kb(get_kb("general"), embeddings=supplied, init_schema=False)
         build.assert_not_called()
         self.assertIs(from_url.call_args.args[1], supplied)
 

@@ -57,9 +57,9 @@ class FakeAgent:
 
 class KnowledgeAgentApiTest(unittest.TestCase):
     def test_enterprise_endpoint_selects_its_agent_without_body_kb(self) -> None:
-        enterprise, maintenance = FakeAgent(), FakeAgent()
+        enterprise, general = FakeAgent(), FakeAgent()
         with TestClient(create_app(knowledge_agents={
-            "enterprise_rag": enterprise, "maintenance": maintenance,
+            "enterprise_rag": enterprise, "general": general,
         })) as client:
             response = client.post(
                 "/v1/knowledge-agent/enterprise_rag/stream",
@@ -69,7 +69,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
         self.assertEqual(response.headers["x-accel-buffering"], "no")
         self.assertEqual(enterprise.calls, [("Who owns ENG-4825?", "thread-1")])
-        self.assertEqual(maintenance.calls, [])
+        self.assertEqual(general.calls, [])
         self.assertIn("event: answer.citations", response.text)
         self.assertIn("event: run.completed", response.text)
 
@@ -80,7 +80,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
                 {"query": " ", "thread_id": "t"},
                 {"query": "hi", "thread_id": " "},
                 {"query": "hi"},
-                {"query": "hi", "thread_id": "t", "kb": "maintenance"},
+                {"query": "hi", "thread_id": "t", "kb": "general"},
             ):
                 with self.subTest(body=body):
                     response = client.post("/v1/knowledge-agent/enterprise_rag/stream", json=body)
@@ -104,10 +104,10 @@ class KnowledgeAgentApiTest(unittest.TestCase):
 
     def test_streams_versioned_sse_events(self) -> None:
         agent = FakeAgent()
-        with TestClient(create_app(knowledge_agents={"maintenance": agent})) as client:
+        with TestClient(create_app(knowledge_agents={"general": agent})) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
-                json={"kb": "maintenance", "query": "  sensor?  ", "thread_id": "thread-1"},
+                json={"kb": "general", "query": "  sensor?  ", "thread_id": "thread-1"},
                 headers={"Accept": "text/event-stream"},
             )
 
@@ -120,10 +120,10 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertIn("id: request-1:4", response.text)
 
     def test_converts_stream_errors_to_run_failed(self) -> None:
-        with TestClient(create_app(knowledge_agents={"maintenance": FakeAgent(fail=True)})) as client:
+        with TestClient(create_app(knowledge_agents={"general": FakeAgent(fail=True)})) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
-                json={"kb": "maintenance", "query": "sensor?", "thread_id": "thread-1"},
+                json={"kb": "general", "query": "sensor?", "thread_id": "thread-1"},
             )
 
         self.assertEqual(response.status_code, 200)
@@ -132,17 +132,17 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertIn('"error_type":"FakeFailure"', response.text)
 
     def test_rejects_blank_queries_before_starting_stream(self) -> None:
-        with TestClient(create_app(knowledge_agents={"maintenance": FakeAgent()})) as client:
+        with TestClient(create_app(knowledge_agents={"general": FakeAgent()})) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
-                json={"kb": "maintenance", "query": "   ", "thread_id": "thread-1"},
+                json={"kb": "general", "query": "   ", "thread_id": "thread-1"},
             )
 
         self.assertEqual(response.status_code, 422)
 
     def test_routes_to_the_requested_knowledge_base(self) -> None:
-        maintenance, other = FakeAgent(), FakeAgent()
-        agents = {"maintenance": maintenance, "other": other}
+        general, other = FakeAgent(), FakeAgent()
+        agents = {"general": general, "other": other}
         with TestClient(create_app(knowledge_agents=agents)) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
@@ -150,11 +150,11 @@ class KnowledgeAgentApiTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(maintenance.calls, [])
+        self.assertEqual(general.calls, [])
         self.assertEqual(other.calls, [("sensor?", "thread-1")])
 
     def test_rejects_unknown_knowledge_base(self) -> None:
-        with TestClient(create_app(knowledge_agents={"maintenance": FakeAgent()})) as client:
+        with TestClient(create_app(knowledge_agents={"general": FakeAgent()})) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
                 json={"kb": "missing", "query": "sensor?", "thread_id": "thread-1"},
@@ -163,7 +163,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_requires_a_knowledge_base(self) -> None:
-        with TestClient(create_app(knowledge_agents={"maintenance": FakeAgent()})) as client:
+        with TestClient(create_app(knowledge_agents={"general": FakeAgent()})) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
                 json={"query": "sensor?", "thread_id": "thread-1"},
@@ -172,14 +172,14 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
 
     def test_lists_knowledge_bases(self) -> None:
-        agents = {"other": FakeAgent(), "maintenance": FakeAgent()}
+        agents = {"other": FakeAgent(), "general": FakeAgent()}
         with TestClient(create_app(knowledge_agents=agents)) as client:
             response = client.get("/v1/knowledge-agent/knowledge-bases")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             [item["name"] for item in response.json()["knowledge_bases"]],
-            ["maintenance", "other"],
+            ["general", "other"],
         )
 
 

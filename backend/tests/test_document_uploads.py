@@ -26,7 +26,7 @@ class DocumentUploadTests(unittest.TestCase):
         self.store = DocumentUploadStore(self.root, max_bytes=32)
         # Any attempted agent/DB ingestion would fail: the only fake is an opaque object.
         self.client = self.enterContext(TestClient(create_app(
-            knowledge_agents={"general": object(), "maintenance": object()},
+            knowledge_agents={"general": object(), "industrial_qa": object()},
             document_uploads=self.store,
         )))
 
@@ -59,11 +59,11 @@ class DocumentUploadTests(unittest.TestCase):
     def test_duplicate_names_do_not_overwrite_and_kbs_are_separate(self):
         a = self.upload(content=b"first").json()
         b = self.upload(content=b"second").json()
-        c = self.upload(kb="maintenance").json()
+        c = self.upload(kb="industrial_qa").json()
         self.assertNotEqual(a["id"], b["id"])
         self.assertEqual((self.root / a["storage_key"]).read_bytes(), b"first")
         self.assertEqual((self.root / b["storage_key"]).read_bytes(), b"second")
-        self.assertTrue(c["storage_key"].startswith("maintenance/"))
+        self.assertTrue(c["storage_key"].startswith("industrial_qa/"))
 
     def test_empty_oversize_and_missing_files_do_not_publish_objects(self):
         self.assertEqual(self.upload(content=b"").status_code, 422)

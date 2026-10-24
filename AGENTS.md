@@ -48,10 +48,6 @@ and [dependency manifest](pyproject.toml) for supporting details.
 
 Available domain packages in this checkout:
 
-- **Maintenance:** defaults to document retrieval over source conversations. Its
-  benchmark runner separately evaluates fresh extraction and knowledge retrieval.
-  Preserve the existing `data/maintainance/` directory spelling for compatibility.
-  See the [maintenance guide](backend/knowledge_bases/maintenance/README.md).
 - **Industrial QA:** combines extracted expert knowledge and official manual
   chunks, with equipment catalog/ontology scope, reranking and evidence-grounded
   answers. API, CLI and benchmark adapters must use the shared retrieval/answer
@@ -74,7 +70,7 @@ Available domain packages in this checkout:
   [general guide](backend/knowledge_bases/general/README.md).
 - **EnterpriseRAG and AssetOpsBench:** documentation and some tests reference
   `enterprise_rag` and `assetopsbench`, but their packages are absent in this
-  checkout and the built-in registry (checked 2026-10-16) lists only `maintenance`,
+  checkout and the built-in registry (checked 2026-10-24) lists only
   `industrial_qa` and `general`, plus any KBs created in the UI. Treat these as documented integrations with
   missing implementation, rather than working commands. Recheck before starting work.
 
@@ -160,15 +156,10 @@ Report overall results and breakdowns by `knowledge_source` (`expert_only`,
 `docs_only`, `expert_and_docs`) and difficulty. Missing predictions score zero;
 identify subset coverage and never present fixture or partial runs as full scores.
 
-### Maintenance and other adapters
+### Other adapters
 
-Maintenance v2 is a separate diagnostic benchmark with 40 synthetic conversations,
-156 positive retrieval questions and 8 additional abstention questions for later
-answer evaluation. Its document/knowledge metrics measure source-case retrieval;
-they are not interchangeable with the factory benchmark's evidence-unit metrics
-or answer correctness. See the maintenance guide for candidate-budget and audit
-limitations. Strong synthetic scores or source-faithfulness judges do not establish
-quality on noisy production recordings or effectiveness in a real factory.
+Strong synthetic scores or source-faithfulness judges do not establish quality
+on noisy production recordings or effectiveness in a real factory.
 
 If the missing adapters are restored, retain their documented limitations:
 EnterpriseRAG's reduced corpus lacks the full distractor set; AssetOpsBench's

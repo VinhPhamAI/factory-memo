@@ -5,7 +5,7 @@ import type { AnswerEvent } from "@/types";
 const envelope = (type: string, data = {}) => ({ version: 1, type, data });
 const frame = (type: string, data = {}) =>
   `event: ${type}\r\ndata: ${JSON.stringify(envelope(type, data))}\r\n\r\n`;
-const context = { kb: "maintenance", threadId: "thread-one" };
+const context = { kb: "general", threadId: "thread-one" };
 
 function stream(text: string, byteSize = 3) {
   const bytes = new TextEncoder().encode(text);
@@ -78,7 +78,7 @@ describe("Knowledge-agent HTTP transport", () => {
     expect(JSON.stringify(events)).not.toContain("secret");
   });
   it("loads and validates the backend KB list, without fixture fallbacks", async () => {
-    const items = [{ name: "maintenance", description: "Bảo trì" }];
+    const items = [{ name: "general", description: "Bảo trì" }];
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(Response.json({ knowledge_bases: items })),
@@ -155,7 +155,7 @@ describe("Knowledge-agent HTTP transport", () => {
     expect(JSON.stringify(events)).not.toContain("do-not-render");
     expect(events.at(-1)?.event).toBe("run.completed");
     expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/maintenance/stream"),
+      expect.stringContaining("/general/stream"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ query: "Câu hỏi", thread_id: context.threadId }),

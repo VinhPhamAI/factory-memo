@@ -14,23 +14,21 @@ backend/knowledge_bases/
   __init__.py          # registry: KNOWLEDGE_BASES, get_kb()
   base.py              # KnowledgeBaseSpec, DatasetSpec, ContextFilter, Retrieval
   stores.py            # open_store(): the store a KB's agent searches
-  maintenance/
-    __init__.py        # SPEC: dataset path/columns, retrieval mode, filters, ...
+  general/
+    __init__.py        # SPEC: typed extraction, knowledge retrieval
+    schema.py          # extraction output schema
     prompts/
       extract.md         # extraction prompt; must contain {RAW_CONVERSATION}
       agent.md           # agent prompt for knowledge retrieval
-      agent_documents.md # agent prompt for document retrieval
       embedding_query.md # optional query-side embedding instruction
-  general/             # general-purpose conversations (see general/README.md)
-  enterprise_rag/      # EnterpriseRAG-Bench (see below)
-    prepare.py         # downloads the questions and their gold documents
-    bench.py           # retrieval recall and ERB-format answers
+  industrial_qa/       # equipment catalog, expert knowledge and manual retrieval
 ```
 
-To add a KB, copy `maintenance/` to a new name, edit its prompts and the
-`DatasetSpec`, then add its `SPEC` to `KNOWLEDGE_BASES` in `__init__.py`.
-`general/` is the simplest starting point for knowledge retrieval: a typed
-extraction schema, prompts, and a `SPEC` without dataset, filters or ontology.
+To add a KB, copy `general/` to a new name, edit its prompts and schema, then
+add its `SPEC` to `KNOWLEDGE_BASES` in `__init__.py`. Add a `DatasetSpec` if the
+KB has a default ingestion dataset. See [general/README.md](general/README.md).
+The built-in registry contains `general` and `industrial_qa`; the EnterpriseRAG
+and AssetOpsBench integrations described below are absent from this checkout.
 
 ### Knowledge bases created in the UI
 
@@ -48,8 +46,8 @@ Creation is refused for a taken name, for an existing but unregistered
 `kb_<name>` database (it may hold another KB's data), or beyond `KB_MAX_CREATED`
 (default 50). If registration fails, the new empty database is dropped. There is
 no rename, delete or authentication; the `kb` CLI does not know created KBs.
-Industrial QA and maintenance are not offered as templates because they depend
-on their catalogs, manuals and benchmarks.
+Industrial QA is not offered as a template because it depends on its equipment
+catalog, manuals and benchmark.
 
 ## Retrieval modes
 
@@ -64,22 +62,15 @@ on their catalogs, manuals and benchmarks.
 | Citations | `[K:<knowledge_id>]` | `[D:<doc_id>]`, doc id = `DatasetSpec.id_column` |
 | Evaluation | — | `kb evaluate` on `retrieval_questions` |
 
-Maintenance uses `documents`; `enterprise_rag` and `assetopsbench` use
-`knowledge`. Switching maintenance back is one line in its `SPEC`
-(`retrieval=Retrieval.KNOWLEDGE`): both prompt sets stay in the directory and
-both indexes live side by side in `kb_maintenance`, so neither is lost.
-`context_filters` apply to knowledge retrieval only, since chunks have no
-extracted context.
-
-Maintenance v2 has 40 conversations and 156 positive retrieval questions. Run
-`uv run python -m backend.knowledge_bases.maintenance.prepare` to materialize its
-CSVs; see [maintenance/README.md](maintenance/README.md) for fresh extraction,
-native knowledge retrieval evaluation, and the visual source-to-card audit.
+Both built-in KBs use `knowledge`. Custom KB definitions can select
+`retrieval=Retrieval.DOCUMENTS` and supply `prompts/agent_documents.md` to use
+the shared document retrieval implementation. `context_filters` apply to
+knowledge retrieval only, since chunks have no extracted context.
 
 For document retrieval, `chunking=ChunkingConfig(max_words=..., overlap_sentences=...)`
-sets how sources are split (default: one chunk per source, table `chunks_full`;
-maintenance v2 conversations have 292-434 content words). Each setup gets its own table, and
-the stored index config (embedding model/dim, chunking) refuses to mix setups.
+sets how sources are split (default: one chunk per source, table `chunks_full`).
+Each setup gets its own table, and the stored index config (embedding model/dim,
+chunking) refuses to mix setups.
 `ingest` skips sources already indexed; `--reindex` rebuilds the table, which is
 also how to apply a new embedding model (`reembed` covers knowledge retrieval only).
 
@@ -90,10 +81,10 @@ and saves per-question rankings to `data/kb_eval/<kb>/`. `--query-instruction`
 compares embedding instructions without re-indexing.
 
 Query embedding instructions belong to each KB's optional `prompts/embedding_query.md`,
-loaded as `KnowledgeBaseSpec.embedding_query_instruction`. Maintenance uses a
-factory troubleshooting instruction; EnterpriseRAG uses an internal company
-knowledge instruction. The shared embedding client receives the selected KB's
-instruction through `KnowledgeStore.for_kb`, for both CLI and API retrieval.
+loaded as `KnowledgeBaseSpec.embedding_query_instruction`. General supplies a
+query instruction for finding conversation knowledge. The shared embedding
+client receives the selected KB's instruction through `KnowledgeStore.for_kb`,
+for both CLI and API retrieval.
 Queries use `Instruct: <instruction>\nQuery: <query>`; document embeddings are
 unchanged. For models that do not use this format, leave the file empty/remove
 it or pass `embedding_query_instruction=""` in the KB's `SPEC`. An explicit
@@ -110,7 +101,7 @@ differs per KB is which `context` keys matter:
 - `context_filters`: each `ContextFilter(key, description)` becomes an optional
   `search_knowledge` argument of the agent, filtering on `context.<key>` (with
   an expression index). Records without the key still match unless
-  `include_unscoped=False`. Maintenance filters on `machine_id`/`machine_model`.
+  `include_unscoped=False`. Industrial QA filters on `machine_id`/`machine_model`.
 - `embedding_context_keys`: context keys that lead a record's embedded text.
 - `DatasetSpec.context_columns`: CSV columns copied into the context of every
   record extracted from the row (e.g. the document's `source_type`).
@@ -134,12 +125,11 @@ differs per KB is which `context` keys matter:
 Every command takes the KB to act on:
 ```
 uv run python -m backend.scripts.kb list
-uv run python -m backend.scripts.kb ingest maintenance --limit 5
-uv run python -m backend.scripts.kb ingest maintenance --file other.csv
-uv run python -m backend.scripts.kb query maintenance "How do I fix the unstable sensor on M01?"
-uv run python -m backend.scripts.kb evaluate maintenance
-uv run python -m backend.scripts.kb reembed enterprise_rag
-uv run python -m backend.scripts.kb reset maintenance --yes
+uv run python -m backend.scripts.kb ingest general --file path/to/conversations.csv --limit 5
+uv run python -m backend.scripts.kb ingest general --file path/to/transcript.txt
+uv run python -m backend.scripts.kb query general "What did the expert recommend?"
+uv run python -m backend.scripts.kb reembed general
+uv run python -m backend.scripts.kb reset general --yes
 ```
 
 For knowledge retrieval, `ingest` processes one transcript at a time by default. With `--batch-size N`

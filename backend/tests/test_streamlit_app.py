@@ -23,7 +23,7 @@ class SseClientTest(unittest.TestCase):
             with self.subTest(suffix=suffix):
                 self.assertEqual(api_base_url(BASE + suffix), BASE)
                 self.assertEqual(
-                    scoped_stream_url(BASE + suffix, "maintenance"), BASE + "/maintenance/stream"
+                    scoped_stream_url(BASE + suffix, "general"), BASE + "/general/stream"
                 )
         with self.assertRaises(ValueError):
             api_base_url("not a URL")
@@ -48,9 +48,9 @@ class StreamlitIntegrationTest(unittest.TestCase):
         )
 
     def test_enterprise_chat_and_switching_knowledge_bases(self):
-        enterprise, maintenance = FakeAgent(), FakeAgent()
+        enterprise, general = FakeAgent(), FakeAgent()
         with TestClient(create_app(knowledge_agents={
-            "enterprise_rag": enterprise, "maintenance": maintenance,
+            "enterprise_rag": enterprise, "general": general,
         })) as api:
             get_patch, client_patch = self.run_ui(api)
             with get_patch, client_patch:
@@ -65,12 +65,12 @@ class StreamlitIntegrationTest(unittest.TestCase):
                 self.assertEqual(ui.status[0].state, "complete")
                 ui.chat_input[0].set_value("Any follow-ups?").run()
                 self.assertEqual(enterprise.calls[-1], ("Any follow-ups?", thread))
-                ui.selectbox[0].select("maintenance").run()
+                ui.selectbox[0].select("general").run()
                 self.assertEqual(ui.session_state.messages, [])
                 self.assertNotEqual(ui.session_state.thread_id, thread)
                 ui.chat_input[0].set_value("sensor?").run()
                 self.assertFalse(ui.exception)
-                self.assertEqual(len(maintenance.calls), 1)
+                self.assertEqual(len(general.calls), 1)
                 self.assertEqual(len(enterprise.calls), 2)
 
     def test_backend_failure_is_shown_as_error(self):

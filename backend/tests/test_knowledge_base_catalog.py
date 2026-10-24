@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -23,7 +24,7 @@ from backend.api.knowledge_bases import (
 )
 from backend.api.voice_capture import VoiceCaptureService
 from backend.app import create_app
-from backend.knowledge_bases import KNOWLEDGE_BASES, get_kb
+from backend.knowledge_bases import KNOWLEDGE_BASES, Retrieval, get_kb
 from backend.knowledge_bases.custom import custom_spec
 from backend.src.storage import StorageError
 from backend.src.storage.kb_registry import (
@@ -132,7 +133,7 @@ class CatalogTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([spec.name for spec in self.listener.specs], ["may_ep"])
         names = [item["name"] for item in catalog.items()]
         self.assertEqual(names[-1], "may_ep")
-        self.assertTrue({"general", "industrial_qa", "maintenance"} <= set(names))
+        self.assertTrue({"general", "industrial_qa"} <= set(names))
 
     async def test_refuses_taken_names_and_unregistered_databases(self) -> None:
         catalog = self.catalog(admin=FakeAdmin({"kb_old_data"}))
@@ -172,7 +173,10 @@ class CatalogApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.capture = VoiceCaptureService(
-            {"general": get_kb("general"), "maintenance": get_kb("maintenance")},
+            {
+                "general": get_kb("general"),
+                "documents_test": replace(get_kb("general"), name="documents_test", retrieval=Retrieval.DOCUMENTS),
+            },
             audio_dir=Path(self.tmp.name),
         )
         self.catalog = KnowledgeBaseCatalog(

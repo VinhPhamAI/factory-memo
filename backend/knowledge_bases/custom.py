@@ -13,8 +13,8 @@ import dataclasses
 from backend.knowledge_bases import general
 from backend.knowledge_bases.base import KnowledgeBaseSpec
 
-# Templates a created knowledge base may copy. Industrial QA and maintenance are
-# tied to their catalogs, manuals and benchmarks, so they are not offered.
+# Templates a created knowledge base may copy. Industrial QA depends on its
+# equipment catalog, manuals and benchmark, so it is not offered as a template.
 TEMPLATES: dict[str, KnowledgeBaseSpec] = {"general": general.SPEC}
 DEFAULT_TEMPLATE = "general"
 MAX_TITLE_LENGTH = 80

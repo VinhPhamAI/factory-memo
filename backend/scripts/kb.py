@@ -2,15 +2,12 @@
 
 Examples:
     uv run python -m backend.scripts.kb list
-    uv run python -m backend.scripts.kb ingest maintenance --limit 5
-    uv run python -m backend.scripts.kb ingest maintenance --batch-size 8
-    uv run python -m backend.scripts.kb ingest enterprise_rag --limit 20 --batch-size 8
-    uv run python -m backend.scripts.kb ingest maintenance --file transcript.txt
-    uv run python -m backend.scripts.kb ingest maintenance --extract --verify llm --limit 5
-    uv run python -m backend.scripts.kb query maintenance "How do I fix the unstable sensor on M01?"
-    uv run python -m backend.scripts.kb evaluate maintenance
-    uv run python -m backend.scripts.kb reembed maintenance
-    uv run python -m backend.scripts.kb reset maintenance --yes
+    uv run python -m backend.scripts.kb ingest general --file conversations.csv --limit 5
+    uv run python -m backend.scripts.kb ingest general --file conversations.csv --batch-size 8
+    uv run python -m backend.scripts.kb ingest general --file transcript.txt --verify llm
+    uv run python -m backend.scripts.kb query general "What did the expert recommend?"
+    uv run python -m backend.scripts.kb reembed general
+    uv run python -m backend.scripts.kb reset general --yes
 
 Knowledge bases with retrieval="knowledge" extract knowledge records with an
 LLM at ingest; retrieval="documents" chunks and embeds the sources as they are

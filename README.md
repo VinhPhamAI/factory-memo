@@ -74,7 +74,7 @@ docker compose -f deployments/docker-compose.yml exec postgres pg_isready -U voi
 
 PostgreSQL is exposed on **localhost:5434**. The application creates each
 `kb_<name>` database, tables and vector extension on first use. The built-in
-registry contains `maintenance`, `industrial_qa` and `general`; further knowledge
+registry contains `industrial_qa` and `general`; further knowledge
 bases can be created in the UI and are recorded in the `knowledge_base_registry`
 table (see the [KB guide](backend/knowledge_bases/README.md#knowledge-bases-created-in-the-ui)).
 

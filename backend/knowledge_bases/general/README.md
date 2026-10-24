@@ -4,8 +4,8 @@ A general-purpose knowledge agent for conversations on any topic. Ingestion
 stores each conversation in `raw_conversations`, extracts structured knowledge
 into `knowledge_items`, and the ReAct agent answers questions over those records
 with `[K:<id>]` citations. Unlike `industrial_qa`, there is no fixed
-retrieval/rerank/answer workflow, equipment catalog or ontology. Unlike
-`maintenance`, there is no Case Card or domain-specific scope.
+retrieval/rerank/answer workflow, equipment catalog, ontology, Case Card or
+domain-specific scope.
 
 ```
 general/

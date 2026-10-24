@@ -1,12 +1,12 @@
 """Registry of knowledge bases.
 
-To add one, copy the `maintenance` package (prompts/, SPEC) under a
+To add one, copy the `general` package (prompts/, SPEC) under a
 new name and register its SPEC below.
 """
 
 from __future__ import annotations
 
-from backend.knowledge_bases import general, industrial_qa, maintenance
+from backend.knowledge_bases import general, industrial_qa
 from backend.knowledge_bases.base import (
     ContextFilter,
     AnswerPipeline,
@@ -18,7 +18,7 @@ from backend.knowledge_bases.base import (
 
 
 KNOWLEDGE_BASES: dict[str, KnowledgeBaseSpec] = {
-    spec.name: spec for spec in (maintenance.SPEC, industrial_qa.SPEC, general.SPEC)
+    spec.name: spec for spec in (industrial_qa.SPEC, general.SPEC)
 }
 
 

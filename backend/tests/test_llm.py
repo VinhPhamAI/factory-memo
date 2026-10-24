@@ -2,9 +2,8 @@
 """Run the knowledge extraction service against a benchmark conversation.
 
 Examples:
-    uv run --env-file .env python backend/tests/test_llm.py
-    uv run --env-file .env python backend/tests/test_llm.py --case-id 7
     uv run --env-file .env python backend/tests/test_llm.py --conversation "Expert: ..."
+    uv run --env-file .env python backend/tests/test_llm.py --csv conversations.csv --case-id 7
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--kb",
-        default="maintenance",
+        default="general",
         help="Knowledge base whose extraction prompt and dataset to use.",
     )
     source = parser.add_mutually_exclusive_group()

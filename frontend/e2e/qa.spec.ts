@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const bases = [
-  { name: "maintenance", description: "Tra cứu các ca bảo trì" },
+  { name: "general", description: "Tri thức chung từ hội thoại" },
   { name: "industrial_qa", description: "Tri thức chuyên gia và tài liệu" },
 ];
 const sse = (type: string, data = {}) =>
@@ -163,7 +163,7 @@ test("live QA selects a KB, streams real-contract citations, retains thread and 
   await page.goto("/");
   await expect(page).toHaveURL(/\/ask$/);
   await expect(page.getByLabel("Knowledge base", { exact: true })).toHaveValue(
-    "maintenance",
+    "general",
   );
   await expect(page.getByTestId("nav-record")).toHaveCount(0);
   await expect(page.getByTestId("upload-open")).toHaveCount(0);
@@ -179,7 +179,7 @@ test("live QA selects a KB, streams real-contract citations, retains thread and 
   await expect(page.getByTestId("chat-answer")).not.toContainText(
     "MR-JE-AX167",
   );
-  expect(calls[0].url).toContain("/maintenance/stream");
+  expect(calls[0].url).toContain("/general/stream");
   expect(Object.keys(calls[0].body).sort()).toEqual(["query", "thread_id"]);
   await expect(page.getByTestId("chat-answer")).not.toContainText("K:CASE-1");
   await expect(page.getByTestId("chat-answer")).not.toContainText(
@@ -215,7 +215,7 @@ test("live QA selects a KB, streams real-contract citations, retains thread and 
   const firstThread = calls[0].body.thread_id;
   await page.reload();
   await expect(page.getByTestId("chat-answer")).toHaveCount(2);
-  await expect(page.getByTestId("kb-select")).toHaveValue("maintenance");
+  await expect(page.getByTestId("kb-select")).toHaveValue("general");
 
   await page.getByTestId("kb-select").selectOption("industrial_qa");
   await expect(page.getByTestId("chat-answer")).toHaveCount(0);
@@ -231,7 +231,7 @@ test("live QA selects a KB, streams real-contract citations, retains thread and 
   await expect(
     page.getByLabel("Cuộc hỏi đáp", { exact: true }).locator("option"),
   ).toHaveCount(2);
-  await page.getByTestId("kb-select").selectOption("maintenance");
+  await page.getByTestId("kb-select").selectOption("general");
   await page
     .getByLabel("Cuộc hỏi đáp", { exact: true })
     .selectOption(firstThread);

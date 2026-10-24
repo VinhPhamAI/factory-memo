@@ -19,7 +19,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import PrivateAttr, ValidationError
 
-from backend.knowledge_bases import Retrieval, maintenance
+from backend.knowledge_bases import ContextFilter, Retrieval
 from backend.src.agents.agent.service import (
     DocumentCitation,
     InvalidKnowledgeCitation,
@@ -139,8 +139,8 @@ def _service(store: FakeStore, *responses: AIMessage) -> tuple[KnowledgeAgentSer
         model=model,
         system_prompt="Answer from the knowledge base.",
         timeout_seconds=10,
-        context_filters=maintenance.SPEC.context_filters,
-        trace_context_keys=maintenance.SPEC.trace_context_keys,
+        context_filters=(ContextFilter("machine_id", "Machine ID"), ContextFilter("machine_model", "Machine model")),
+        trace_context_keys=("machine_id", "machine_model", "component_model", "condition"),
     )
     return service, model
 

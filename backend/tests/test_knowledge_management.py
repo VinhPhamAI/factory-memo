@@ -4,6 +4,7 @@ import asyncio
 import tempfile
 import unittest
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.api.voice_capture import VoiceCaptureService
-from backend.knowledge_bases import get_kb
+from backend.knowledge_bases import Retrieval, get_kb
 from backend.src.agents.rag import ChunkHit
 from backend.src.services.knowledge_extraction import KnowledgeExtractionResult, KnowledgeItem, KnowledgeType
 from backend.src.services.knowledge_ingestion import KnowledgeIngestionService
@@ -109,7 +110,10 @@ class KnowledgeManagementTest(unittest.TestCase):
             subject="Trục Z", claim="Chưa xác nhận nguyên nhân.", type=KnowledgeType.FACT,
             context={"quotes": [{"quote": "Chưa xác nhận nguyên nhân."}]},
         )]))
-        specs = {name: get_kb(name) for name in ("general", "maintenance")}
+        specs = {
+            "general": get_kb("general"),
+            "documents_test": replace(get_kb("general"), name="documents_test", retrieval=Retrieval.DOCUMENTS),
+        }
 
         async def open_store(spec):
             return self.store
@@ -192,13 +196,13 @@ class KnowledgeManagementTest(unittest.TestCase):
         self.assertEqual(listing["sources"][0]["review"], "reviewed")
 
     def test_knowledge_extraction_is_draft_and_shared_review_supports_document_kb(self):
-        source_id = self.upload(kb="maintenance")
-        path = self.path(source_id, kb="maintenance")
+        source_id = self.upload(kb="documents_test")
+        path = self.path(source_id, kb="documents_test")
         self.assertEqual(self.client.post(path + "/extract", json={"mode": "knowledge"}).status_code, 202)
         detail = self.wait(path)
         self.assertEqual(detail["records"][0]["status"], "draft")
         record = detail["records"][0]
-        response = self.client.post(f"/v1/knowledge-management/maintenance/knowledge/{record['id']}/review", json={"decision": "approve"})
+        response = self.client.post(f"/v1/knowledge-management/documents_test/knowledge/{record['id']}/review", json={"decision": "approve"})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["status"], "approved")
         self.assertEqual(response.json()["history"][0]["actor"], "knowledge management UI (unauthenticated)")
