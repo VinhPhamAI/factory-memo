@@ -22,13 +22,67 @@ QR identification are planned capabilities.
 
 ## 1. Environment setup
 
-Requirements: **Python 3.12+**, **uv**, and **Docker with Docker Compose**.
+Docker backend requirements: **Docker with Compose v2.24+** and **Bash**;
+**make** is optional. **Python 3.12+** and **uv** are needed only for commands
+run on the host (benchmarking, manual snapshot commands, or a host-run API).
 Run all commands from the repository root.
+
+### Docker backend with one command
+
+On first use, copy `.env.example` to `.env` and configure the chat and embedding
+settings described below. Keep an existing `.env` when rerunning setup.
+
+```bash
+cp .env.example .env  # first use only, then edit provider/embedding settings
+make setup
+# Equivalent without make: bash deployments/setup.sh
+```
+
+Setup runs sequentially:
+
+1. Check Docker/Compose and configuration; build the shared backend image.
+2. Stop existing API/worker containers so they cannot write during restore.
+3. Start PostgreSQL and wait for its healthcheck.
+4. Initialize `knowledge_base_registry` and `ingestion_jobs` using the container's
+   database connection. Database/authentication/DDL failures stop setup.
+5. Run `backend.knowledge_bases.industrial_qa.snapshot pull` in a temporary
+   container, using the API image, `.env`, internal database URL and data volumes.
+   Only `benchmark/public/` is additionally mounted, read-only. No host `uv sync`
+   is required. This rebuilds embeddings and can incur embedding-provider costs.
+6. Start API and wait for `/healthz`, then start worker and show service status.
+
+**Seed failure is non-fatal:** its output is saved to `data/setup/seed.*`, a
+warning is repeated at the end, and API/worker still start. Setup exits 0 if
+the remaining steps succeed; build, database or service-start failures exit
+nonzero. Restore can leave partial data after a failure; setup does not roll it
+back or delete unrelated records. A running worker container is reported as
+started; setup does not submit a real LLM extraction job to validate it.
+
+The default seed uses `HF_DATASET_REPO_ID` from `.env` (the example points to
+`duonganh2973/industrial_qa`), run ID
+`industrial-qa-test-full-20261010T164959Z` and output directory
+`data/industrial_qa_runs/restored-test`. Configure private-repo access with
+`HF_TOKEN`. Override snapshot options or skip seed on subsequent starts:
+
+```bash
+bash deployments/setup.sh -- --repo-id your-org/industrial_qa --revision COMMIT_OR_TAG
+make setup SETUP_ARGS='--skip-seed'
+bash deployments/setup.sh --no-build --skip-seed  # reuse the existing image
+```
+
+Rerunning retains PostgreSQL/upload volumes and host `data/`; it does not reset
+the database. A restore into unrelated knowledge records is refused and reported
+as a seed warning. If `.env` is missing, setup creates it from `.env.example`;
+provider settings still need to be filled in for seed/QA to work.
+The API defaults to **http://localhost:8005** (`/healthz`, `/docs`).
+Speech and frontend are optional separate steps below.
+
+### Host Python environment (optional)
 
 ```bash
 uv venv --python 3.12
 uv sync
-cp .env.example .env
+# If .env has not already been created: cp .env.example .env
 ```
 
 `uv run` automatically uses `.venv`. To activate it manually on macOS/Linux:
@@ -64,6 +118,8 @@ of Git.
 | `HF_TOKEN` | Access private snapshots; public pulls need no token. |
 
 ## 2. Database initialization
+
+The following commands are the manual alternative to `make setup`.
 
 Start PostgreSQL + pgvector and check readiness:
 

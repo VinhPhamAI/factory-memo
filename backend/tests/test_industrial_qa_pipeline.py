@@ -75,23 +75,32 @@ class PipelineConfigTests(unittest.TestCase):
         self.assertEqual((config.conversation.history_characters, config.conversation.history_turns), (6000, 5))
         self.assertEqual(config.prompts['rerank'], (DEFAULT_PATH.parent / 'prompts/rerank.md').read_text().strip())
         provenance = config.provenance()
-        self.assertEqual(provenance['retrieval']['rerank_mode'], 'hybrid')
+        self.assertEqual(provenance['retrieval']['rerank_input_mode'], 'top_k')
         self.assertNotIn('api_key', json.dumps(provenance).lower())
 
     def test_env_selects_file_and_unknown_or_invalid_settings_fail(self):
         with tempfile.TemporaryDirectory() as directory:
             path = self.write(directory, '')
-            path.write_text(path.read_text().replace('rerank_mode = "hybrid"', 'rerank_mode = "llm"'))
+            path.write_text(path.read_text().replace('rerank_input_mode = "top_k"', 'rerank_input_mode = "full"'))
             with patch.dict(os.environ, {ENV_VAR: str(path)}):
-                self.assertEqual(load_config().retrieval.rerank_mode, 'llm')
+                self.assertEqual(load_config().retrieval.rerank_input_mode, 'full')
+                self.assertEqual(load_config().provenance()['retrieval']['rerank_input_mode'], 'full')
             for broken in ('\n[llm.judge]\nenv_prefix = "X"\nmax_tokens = 1\n', '\ntop_k = 3\n'):
                 with self.assertRaises(ValueError):
                     load_config(self.write(directory, broken))
             path.write_text(path.read_text().replace('k = 8', 'k = 8\nrerank_top = 4'))
             with self.assertRaises(ValueError):
                 load_config(path)
-            path.write_text(path.read_text().replace('rerank_mode = "llm"', 'rerank_mode = "cross"'))
-            with self.assertRaises(ValueError):
+            for mode in ('llm', 'hybrid', 'cross'):
+                with self.subTest(mode=mode):
+                    path = self.write(directory, '')
+                    path.write_text(path.read_text().replace('rerank_input_mode = "top_k"',
+                                                           f'rerank_input_mode = "{mode}"'))
+                    with self.assertRaisesRegex(ValueError, 'rerank input mode'):
+                        load_config(path)
+            path = self.write(directory, '')
+            path.write_text(path.read_text().replace('rerank_input_mode = "top_k"', 'rerank_mode = "hybrid"'))
+            with self.assertRaisesRegex(ValueError, 'rerank_mode'):
                 load_config(path)
 
     def test_toml_llm_settings_override_environment(self):
@@ -214,7 +223,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             [scores[text.splitlines()[-1]] for text in texts]))
         invoke = AsyncMock(return_value='{"labels":["K1","D1","K2"]}')
         with patch.object(llm, 'ainvoke', invoke):
-            core = build_retriever(load_config().with_retrieval(rerank_mode='llm', prefilter_knowledge=2, prefilter_manual=1),
+            core = build_retriever(load_config().with_retrieval(rerank_input_mode='full', prefilter_knowledge=2, prefilter_manual=1),
                 ranker=object(), prefilter=prefilter)
             result = await core.retrieve('encoder', knowledge, documents)
             await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
@@ -227,7 +236,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(prompt.count('[K'), 2)
             self.assertEqual(prompt.count('[D'), 1)
 
-    async def test_hybrid_rerank_mode_cuts_in_search_order_but_keeps_procedure_neighbors(self):
+    async def test_top_k_rerank_input_mode_cuts_in_search_order_but_keeps_procedure_neighbors(self):
         recs = [record().model_copy(update={'claim': f'claim {i}'}) for i in range(3)]
         chunks = [passage('melservo_je_p0000_c01', text='Connection procedure 0'),
                   *(passage(f'melservo_je_p00{i}0_c01', text=f'manual {i}') for i in (1, 2))]
@@ -236,7 +245,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
         invoke = AsyncMock(return_value='{"labels":["K2","D2","D1"]}')
         with patch.object(llm, 'ainvoke', invoke):
             core = build_retriever(load_config().with_retrieval(
-                rerank_mode='hybrid', prefilter_knowledge=2, prefilter_manual=1), ranker=object())
+                rerank_input_mode='top_k', prefilter_knowledge=2, prefilter_manual=1), ranker=object())
             result = await core.retrieve('encoder', knowledge, documents)
             await ScopedRetrieval(scope=None, retriever=core)('encoder', knowledge, documents,
                 {'run_id': 'run'}, SimpleNamespace(k=8, per_conversation=3), {}, {}, {})
@@ -248,7 +257,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('manual 1', prompt)
             self.assertIn('procedure step 2', prompt)
         with self.assertRaises(ValueError):
-            RetrievalConfig(rerank_mode='cross_encoder')
+            RetrievalConfig(rerank_input_mode='cross_encoder')
 
     async def test_second_hop_searches_manual_with_record_wording_and_is_off_by_default(self):
         question = 'MR-JE-AX391 servo will not respond and shows no alarm'
@@ -292,7 +301,7 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 RetrievalConfig(**invalid)
 
-    async def test_second_hop_in_hybrid_mode_uses_cut_records_and_adds_past_the_manual_cut(self):
+    async def test_second_hop_in_top_k_input_mode_uses_cut_records_and_adds_past_the_manual_cut(self):
         question = 'MR-JE-AX391 servo will not respond and shows no alarm'
         recs = [record(machine_id='MR-JE-AX391').model_copy(update={'claim': 'Copy Pr. PC70 before power-up.'}),
                 record(machine_id='MR-JE-AX391').model_copy(update={'claim': 'Check the CN2 latch.'})]
@@ -307,14 +316,14 @@ class IndustrialPipelineTests(unittest.IsolatedAsyncioTestCase):
             return [first, cut]
         knowledge, documents = stores(recs)
         documents.search = AsyncMock(side_effect=search)
-        hybrid = replace(load_config().retrieval, rerank_mode='hybrid', prefilter_knowledge=1, prefilter_manual=1,
+        top_k = replace(load_config().retrieval, rerank_input_mode='top_k', prefilter_knowledge=1, prefilter_manual=1,
                          second_hop_records=2)
         candidates = (await build_retriever(ranker=object()).candidates(
-            question, knowledge, documents, config=hybrid)).sources
-        # Only the record kept by the hybrid cut steers a second hop.
+            question, knowledge, documents, config=top_k)).sources
+        # Only the record kept by the top-k input cut steers a second hop.
         self.assertEqual(documents.search.await_count, 2)
         self.assertEqual([s.record.claim for s in candidates.values() if s.record], [recs[0].claim])
-        # The hybrid cut drops the second first-hop chunk; the second-hop chunk joins after it.
+        # The top-k input cut drops the second first-hop chunk; the second-hop chunk joins after it.
         self.assertEqual([s.passage.doc_id for s in candidates.values() if s.passage], [first.doc_id, station.doc_id])
 
     def rewriting(self, mode):

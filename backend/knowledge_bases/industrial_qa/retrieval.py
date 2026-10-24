@@ -24,9 +24,9 @@ DOCUMENT_QUERY_INSTRUCTION = (
     "Given a question from a factory maintenance engineer, retrieve the equipment manual passage that answers it"
 )
 UNSCOPED_CONTEXT = frozenset({"case_card", "steps", "source_turns", "benchmark_run_id"})
-# llm: the LLM reranks every scoped candidate. hybrid: only the top hybrid-search
-# candidates per source (plus procedure neighbours) reach the LLM, roughly halving its input.
-RERANK_MODES = ("llm", "hybrid")
+# Both modes use the LLM reranker. full keeps the scoped candidate pool; top_k
+# cuts it in hybrid-search order per source before adding procedure neighbours.
+RERANK_INPUT_MODES = ("full", "top_k")
 # A record's subject and claim, cut to this length, form one second-hop manual query.
 SECOND_HOP_QUERY_CHARACTERS = 600
 
@@ -39,8 +39,8 @@ class RetrievalConfig:
     knowledge_candidates: int = 20
     manual_candidates: int = 48
     manual_rerank_candidates: int = 16
-    rerank_mode: str = "hybrid"
-    # Kept per source by the hybrid cut or the optional cross-encoder prefilter.
+    rerank_input_mode: str = "top_k"
+    # Kept per source by the top-k input cut or the optional cross-encoder prefilter.
     prefilter_knowledge: int = 8
     prefilter_manual: int = 8
     # Cosine similarity that marks a knowledge hit confident (confident hits rank
@@ -54,8 +54,8 @@ class RetrievalConfig:
     query_rewrite: str = "off"
 
     def __post_init__(self):
-        if self.rerank_mode not in RERANK_MODES:
-            raise ValueError(f"Unknown industrial QA rerank mode: {self.rerank_mode}")
+        if self.rerank_input_mode not in RERANK_INPUT_MODES:
+            raise ValueError(f"Unknown industrial QA rerank input mode: {self.rerank_input_mode}")
         if self.query_rewrite not in QUERY_REWRITE_MODES:
             raise ValueError(f"Unknown industrial QA query_rewrite mode: {self.query_rewrite}")
         if min(self.k, self.context_characters, self.knowledge_candidates,
@@ -264,16 +264,16 @@ class IndustrialRetriever:
             parts = [part for part in (scope, general, compatible) if part]
             hits = await knowledge.search_knowledge(base, k=cfg.knowledge_candidates, filters={"$and": parts},
                                                     **similarity_threshold(cfg))
-        return hits[:cfg.prefilter_knowledge] if cfg.rerank_mode == "hybrid" else hits
+        return hits[:cfg.prefilter_knowledge] if cfg.rerank_input_mode == "top_k" else hits
 
     async def manual_candidates(self, passages, hits, family, documents, cfg):
         """Passages of the family's own manual (all passages when it has none),
         cut to the rerank budget, plus second-hop passages and procedure neighbours."""
         expected_manual = CATALOG.families[family].manual if family else None
         allowed = [p for p in passages if not expected_manual or reference_id(p) == expected_manual] or passages
-        # The hybrid cut precedes neighbour expansion so multi-chunk procedures stay whole.
+        # The top-k input cut precedes neighbour expansion so multi-chunk procedures stay whole.
         limit = cfg.manual_rerank_candidates
-        if cfg.rerank_mode == "hybrid":
+        if cfg.rerank_input_mode == "top_k":
             limit = min(limit, cfg.prefilter_manual)
         selected = deduplicated(allowed)[:limit]
         if cfg.second_hop_records and hits:

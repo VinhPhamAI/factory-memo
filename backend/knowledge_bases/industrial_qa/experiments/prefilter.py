@@ -4,12 +4,12 @@
 from the existing train records and manuals, then measures how much gold
 evidence survives keeping the top N per source by hybrid order or by each
 cross-encoder. `answer` runs the full official benchmark path on the train split
-with or without the prefilter or the `--rerank-mode hybrid` cut, then judges
+with or without the prefilter or the `--rerank-input-mode top_k` cut, then judges
 answers. `compare` tabulates runs.
 Test questions and labels are never read.
 
 python -m backend.knowledge_bases.industrial_qa.experiments.prefilter pool --run-dir OUT --from-run-dir TRAIN [--model M] [--config C]
-python -m backend.knowledge_bases.industrial_qa.experiments.prefilter answer --run-dir OUT --from-run-dir TRAIN [--model M | --rerank-mode hybrid]
+python -m backend.knowledge_bases.industrial_qa.experiments.prefilter answer --run-dir OUT --from-run-dir TRAIN [--model M | --rerank-input-mode top_k]
 python -m backend.knowledge_bases.industrial_qa.experiments.prefilter compare RUN_DIR...
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ from backend.knowledge_bases.industrial_qa.benchmark.manifest import (
 from backend.knowledge_bases.industrial_qa.config import add_runner_arguments, load_config, runner_config
 from backend.knowledge_bases.industrial_qa.pipeline import build_retriever, build_rewriter
 from backend.knowledge_bases.industrial_qa.retrieval import (
-    DOCUMENT_QUERY_INSTRUCTION, RERANK_MODES, IndustrialRetriever,
+    DOCUMENT_QUERY_INSTRUCTION, RERANK_INPUT_MODES, IndustrialRetriever,
 )
 from backend.knowledge_bases.stores import open_document_store
 from backend.src.agents.rag.cross_encoder import CrossEncoderScorer
@@ -221,10 +221,10 @@ def prepare(args):
     cross_encoder = scorer(args)
     manifest = {
         "policy": args.config.name + (" with cross-encoder prefilter" if cross_encoder else "")
-                  + (" with hybrid cut" if args.rerank_mode == "hybrid" else ""),
-        "rerank_mode": args.rerank_mode,
-        "hybrid_cut": {"knowledge": args.keep_knowledge, "manual": args.keep_manual}
-                      if args.rerank_mode == "hybrid" else None,
+                  + (" with top-k input cut" if args.rerank_input_mode == "top_k" else ""),
+        "rerank_input_mode": args.rerank_input_mode,
+        "top_k_cut": {"knowledge": args.keep_knowledge, "manual": args.keep_manual}
+                      if args.rerank_input_mode == "top_k" else None,
         "database": SPEC.database, "split": "train", "run_id": run["run_id"],
         "reused_run_ids": run.get("reused_run_ids", []), "from_run_dir": str(args.from_run_dir.resolve()),
         "retrieval_scope": benchmark_scope(run), "k": args.k, "per_conversation": args.per_conversation,
@@ -322,7 +322,7 @@ def main():
     answer_parser = commands.choices["answer"]
     answer_parser.add_argument("--model", help=f"cross-encoder or {HybridOrder.model}; omit for the unchanged baseline")
     add_runner_arguments(answer_parser)
-    answer_parser.add_argument("--rerank-mode", choices=RERANK_MODES, help="override [retrieval] rerank_mode")
+    answer_parser.add_argument("--rerank-input-mode", choices=RERANK_INPUT_MODES, help="override [retrieval] rerank_input_mode")
     answer_parser.add_argument("--keep-knowledge", type=int, help="override [retrieval] prefilter_knowledge")
     answer_parser.add_argument("--keep-manual", type=int, help="override [retrieval] prefilter_manual")
     answer_parser.add_argument("--concurrency", type=int, default=4)
@@ -336,13 +336,13 @@ def main():
     if args.command == "answer":
         try:
             config = runner_config(args)
-            overrides = {"rerank_mode": args.rerank_mode, "prefilter_knowledge": args.keep_knowledge,
+            overrides = {"rerank_input_mode": args.rerank_input_mode, "prefilter_knowledge": args.keep_knowledge,
                          "prefilter_manual": args.keep_manual}
             args.config = config.with_retrieval(**{k: v for k, v in overrides.items() if v is not None})
         except ValueError as exc:
             parser.error(str(exc))
         retrieval = args.config.retrieval
-        args.rerank_mode = retrieval.rerank_mode
+        args.rerank_input_mode = retrieval.rerank_input_mode
         args.keep_knowledge, args.keep_manual = retrieval.prefilter_knowledge, retrieval.prefilter_manual
     load_dotenv(PROJECT_ROOT / ".env")
     args.run_dir.mkdir(parents=True, exist_ok=True)

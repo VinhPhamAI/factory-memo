@@ -18,10 +18,11 @@ manual_rerank_candidates = 16
 # Cosine similarity that marks a knowledge hit confident; confident hits rank first.
 # Omit to use KNOWLEDGE_MIN_VECTOR_SIMILARITY.
 min_vector_similarity = 0.6
-# "llm": the LLM reranks every scoped candidate (about 35).
-# "hybrid": only the first prefilter_* candidates per kind in hybrid-search order,
+# Both modes use the LLM reranker; this selects its candidate input.
+# "full": keep the scoped candidate pool within the retrieval limits above.
+# "top_k": only the first prefilter_* candidates per kind in hybrid-search order,
 # plus procedure neighbour chunks, reach the LLM reranker.
-rerank_mode = "hybrid"
+rerank_input_mode = "top_k"
 prefilter_knowledge = 8
 prefilter_manual = 8
 # Second-hop manual search: the top second_hop_records knowledge hits (subject +

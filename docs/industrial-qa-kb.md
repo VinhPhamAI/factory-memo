@@ -86,9 +86,11 @@ Hai nhánh chạy độc lập. Chỉ hội thoại đi qua LLM; manual được
 flowchart TD
     q["Câu hỏi + lịch sử thread"] --> sc["detected_scope → CATALOG.lookup_scope"]
     sc --> ks["Knowledge search<br/>20 ứng viên"]
-    sc --> ms["Manual search<br/>48 ứng viên → 16 + chunk kề"]
-    ks --> rr["LLM rerank (prompts/rerank.md)"]
-    ms --> rr
+    sc --> ms["Manual search<br/>48 ứng viên → tối đa 16 sau lọc"]
+    ks --> inp["rerank_input_mode<br/>full: giữ pool sau lọc<br/>top_k: giữ top theo search, mặc định 8 K + 8 D"]
+    ms --> inp
+    inp --> exp["Bổ sung manual second-hop nếu bật + chunk quy trình kề"]
+    exp --> rr["LLM rerank (prompts/rerank.md)"]
     rr --> bud["Budget: ≤8 K + ≤8 D, ≤24000 ký tự, đánh lại nhãn"]
     bud --> w["Answer writer<br/>checklist → answer ≤200 từ → sources"]
     w --> rt["Runtime (service.py)<br/>answer.delta, citation [K:uuid] / [D:doc_id]"]
@@ -104,8 +106,11 @@ Runtime (`service.py`) và benchmark (`benchmark/adapter.py`) gọi **cùng mộ
 - **Scope trước, ngữ nghĩa sau.** Asset ID hoặc family nhận ra từ câu hỏi thành filter cứng trên `machine_id` / `machine_model` / `machine_model_specific`. Nhờ đó kinh nghiệm của máy khác không lọt vào. Nếu phát hiện nhiều hơn một family thì không lọc theo family.
 - **Hai nguồn chạy song song.** Knowledge records (20 ứng viên) và manual chunks (48 ứng viên). Query cho manual bỏ các chi tiết cục bộ của nhà máy (asset ID, site, line, cell) và thêm tên family, vì manual không biết các tên đó.
 - **Chống một hội thoại chiếm hết chỗ.** Khi câu hỏi không nêu asset, mỗi hội thoại đóng góp tối đa 3 record. Khi có asset nhưng không tìm thấy gì, hệ thống mở rộng sang record không gắn máy hoặc cùng family.
+- **Chọn đầu vào cho LLM bằng `rerank_input_mode`.** Cả hai lựa chọn đều dùng LLM để rerank. `full` giữ pool sau lọc trong các giới hạn retrieval (`knowledge_candidates`, `manual_rerank_candidates`); `top_k` (mặc định) cắt tiếp theo thứ hạng hybrid search, tối đa `prefilter_knowledge` K và `min(manual_rerank_candidates, prefilter_manual)` D. Hiện hai ngưỡng prefilter đều là 8. Chunk second-hop nếu bật và chunk quy trình kề được bổ sung sau bước cắt nên tổng đầu vào có thể vượt 16 nguồn. Cross-encoder là prefilter tùy chọn, không bật mặc định.
 - **Thủ tục không bị cắt giữa chừng.** Chunk nằm trong top 3 có dạng procedure/steps/connect/configure được bổ sung các chunk kề cùng section, cách không quá 2 trang.
 - **Rerank bằng LLM rồi cắt theo budget.** Một lần gọi LLM xếp hạng toàn bộ ứng viên. Sau đó lấy lần lượt theo thứ hạng cho đến khi hết 8 slot mỗi loại hoặc hết 24 000 ký tự. Record được render gọn thành `[K1] case|lesson: subject {scope}` + claim, không kèm case_card/quote. Passage được render thành `[D1] manual <doc_id>, p. N, <section>` + text.
+
+Tên cấu hình cũ `rerank_mode = "llm"` đổi thành `rerank_input_mode = "full"`; `rerank_mode = "hybrid"` đổi thành `rerank_input_mode = "top_k"`. CLI thử nghiệm dùng `--rerank-input-mode {full,top_k}` thay cho `--rerank-mode`. Cấu hình và CLI chỉ nhận tên mới; manifest của run mới cũng ghi `rerank_input_mode` (và `top_k_cut` ở thử nghiệm). Các manifest lịch sử được giữ nguyên.
 
 **Answer writer: viết câu trả lời** (`answering.py`, `prompts/answer.md`)
 
