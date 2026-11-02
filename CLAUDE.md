@@ -3,12 +3,26 @@
 Keep `AGENTS.md` and `CLAUDE.md` identical; update both in the same change.
 Code and configuration take precedence over older documentation.
 
+## Start here
+
+- Follow [engineering standards](docs/development/code-standards.md) for new and
+  changed code, tests, API contracts, and documentation. Existing code is not the
+  standard to copy automatically; preserve working behavior while improving the
+  part being changed. Do not start unrelated refactors.
+- Read the [product requirements](docs/features/project-overview.md) and
+  [intended architecture](docs/architecture/system-architecture.md) when designing
+  behavior across services. The [codebase map](docs/development/codebase-summary.md)
+  identifies current entry points; service guides define actual setup commands.
+- The [database schema](docs/architecture/database-schema.md) is a proposal until
+  implemented and verified. A merged design document is not proof of working code.
+
 ## Purpose and scope
 
-Help DENSO capture experts' tacit manufacturing know-how as traceable, reusable
-knowledge with minimal manual work. Consider quality, cost, latency and factory
-constraints. Preserve diagnostic reasoning, context, failed attempts, exceptions
-and outcomes.
+Support faster machine fault handling and knowledge inheritance. Uploaded knowledge
+materials become searchable knowledge; conversations can produce self-contained
+inquiries for remote expert review. Inquiries and expert decisions do not
+automatically create or approve reusable knowledge. Preserve original evidence,
+context, failed attempts, exceptions, and reported outcomes.
 
 This checkout supports text/document ingestion, retrieval, QA, evaluation and
 live microphone capture. Multimodal extraction, location/QR identification,
@@ -16,6 +30,10 @@ PDF/image/Office OCR and transcription of uploaded media are not implemented.
 Voice accuracy on Vietnamese factory audio has not been evaluated.
 
 ## Code boundaries
+
+These describe the current implementation, not a requirement to copy its layout
+or storage design into new services. The standalone [agent](agent/README.md) is a
+separate package from the older backend agent.
 
 - `backend/knowledge_bases/`: domain policy, schemas, prompts, catalog/ontology
   and retrieval settings. Built-ins are `industrial_qa` and `general`; UI-created
@@ -112,8 +130,11 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
 
 ## Development and checks
 
-- Run Python commands from the repo root with Python >= 3.12 and `uv`. Configure
-  `.env` from [.env.example](.env.example); never commit populated credentials.
+- Run Python commands from the repo root with Python >= 3.12 and `uv`. Use each
+  service's setup guide and dependency lock. The standalone agent uses
+  [its own configuration and checks](agent/docs/development.md), not the root
+  backend environment. For the backend, configure `.env` from
+  [.env.example](.env.example); never commit populated credentials.
 - Docker backend: `make setup` (or `bash deployments/setup.sh`) builds the image,
   stops API/workers, waits for DB, initializes shared tables, attempts seed restore,
   then starts API/worker. Only seed errors are non-fatal (`data/setup/seed.*`).
