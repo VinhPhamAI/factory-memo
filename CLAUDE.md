@@ -88,6 +88,24 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
 - Synthetic/local scores do not establish factory performance or official results
   for documented integrations with missing/reduced implementations.
 
+## Documentation style
+
+- Write concise, impersonal, professional English. Lead with the reader's task or answer.
+- Prefer numbered steps for procedures, bullets for parallel points and tables for reference.
+- Keep paragraphs short. Remove repeated explanations and lengthy presentation-style prose.
+- Preserve technical meaning, requirements, examples and limitations when shortening text.
+- Use familiar terms; define necessary jargon at first use. Optimize for quick scanning.
+
+## Python docstrings
+
+- Give new or modified functions and classes concise, purpose-specific docstrings.
+- Start with what the function or class does. State the input-to-output change
+  and the method used when that explains the behavior.
+- Include `Args:`, `Returns:` and `Raises:` where relevant. Explain argument
+  meaning, the returned result and the conditions that raise each documented error.
+- Omit irrelevant or empty sections. Avoid generic filler, signature restatements
+  and descriptions that make sense only with unstated context.
+
 ## Development and checks
 
 - Run Python commands from the repo root with Python >= 3.12 and `uv`. Configure

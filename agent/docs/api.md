@@ -1,0 +1,134 @@
+# API contract
+
+## Call the agent
+
+`POST /v1/agent/stream`
+
+```text
+Authorization: Bearer <AGENT_API_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{"conversation_id":"11111111-1111-4111-8111-111111111111","message":"Explain the service scope."}
+```
+
+| Field | Rule |
+|---|---|
+| `conversation_id` | Required UUID (unique conversation ID), chosen by the caller; reuse for follow-ups. |
+| `message` | Required string; trimmed; 1–20000 characters. |
+| Other fields | Rejected. |
+| Request body | Maximum 128 KiB, including chunked requests. |
+
+**Caller responsibilities**
+
+- Authorize user login and conversation ownership.
+- Keep the shared service token out of browsers. It is not a user JWT (login token).
+- All token holders share the same access scope.
+- Use the server-generated request ID for tracing, not duplicate prevention.
+
+Authentication rejects before provider or checkpoint execution.
+
+## Handle the stream
+
+Server-Sent Events (SSE): UTF-8 frames separated by blank lines, with `event:`
+names and JSON `data:`. Caching and proxy buffering are disabled.
+
+Buffer incomplete frames; one network read may contain partial or multiple frames.
+Every event has `request_id`, `conversation_id`, and `sequence` (increasing from 1
+within the request).
+
+| Event | Additional fields | Client action |
+|---|---|---|
+| `status` | `state: "generating"` | Show that the request was accepted. |
+| `text` | `delta: string` | Append provisional text. |
+| `complete` | `finish_reason: "stop"`, required `answer: string` | Replace provisional text with the whole saved answer. |
+| `error` | `code`, `message`, `retryable` | Mark the answer as unfinished. |
+
+```text
+event: text
+data: {"request_id":"22222222-2222-4222-8222-222222222222","conversation_id":"11111111-1111-4111-8111-111111111111","sequence":2,"delta":"This service maintains conversations."}
+
+event: complete
+data: {"request_id":"22222222-2222-4222-8222-222222222222","conversation_id":"11111111-1111-4111-8111-111111111111","sequence":3,"finish_reason":"stop","answer":"This service maintains conversations."}
+
+```
+
+**Completion rules**
+
+- `complete.answer` is the assistant message after graph execution and final checkpoint saving succeed.
+- Replace accumulated text; never append the full answer. Unprocessed fragments do not affect this value.
+- One final event per connected request: `complete` or `error`.
+- No `complete` means unfinished. HTTP 200 alone does not confirm success.
+- Disconnections can lose the final event. No replay or answer-retrieval endpoint exists.
+- Strict client validators must accept the added `answer` field. Event names, request fields, and authentication are unchanged.
+
+## Handle errors
+
+### Before streaming
+
+```json
+{"error":{"code":"unauthorized","message":"Authentication required."}}
+```
+
+| HTTP status | Code | Meaning |
+|---|---|---|
+| 401 | `unauthorized` | Missing or invalid service token. |
+| 413 | `payload_too_large` | Body exceeds 128 KiB. |
+| 422 | `invalid_request` | Invalid JSON, UUID, message, or extra fields. |
+| 409 | `conversation_busy` | This conversation already has an active request. |
+| 429 | `capacity_exceeded` | Global request capacity is full. |
+| 503 | `unavailable` | Runtime is not ready. |
+
+### After streaming starts
+
+HTTP status stays 200; read the `error` event.
+
+Codes: `timeout`, `provider_error`, `context_limit`, `output_limit`,
+`filtered_output`, `empty_output`, `persistence_error`.
+
+- `retryable` permits a fresh manual attempt; duplicate-free execution is not guaranteed.
+- No automatic retry or replay occurs.
+- Length-limited, filtered, empty, and unfinished answers never complete successfully.
+- Raw exceptions, provider error bodies, credentials, and private reasoning are excluded.
+
+## Check health
+
+| Endpoint | Authentication | Result |
+|---|---|---|
+| `GET /healthz` | Public | `{"status":"ok"}` |
+| `GET /readyz` | Service token | `{"status":"ready"}` or HTTP 503 `{"status":"unavailable"}` |
+
+Readiness checks configuration and database access within a deadline; no paid
+model call or remote credit check.
+
+## Request examples
+
+### PowerShell
+
+Set the token in this terminal. `uv --env-file` sets it only in the launched process.
+
+```powershell
+$env:AGENT_API_TOKEN = '<same service token as agent/.env>'
+$agentPayload = '{"conversation_id":"11111111-1111-4111-8111-111111111111","message":"Explain the service scope."}'
+$agentPayloadPath = Join-Path $env:TEMP 'denso-agent-request.json'
+[System.IO.File]::WriteAllText($agentPayloadPath, $agentPayload)
+curl.exe -N 'http://127.0.0.1:8010/v1/agent/stream' -H "Authorization: Bearer $env:AGENT_API_TOKEN" -H 'Content-Type: application/json' --data-binary "@$agentPayloadPath"
+Remove-Item -LiteralPath $agentPayloadPath
+```
+
+Buffered response:
+
+```powershell
+Invoke-WebRequest -Uri 'http://127.0.0.1:8010/v1/agent/stream' -Method Post -Headers @{Authorization = "Bearer $env:AGENT_API_TOKEN"} -ContentType 'application/json' -Body $agentPayload
+```
+
+### POSIX shell
+
+Save the same JSON payload as `request.json`:
+
+```sh
+curl -N http://127.0.0.1:8010/v1/agent/stream \
+  -H "Authorization: Bearer $AGENT_API_TOKEN" \
+  -H 'Content-Type: application/json' --data-binary @request.json
+```
