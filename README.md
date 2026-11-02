@@ -20,6 +20,8 @@ implemented; see [knowledge management](docs/knowledge-management.md).
 Multimodal extraction, location awareness and
 QR identification are planned capabilities.
 
+The independent agent service has its own [setup, API, and development guide](agent/README.md).
+
 ## 1. Environment setup
 
 Docker backend requirements: **Docker with Compose v2.24+** and **Bash**;

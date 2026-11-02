@@ -1,0 +1,147 @@
+"""Direct ModelArk Chat Completions streaming with bounded answer storage."""
+
+from collections.abc import Callable
+from typing import Any
+
+from httpx import HTTPError
+from openai import APIError, APITimeoutError, AsyncOpenAI, BadRequestError
+
+from denso_agent.runtime.errors import AgentError
+
+MAX_ANSWER_CHARACTERS = 32_000
+
+
+class ModelArk:
+    """Own the provider client and convert successful content into answer text."""
+
+    def __init__(self, settings):
+        """Retain runtime settings without opening network connections.
+
+        Args:
+            settings: Validated provider endpoint, secret and generation limits.
+        """
+        self.settings = settings
+        self.client: AsyncOpenAI | None = None
+
+    async def __aenter__(self):
+        """Open the SDK client with retries disabled.
+
+        Returns:
+            This provider wrapper with an owned HTTP client.
+        """
+        self.client = AsyncOpenAI(
+            api_key=self.settings.api_key.get_secret_value(),
+            base_url=self.settings.base_url,
+            max_retries=0,
+            timeout=self.settings.request_timeout,
+        )
+        return self
+
+    async def __aexit__(self, *_):
+        """Close the owned client after shutdown or partial startup failure."""
+        if self.client is not None:
+            await self.client.close()
+
+    async def answer(self, messages: list[dict], writer: Callable[[dict], Any]) -> str:
+        """Stream standard provider content and return a fully finished answer.
+
+        Args:
+            messages: Bounded system/user/assistant input for Chat Completions.
+            writer: Receives safe content deltas for graph custom streaming.
+
+        Returns:
+            Nonempty answer text after a successful stop marker.
+
+        Raises:
+            AgentError: Provider timeout, invalid output or request failure.
+        """
+        if self.client is None:
+            raise RuntimeError("ModelArk client is not open")
+        try:
+            stream = await self.client.chat.completions.create(
+                model=self.settings.model,
+                messages=messages,
+                stream=True,
+                max_tokens=self.settings.max_output_tokens,
+            )
+            return await self.consume(stream, writer)
+        except APITimeoutError as exc:
+            raise AgentError(
+                "timeout", "The provider request timed out.", True
+            ) from exc
+        except BadRequestError as exc:
+            # Inspect machine-readable codes only; never expose raw provider bodies.
+            code = str(getattr(exc, "code", "") or "").lower()
+            if code in {"context_length_exceeded", "context_window_exceeded"}:
+                raise AgentError(
+                    "context_limit", "The model input exceeded its context limit."
+                ) from exc
+            raise AgentError(
+                "provider_error", "The provider rejected the request."
+            ) from exc
+        except (APIError, HTTPError, ValueError) as exc:
+            raise AgentError(
+                "provider_error", "The provider request failed.", True
+            ) from exc
+
+    @staticmethod
+    async def consume(stream, writer: Callable[[dict], Any]) -> str:
+        """Accumulate bounded content, close upstream and validate its finish marker.
+
+        Args:
+            stream: Open SDK stream yielding Chat Completion chunks.
+            writer: Receives each accepted fragment before the next is consumed.
+
+        Returns:
+            Completed visible answer, excluding private reasoning fields.
+
+        Raises:
+            AgentError: Empty, oversized, filtered or unfinished output.
+        """
+        fragments: list[str] = []
+        size = 0
+        reason = None
+        try:
+            async for chunk in stream:
+                for choice in chunk.choices:
+                    if getattr(choice, "index", 0) != 0:
+                        continue
+                    content = choice.delta.content
+                    if content:
+                        if reason is not None:
+                            raise AgentError(
+                                "provider_error",
+                                "The provider sent content after completion.",
+                            )
+                        if size + len(content) > MAX_ANSWER_CHARACTERS:
+                            raise AgentError(
+                                "output_limit", "The answer exceeded the output limit."
+                            )
+                        size += len(content)
+                        fragments.append(content)
+                        writer({"delta": content})
+                    if choice.finish_reason is not None:
+                        if reason is not None and reason != choice.finish_reason:
+                            raise AgentError(
+                                "provider_error",
+                                "The provider sent conflicting completion markers.",
+                            )
+                        reason = choice.finish_reason
+        finally:
+            await stream.close()
+        if reason == "length":
+            raise AgentError(
+                "output_limit", "The provider stopped at its output limit."
+            )
+        if reason == "content_filter":
+            raise AgentError("filtered_output", "The provider filtered the answer.")
+        if reason != "stop":
+            raise AgentError(
+                "provider_error", "The provider did not finish the answer.", True
+            )
+        answer = "".join(fragments)
+        if not answer.strip():
+            raise AgentError(
+                "empty_output", "The provider returned an empty answer.", True
+            )
+        return answer
