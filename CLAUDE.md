@@ -95,6 +95,10 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
 - Keep paragraphs short. Remove repeated explanations and lengthy presentation-style prose.
 - Preserve technical meaning, requirements, examples and limitations when shortening text.
 - Use familiar terms; define necessary jargon at first use. Optimize for quick scanning.
+- Make guides understandable without chat history. State their scope and distinguish
+  implemented behavior from proposals. Describe database relationships with plain
+  bullets (for example, "A knowledge base contains many knowledge chunks"); prefer
+  column/type tables over diagrams for schema reviews.
 
 ## Python docstrings
 
