@@ -1,6 +1,6 @@
 # Đề xuất thay đổi schema PostgreSQL
 
-Trạng thái: **đề xuất**, chưa triển khai. Schema hiện tại: [db-schema.md](db-schema.md).
+Trạng thái: **đề xuất**, chưa triển khai.
 
 ## Mục tiêu
 

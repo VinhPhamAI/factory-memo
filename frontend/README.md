@@ -11,9 +11,9 @@ extracted results, with per-source mode selection and shared review. TXT files
 can be extracted directly from Raw without a manual Convert step. Recording
 transcripts, speaker labels and audio are reviewed in the same workspace. The **Tải lên tài liệu**
 tab stores PDF, images, TXT, PPTX and other files independently of conversations,
-without extraction. See [voice capture](../docs/voice-capture.md) and
-[document uploads](../docs/document-uploads.md) and
-[knowledge management](../docs/knowledge-management.md). The old five-step MR-JE-AX167 simulation remains available explicitly in
+without extraction. See [voice capture](../docs/features/voice-capture.md) and
+[document uploads](../docs/features/document-uploads.md) and
+[knowledge management](../docs/features/knowledge-management.md). The old five-step MR-JE-AX167 simulation remains available explicitly in
 `mock` mode.
 
 ## Run
@@ -116,7 +116,7 @@ files; `src/fixtures/ax167.test.ts` re-reads them and checks every quote verbati
   (the backend's extracted case card and its 8 evidence quotes), and manual chunk
   `melservo_je_p0071_c02` from `benchmark/public/corpus_chunks.jsonl`.
 - Sample data, marked "Mẫu" in the UI: the fault report, meeting minutes, expert note
-  and follow-up recording from `docs/demo-script-mr-je-ax167.md` (Phụ lục A–D).
+  and follow-up recording from `docs/development/demo-script-mr-je-ax167.md` (Phụ lục A–D).
 
 `src/services/` separates storage, capture, OCR, analysis and chat transport from
 components. `KnowledgeClient` is implemented by both the fixture client and the

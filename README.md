@@ -8,19 +8,21 @@ Streamlit trace UI.
 Live voice capture (React UI tab **Ghi âm**) records the microphone, transcribes
 it with the optional ASR + diarization service, stores the transcript as evidence
 and extracts draft knowledge for side-by-side review (see
-[voice capture](docs/voice-capture.md)). The **Tải lên tài liệu** tab stores original
-documents (see [document uploads](docs/document-uploads.md)); its **Auto** option
+[voice capture](docs/features/voice-capture.md)). The **Tải lên tài liệu** tab stores original
+documents (see [document uploads](docs/features/document-uploads.md)); its **Auto** option
 queues conversion and extraction right after saving.
 **Quản lý tri thức** tracks raw, converted and extracted sources, with per-source
 mode selection and shared review for transcripts, knowledge items and document
 chunks. Convert and Extract are queued jobs run by background workers
 (`uv run python -m backend.worker`, Compose service `worker`); Extract on a raw
 TXT converts it first. OCR is not yet
-implemented; see [knowledge management](docs/knowledge-management.md).
+implemented; see [knowledge management](docs/features/knowledge-management.md).
 Multimodal extraction, location awareness and
 QR identification are planned capabilities.
 
 The independent agent service has its own [setup, API, and development guide](agent/README.md).
+
+See the [documentation index](docs/README.md) for architecture, features, and development guides.
 
 ## 1. Environment setup
 
@@ -167,7 +169,7 @@ bash deployments/speech/smoke_test.sh
 See the [speech service guide](deployments/speech/README.md). It transcribes
 audio into speaker turns for the UI's voice capture, which saves the original
 audio to `data/audio/` and ingests the transcript into the selected knowledge
-base; see [voice capture](docs/voice-capture.md) for storage and schema.
+base; see [voice capture](docs/features/voice-capture.md) for storage and schema.
 
 ## 3. API and QA UI
 
@@ -196,7 +198,7 @@ docker compose -f deployments/docker-compose.yml logs -f worker
 
 The `worker` service uses the API image and volumes and runs one process per
 stage slot (`WORKER_CONVERT_PROCESSES`, `WORKER_EXTRACT_PROCESSES`, default 1
-each). See [job queue and workers](docs/knowledge-management.md#job-queue-and-workers).
+each). See [job queue and workers](docs/features/knowledge-management.md#job-queue-and-workers).
 
 Inside Compose, the API connects to `postgres:5432` and `speech-api:8080`;
 `API_DATABASE_URL` and `API_SPEECH_API_URL` override these defaults. For chat or
@@ -231,7 +233,7 @@ If you already have `.env.local`, set its data mode to `api` and restart Vite.
 The **Ghi âm** tab records a conversation (needs the speech service and HTTPS or
 localhost for the microphone); after Stop it shows the transcript next to the
 extracted knowledge for approval. **Tải lên tài liệu** stores original documents
-without creating a conversation or extracting content; see [document uploads](docs/document-uploads.md). See the
+without creating a conversation or extracting content; see [document uploads](docs/features/document-uploads.md). See the
 [frontend guide](frontend/README.md) for configuration, tests and optional mock demo.
 
 **Alternative — Streamlit trace UI:**

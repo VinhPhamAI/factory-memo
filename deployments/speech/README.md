@@ -63,7 +63,7 @@ wraps both paths (`SpeechClient.atranscribe_file`, `SpeechClient.astream`) and
 groups words into speaker turns. `format_transcript` renders them as
 `[T01] Speaker A: text` lines (diarizer label 1 → A; untagged speech is
 `Unknown speaker`), which `backend.scripts.kb ingest --file` and the UI's voice
-capture ([docs/voice-capture.md](../../docs/voice-capture.md)) store;
+capture ([docs/features/voice-capture.md](../../docs/features/voice-capture.md)) store;
 `Utterance.to_json` keeps word timings and speaker labels as provenance.
 
 ```python

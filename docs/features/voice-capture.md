@@ -26,7 +26,7 @@ Management detail: transcript (raw / cleaned, audio per turn) | results (approve
 Only knowledge bases with `retrieval="knowledge"` (`general`, `industrial_qa`
 and knowledge bases created from the KB list on this page) accept recordings;
 document-retrieval KBs do not search extracted records. Creating a knowledge base
-is described in the [KB guide](../backend/knowledge_bases/README.md#knowledge-bases-created-in-the-ui).
+is described in the [KB guide](../../backend/knowledge_bases/README.md#knowledge-bases-created-in-the-ui).
 
 ## What is stored where
 

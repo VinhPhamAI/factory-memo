@@ -301,7 +301,7 @@ it (currently `industrial_qa`, `[conflicts] enabled`). It compares the new items
 with similar stored items and records suspected conflicts for review; it never
 changes item status. Its job is reported separately (`processing.conflict_job`,
 summary in `processing.conflicts`) and does not change the source's processing
-state. See [industrial QA conflict detection](industrial-qa-conflict-detection.md).
+state. See [industrial QA conflict detection](conflict-detection.md).
 
 - Enqueueing inserts the job and calls `pg_notify` on the stage's channel in one
   transaction. Workers `LISTEN`, claim with `FOR UPDATE SKIP LOCKED` and also

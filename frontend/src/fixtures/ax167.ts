@@ -1,5 +1,5 @@
 // Case MR-JE-AX167 demo data. Texts come verbatim from the repository files:
-// conversation-mr-je-ax167.txt, data/case-mr-je-ax167.json, docs/demo-script-mr-je-ax167.md
+// conversation-mr-je-ax167.txt, data/case-mr-je-ax167.json, docs/development/demo-script-mr-je-ax167.md
 // (Phụ lục A–D, Cảnh 5, Cảnh 6) and benchmark chunk melservo_je_p0071_c02.
 // src/fixtures/ax167.test.ts re-reads those files and checks every quote.
 import raw from "./ax167-sources.json";

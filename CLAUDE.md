@@ -133,9 +133,9 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
 
 - [README](README.md): environment, provider settings, UI and benchmark workflows.
 - [KB guide](backend/knowledge_bases/README.md), [General](backend/knowledge_bases/general/README.md),
-  [Industrial QA](docs/industrial-qa-kb.md): domain implementation/configuration.
-- [Knowledge management](docs/knowledge-management.md),
-  [conflicts](docs/industrial-qa-conflict-detection.md): jobs, extraction/review and duplicates.
-- [Voice capture](docs/voice-capture.md), [uploads](docs/document-uploads.md),
+  [Industrial QA](docs/features/industrial-qa.md): domain implementation/configuration.
+- [Knowledge management](docs/features/knowledge-management.md),
+  [conflicts](docs/features/conflict-detection.md): jobs, extraction/review and duplicates.
+- [Voice capture](docs/features/voice-capture.md), [uploads](docs/features/document-uploads.md),
   [speech service](deployments/speech/README.md): capture, storage and deployment.
 - [Snapshot guide](backend/knowledge_bases/industrial_qa/SNAPSHOT.md): Hugging Face restore/export.
