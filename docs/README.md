@@ -12,7 +12,7 @@
 - [System architecture](architecture/architecture.html)
 - [Earlier architecture](architecture/architecture-v0.html)
 - [Knowledge flow](architecture/knowledge-flow.html)
-- [Database schema proposal](architecture/database-schema.md) — existing proposal; refinement pending.
+- [Database schema proposal](architecture/database-schema.md) — target tables, relationships, permissions, and migration requirements; not implemented.
 
 ## Features
 
