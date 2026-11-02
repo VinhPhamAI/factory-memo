@@ -17,7 +17,7 @@ Start with [product requirements](features/project-overview.md),
 - [Earlier system diagram](architecture/architecture.html)
 - [Earlier architecture](architecture/architecture-v0.html)
 - [Knowledge flow](architecture/knowledge-flow.html)
-- [Database schema proposal](architecture/database-schema.md) — target tables, relationships, permissions, and migration requirements; not implemented.
+- [Database schema proposal](architecture/database-schema.md) — target tables, relationships, permissions, and migration requirements; tables created by Alembic migrations in a separate database, not yet used by services.
 
 ## Features
 
@@ -33,6 +33,7 @@ Start with [product requirements](features/project-overview.md),
 
 - [Engineering standards](development/code-standards.md)
 - [Codebase map](development/codebase-summary.md)
+- [Database migrations](development/database-migrations.md) — Alembic commands, settings, and database-enforced rules.
 - [Development roadmap](development/roadmap.md)
 - [Deployment services placeholder](development/deployment-services.md) — guide not yet written.
 - [Hosted deployment reference](development/hosted-deployment.html)
