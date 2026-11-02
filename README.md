@@ -1,28 +1,15 @@
 # FACTORY MEMO
 
-**A solution for capturing expert manufacturing know-how and turning it into traceable, reusable knowledge for engineers and AI.**
+**Faster machine fault handling and knowledge inheritance for factory employees.**
 
-This repository implements text-based knowledge extraction, storage, retrieval
-and evidence-grounded answers, with a synthetic benchmark, a React QA UI and a
-Streamlit trace UI.
-Live voice capture (React UI tab **Ghi âm**) records the microphone, transcribes
-it with the optional ASR + diarization service, stores the transcript as evidence
-and extracts draft knowledge for side-by-side review (see
-[voice capture](docs/features/voice-capture.md)). The **Tải lên tài liệu** tab stores original
-documents (see [document uploads](docs/features/document-uploads.md)); its **Auto** option
-queues conversion and extraction right after saving.
-**Quản lý tri thức** tracks raw, converted and extracted sources, with per-source
-mode selection and shared review for transcripts, knowledge items and document
-chunks. Convert and Extract are queued jobs run by background workers
-(`uv run python -m backend.worker`, Compose service `worker`); Extract on a raw
-TXT converts it first. OCR is not yet
-implemented; see [knowledge management](docs/features/knowledge-management.md).
-Multimodal extraction, location awareness and
-QR identification are planned capabilities.
+Start with the [product requirements](docs/features/project-overview.md),
+[engineering standards](docs/development/code-standards.md), and
+[documentation index](docs/README.md). New sessions should read [AGENTS.md](AGENTS.md).
 
-The independent agent service has its own [setup, API, and development guide](agent/README.md).
-
-See the [documentation index](docs/README.md) for architecture, features, and development guides.
+The current code includes knowledge extraction/search, a React UI, a trace UI,
+and earlier voice-capture flows. The intended inquiry workflow and refined database
+remain separate implementation work. The independent agent has its own
+[setup, API, and development guide](agent/README.md).
 
 ## 1. Environment setup
 
