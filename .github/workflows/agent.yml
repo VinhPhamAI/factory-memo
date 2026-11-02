@@ -1,0 +1,25 @@
+name: Standalone agent
+on:
+  pull_request:
+    paths: ['agent/**', 'deployments/agent.compose.yml', '.github/workflows/agent.yml']
+  push:
+    paths: ['agent/**', 'deployments/agent.compose.yml', '.github/workflows/agent.yml']
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.7.13'
+          python-version: '3.12'
+          enable-cache: true
+          cache-dependency-glob: agent/uv.lock
+      - run: uv sync --project agent --frozen --group dev
+      - run: uv run --project agent black --check agent/src agent/tests
+      - run: uv run --project agent pylint --rcfile agent/pyproject.toml agent/src/denso_agent
+      - run: uv run --project agent pytest -c agent/pyproject.toml agent/tests/unit -q
+      - run: uv run --project agent pytest -c agent/pyproject.toml agent/tests/integration -q
+      - run: uv run --project agent pytest -c agent/pyproject.toml agent/tests/e2e -q
+      - run: uv run --project agent pytest -c agent/pyproject.toml agent/tests --collect-only -q
