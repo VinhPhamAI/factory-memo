@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "denso-agent"
+version = "0.1.0"
+description = "Independent streaming conversation service for the DENSO demo"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn[standard]>=0.34,<1", "pydantic-settings>=2.8,<3",
+  "langgraph>=1.1,<2", "langchain-core>=1.0,<2", "langgraph-checkpoint-postgres>=3,<4",
+  "psycopg[binary,pool]>=3.2,<4", "openai>=2,<3", "httpx>=0.28,<1",
+]
+
+[project.scripts]
+denso-agent = "denso_agent.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "httpx>=0.28,<1", "black>=25,<27", "pylint>=3.3,<5"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/denso_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-m 'not live'"
+markers = ["live: paid ModelArk call; requires AGENT_RUN_LIVE=1 and explicit -m live"]
+
+[tool.pylint.main]
+py-version = "3.12"
+
+[tool.pylint.messages_control]
+disable = ["too-few-public-methods", "duplicate-code"]
