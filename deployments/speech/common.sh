@@ -2,7 +2,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# speech-api lives in the AI overlay; the base file keeps it in the backend project.
+# The speech worker (ai-speech) lives in the AI overlay behind ai-services-api;
+# the base file keeps both in the backend project.
 COMPOSE_FILE="$REPO_ROOT/deployments/docker-compose.yml"
 AI_COMPOSE_FILE="$REPO_ROOT/deployments/ai.compose.yml"
 MODEL_ROOT="$REPO_ROOT/models"
@@ -30,9 +31,10 @@ env_value() {
         | tail -n 1 | sed -E 's/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/'
 }
 
-SPEECH_API_PORT="${SPEECH_API_PORT:-$(env_value SPEECH_API_PORT)}"
-SPEECH_API_PORT="${SPEECH_API_PORT:-8080}"
-SPEECH_API_URL="${SPEECH_API_URL:-http://127.0.0.1:${SPEECH_API_PORT}}"
+# Clients reach the speech service through ai-services-api.
+AI_SERVICES_API_PORT="${AI_SERVICES_API_PORT:-$(env_value AI_SERVICES_API_PORT)}"
+AI_SERVICES_API_PORT="${AI_SERVICES_API_PORT:-8080}"
+SPEECH_API_URL="${SPEECH_API_URL:-http://127.0.0.1:${AI_SERVICES_API_PORT}}"
 
 compose() {
     if [ -f "$ENV_FILE" ]; then

@@ -5,10 +5,10 @@ Document OCR for PDF, PNG and JPEG files with the
 It is sized for one or two people testing, not for production load.
 The ingestion pipeline does not call it yet.
 
-| Service | Role | Image |
+| Worker | Role | Image |
 | --- | --- | --- |
-| `ocr-api` | FastAPI app ([`ocr_server/`](ocr_server/)) running the full PaddleOCR-VL pipeline: PP-DocLayoutV3 layout regions and reading order, region recognition, Markdown | Built on `paddlepaddle/paddleocr-vl` (PaddlePaddle 3.2.1, PaddleOCR 3.6.0, PaddleX 3.6.1) |
-| `ocr-vlm` | vLLM 0.10.2 server for the PaddleOCR-VL-1.6-0.9B model; the pipeline sends each layout region to it | `paddlepaddle/paddleocr-genai-vllm-server` |
+| `ai-ocr` | FastAPI app ([`ocr_server/`](ocr_server/)) running the full PaddleOCR-VL pipeline: PP-DocLayoutV3 layout regions and reading order, region recognition, Markdown | Built on `paddlepaddle/paddleocr-vl` (PaddlePaddle 3.2.1, PaddleOCR 3.6.0, PaddleX 3.6.1) |
+| `ai-ocr-vlm` | vLLM 0.10.2 server for the PaddleOCR-VL-1.6-0.9B model; the pipeline sends each layout region to it | `paddlepaddle/paddleocr-genai-vllm-server` |
 
 Both images come from PaddleOCR's registry
 (`ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/`). The tag is pinned to
@@ -18,20 +18,21 @@ The model is Apache-2.0.
 
 ## Run
 
-Both services are in the AI overlay [`../ai.compose.yml`](../ai.compose.yml).
-Run from the repository root (an NVIDIA GPU with compute capability 8.0 or later
-and the NVIDIA Container Toolkit are required):
+Both workers are in the AI overlay [`../ai.compose.yml`](../ai.compose.yml),
+without host ports. Clients reach `/v1/ocr` through
+[`ai-services-api`](../ai-services-api/README.md) on `127.0.0.1:8080`. Run from
+the repository root (an NVIDIA GPU with compute capability 8.0 or later and the
+NVIDIA Container Toolkit are required):
 
 ```sh
-docker compose --env-file .env -f deployments/docker-compose.yml \
-  -f deployments/ai.compose.yml up -d --build ocr-api   # also starts ocr-vlm
-curl -s http://127.0.0.1:8090/ready
+bash deployments/ai-services-api/up.sh ocr   # gateway + ai-ocr (+ ai-ocr-vlm)
+curl -s http://127.0.0.1:8080/v1/services/ocr/ready
 bash deployments/ocr/smoke_test.sh [document.pdf]
 ```
 
-The first start pulls about 25 GB of images. After that, `ocr-vlm` becomes
-healthy in about 80 s, and `ocr-api` starts once it is. Only `ocr-api` is
-published, on `127.0.0.1:${OCR_API_PORT:-8090}`, without authentication.
+The first start pulls about 25 GB of images. After that, `ai-ocr-vlm` becomes
+healthy in about 80 s, and `ai-ocr` starts once it is. The gateway has no
+authentication.
 
 ## Resources
 
@@ -39,8 +40,8 @@ Measured on an A40 (46 GB):
 
 | | GPU memory | RAM |
 | --- | --- | --- |
-| `ocr-vlm` | 5.4 GB (`gpu-memory-utilization: 0.12`: weights 1.8 GB, KV cache 2.9 GB) | 2.8 GB |
-| `ocr-api` | 0.9–1.4 GB | 0.7–1.5 GB |
+| `ai-ocr-vlm` | 5.4 GB (`gpu-memory-utilization: 0.12`: weights 1.8 GB, KV cache 2.9 GB) | 2.8 GB |
+| `ai-ocr` | 0.9–1.4 GB | 0.7–1.5 GB |
 
 These limits keep the service small:
 
@@ -60,7 +61,6 @@ These limits keep the service small:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `OCR_API_PORT` | `8090` | Host port of `ocr-api` (bound to `127.0.0.1`) |
 | `OCR_GPU_ID` | `0` | GPU for both services |
 | `OCR_DOC_PREPROCESSING` | `0` | `1` loads the orientation (PP-LCNet_x1_0_doc_ori) and unwarping (UVDoc) models, so requests can use them |
 | `OCR_MAX_UPLOAD_MB` | `50` | Largest file |
@@ -71,9 +71,12 @@ These limits keep the service small:
 
 ## API
 
-- `GET /health`: the process is up.
-- `GET /ready`: the pipeline is loaded and `ocr-vlm` answers. Otherwise it
-  returns 503 with `status` `loading` or `vlm_unavailable`.
+Paths are on the gateway (`http://127.0.0.1:8080`):
+
+- `GET /v1/services/ocr/ready`: the worker's `/ready`. It returns 200 when the
+  pipeline is loaded and `ai-ocr-vlm` answers, otherwise 503 with `status`
+  `loading` or `vlm_unavailable`.
+- `GET /v1/models` (all services) includes `PaddleOCR-VL-1.6-0.9B`.
 - `POST /v1/ocr`: multipart form.
 
 | Field | Default | Meaning |
@@ -85,8 +88,8 @@ These limits keep the service small:
 | `include_images` | `false` | Add the cropped figures the Markdown links to, as base64 JPEG |
 
 ```sh
-curl -s -X POST http://127.0.0.1:8090/v1/ocr -F file=@manual.pdf > manual.json
-curl -s -X POST http://127.0.0.1:8090/v1/ocr -F file=@manual.pdf -F response_format=markdown
+curl -s -X POST http://127.0.0.1:8080/v1/ocr -F file=@manual.pdf > manual.json
+curl -s -X POST http://127.0.0.1:8080/v1/ocr -F file=@manual.pdf -F response_format=markdown
 ```
 
 JSON response (abridged; real output for a 2-page test PDF):

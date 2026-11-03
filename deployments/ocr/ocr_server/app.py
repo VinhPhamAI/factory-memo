@@ -2,12 +2,13 @@
 
 The full PaddleOCR-VL pipeline runs in this process: PP-DocLayoutV3 finds the
 layout regions and their reading order, and each region is sent to the
-PaddleOCR-VL-1.6-0.9B model on the vLLM server (`ocr-vlm`) for recognition.
+PaddleOCR-VL-1.6-0.9B model on the vLLM server (`ai-ocr-vlm`) for recognition.
 Documents are processed one at a time; a few more may wait (`OCR_MAX_QUEUE`).
 Visualizations are never rendered.
 
 Endpoints:
-- `GET /health` (process up), `GET /ready` (pipeline loaded and vLLM server up).
+- `GET /health` (process up), `GET /ready` (pipeline loaded and vLLM server up),
+  `GET /v1/models`.
 - `POST /v1/ocr`: multipart `file` (PDF, PNG or JPEG). Returns every page in
   order with its regions and Markdown, plus the whole document's Markdown;
   `response_format=markdown` returns only that Markdown.
@@ -45,7 +46,7 @@ VLM_MODEL = "PaddleOCR-VL-1.6-0.9B"
 
 @dataclass(frozen=True)
 class Settings:
-    vlm_url: str = "http://ocr-vlm:8080/v1"
+    vlm_url: str = "http://ai-ocr-vlm:8080/v1"
     device: str = "gpu:0"
     doc_preprocessing: bool = False
     # Layout regions sent to the vLLM server at once.
@@ -169,13 +170,32 @@ def create_app(recognizer: Recognizer | None = None, settings: Settings | None =
             return JSONResponse({"status": "vlm_unavailable", **status}, status_code=503)
         return {"status": "ready", **status}
 
-    @app.post("/v1/ocr")
+    @app.get("/v1/models")
+    async def models() -> dict[str, Any]:
+        return {"object": "list", "data": [{
+            "id": VLM_MODEL, "object": "model", "owned_by": "PaddlePaddle",
+            "pipeline": PIPELINE,
+            "capabilities": ["ocr", "layout_regions", "reading_order", "markdown",
+                             *(["doc_preprocessing"] if settings.doc_preprocessing else [])],
+        }]}
+
+    @app.post("/v1/ocr", summary="OCR a PDF or image", description=OCR_DOC,
+              responses=OCR_RESPONSES)
     async def ocr(
-        file: UploadFile = File(...),
-        response_format: str = Form("json"),
-        doc_orientation: bool = Form(False),
-        doc_unwarping: bool = Form(False),
-        include_images: bool = Form(False),
+        file: UploadFile = File(..., description=(
+            f"PDF (up to {settings.max_pages} pages), PNG or JPEG, up to "
+            f"{settings.max_upload_mb} MB; the type is read from the content.")),
+        response_format: str = Form("json", description=(
+            "`json`: pages, layout regions in reading order and Markdown; `markdown`: "
+            "the document's Markdown only."), json_schema_extra={"enum": ["json", "markdown"]}),
+        doc_orientation: bool = Form(False, description=(
+            "Turn rotated pages (90/180/270°) upright. Needs OCR_DOC_PREPROCESSING=1 "
+            f"(currently {'on' if settings.doc_preprocessing else 'off'}), else 400.")),
+        doc_unwarping: bool = Form(False, description=(
+            "Flatten curved or skewed pages (UVDoc). Same condition as `doc_orientation`.")),
+        include_images: bool = Form(False, description=(
+            "Add the figure crops the Markdown links to, as base64 JPEG "
+            "(`pages[].markdown_images`).")),
     ):
         nonlocal waiting
         if response_format not in ("json", "markdown"):
@@ -233,6 +253,43 @@ def create_app(recognizer: Recognizer | None = None, settings: Settings | None =
         }
 
     return app
+
+
+OCR_DOC = """\
+Runs the PaddleOCR-VL-1.6 pipeline: PP-DocLayoutV3 finds each page's layout
+regions and reading order, then PaddleOCR-VL-1.6-0.9B reads each region.
+Tables come back as HTML and formulas as LaTeX. Pages are returned in document
+order; `markdown` joins them with `<!-- page N -->` markers. One document is
+processed at a time and a few more may wait (`OCR_MAX_QUEUE`).
+"""
+
+OCR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    200: {"description": "The OCR result.", "content": {
+        "application/json": {"example": {
+            "pipeline": PIPELINE, "vlm_model": VLM_MODEL, "file_name": "manual.pdf",
+            "file_type": "pdf", "page_count": 1,
+            "settings": {"doc_orientation": False, "doc_unwarping": False},
+            "elapsed_s": 1.25,
+            "pages": [{
+                "page_number": 1, "width": 1191, "height": 1684,
+                "regions": [{
+                    "order": 1, "label": "paragraph_title", "bbox": [91, 321, 365, 365],
+                    "polygon": [[91.0, 321.0], [365.0, 321.0], [365.0, 365.0], [91.0, 365.0]],
+                    "content": "1. Bảng mã lỗi", "block_id": 2, "block_order": 1}],
+                "markdown": "### 1. Bảng mã lỗi",
+            }],
+            "markdown": "<!-- page 1 -->\n\n### 1. Bảng mã lỗi",
+        }},
+        "text/markdown": {"example": "<!-- page 1 -->\n\n### 1. Bảng mã lỗi"},
+    }},
+    400: {"description": "Not a PDF/PNG/JPEG, unreadable PDF, unknown `response_format`, "
+                         "or preprocessing requested while it is off."},
+    413: {"description": "File or page count over the limit (`OCR_MAX_UPLOAD_MB`, "
+                         "`OCR_MAX_PAGES`)."},
+    500: {"description": "The OCR pipeline failed."},
+    502: {"description": "The OCR model server (vLLM) is down."},
+    503: {"description": "Too many documents waiting; retry later."},
+}
 
 
 def main() -> None:

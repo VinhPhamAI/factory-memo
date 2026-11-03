@@ -109,7 +109,8 @@ def create_app(
         finally:
             await engine.stop()
 
-    app = FastAPI(title="VieGem-ASR speech API", lifespan=lifespan)
+    app = FastAPI(title="VieGem-ASR speech API", lifespan=lifespan,
+                  description="Vietnamese speech recognition (5CD-AI/VieGem-ASR).")
 
     async def transcribe_file(data: bytes) -> tuple[Transcription, float]:
         if len(data) > settings.max_upload_mb * 1024 * 1024:
@@ -150,13 +151,21 @@ def create_app(
                                if vad_model is not None else [])],
         }]}
 
-    @app.post("/v1/audio/transcriptions")
+    @app.post("/v1/audio/transcriptions", summary="Transcribe an audio file",
+              description=TRANSCRIPTIONS_DOC, responses=TRANSCRIPTIONS_RESPONSES)
     async def transcriptions(
-        file: UploadFile = File(...),
-        model: str | None = Form(None),
-        language: str | None = Form(None),
-        response_format: str = Form("json"),
-        diarization: bool = Form(False),
+        file: UploadFile = File(..., description=(
+            "Audio that libsndfile reads (WAV, FLAC, OGG, ...), any sample rate, mono "
+            "or stereo. Not MP3 or M4A.")),
+        model: str | None = Form(None, description="Ignored; accepted for OpenAI compatibility."),
+        language: str | None = Form(None, description=(
+            f"Echoed in `verbose_json` (default `{settings.language}`); it does not "
+            "change recognition.")),
+        response_format: str = Form("json", description=(
+            "`json`: `{\"text\"}`; `text`: plain text; `verbose_json`: adds duration, "
+            "words with times and confidence, and segments."),
+            json_schema_extra={"enum": ["json", "text", "verbose_json"]}),
+        diarization: bool = Form(False, description="Not supported; `true` gives 400."),
     ):
         if diarization:
             raise HTTPException(400, "speaker diarization is not supported")
@@ -177,7 +186,7 @@ def create_app(
             if result.words else [],
         }
 
-    @app.post("/transcribe")
+    @app.post("/transcribe", summary="Transcribe an audio file (plain JSON)")
     async def transcribe(file: UploadFile = File(...)) -> dict[str, str]:
         result, _ = await transcribe_file(await file.read())
         return {"text": result.text}
@@ -241,6 +250,35 @@ def create_app(
                 pass
 
     return app
+
+
+TRANSCRIPTIONS_DOC = """\
+Transcribes one audio file (OpenAI-compatible). Output is lowercase Vietnamese
+without punctuation; numbers are written as words. Files over 30 s are cut at
+quiet points and transcribed as one batch. Limits: 200 MB and one hour of audio
+(`SPEECH_MAX_UPLOAD_MB`, `SPEECH_MAX_FILE_S`).
+
+Live transcription uses the WebSocket `/v1/audio/transcriptions/realtime`
+instead (not shown in OpenAPI; see AI_SERVICES_API_DOCS.md).
+"""
+
+TRANSCRIPTIONS_RESPONSES: dict[int | str, dict[str, Any]] = {
+    200: {"description": "The transcript in the requested format.", "content": {
+        "application/json": {"examples": {
+            "json": {"value": {"text": "trục z kêu rè khi chạy nhanh"}},
+            "verbose_json": {"value": {
+                "task": "transcribe", "model": MODEL_ID, "language": "vi-VN",
+                "duration": 2.4, "text": "trục z kêu rè",
+                "words": [{"word": "trục", "start": 0.32, "end": 0.36, "confidence": 0.998},
+                          {"word": "z", "start": 0.64, "end": 0.68, "confidence": 0.991}],
+                "segments": [{"id": 0, "start": 0.32, "end": 1.6, "text": "trục z kêu rè"}],
+            }},
+        }},
+        "text/plain": {"example": "trục z kêu rè khi chạy nhanh"},
+    }},
+    400: {"description": "Unreadable audio, unknown `response_format` or `diarization=true`."},
+    413: {"description": "File over 200 MB or audio over one hour."},
+}
 
 
 def main() -> None:

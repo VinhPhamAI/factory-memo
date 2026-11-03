@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# End-to-end check of a running ocr-api / ocr-vlm.
+# End-to-end check of the OCR service (ai-ocr, ai-ocr-vlm) behind ai-services-api.
 # Usage: bash deployments/ocr/smoke_test.sh [document.pdf|.png|.jpg]
 #
 # Always: health, readiness and refusal of unsupported files. With a document:
 # OCR as JSON (pages, regions, Markdown) and as Markdown only.
 set -euo pipefail
 ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.env"
-port="${OCR_API_PORT:-$( [ -f "$ENV_FILE" ] && sed -n -E 's/^[[:space:]]*OCR_API_PORT[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1)}"
-URL="${OCR_API_URL:-http://127.0.0.1:${port:-8090}}"
+port="${AI_SERVICES_API_PORT:-$( [ -f "$ENV_FILE" ] && sed -n -E 's/^[[:space:]]*AI_SERVICES_API_PORT[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" | tail -n 1)}"
+URL="${AI_SERVICES_API_URL:-http://127.0.0.1:${port:-8080}}"
 die() { printf '[ocr] ERROR: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n== %s\n' "$*"; }
 
-step "health / ready ($URL)"
+step "health / OCR ready ($URL)"
 curl -fsS "$URL/health"; echo
-curl -fsS "$URL/ready" || die "ocr-api is not ready"; echo
+curl -fsS "$URL/v1/services/ocr/ready" || die "the OCR service is not ready"; echo
 
 step "unsupported file refused"
 code=$(printf 'GIF89a' | curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/v1/ocr" -F "file=@-;filename=a.gif")

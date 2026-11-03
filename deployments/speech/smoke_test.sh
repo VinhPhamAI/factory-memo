@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end check of a running VieGem-ASR speech-api.
+# End-to-end check of the VieGem-ASR speech service behind ai-services-api.
 # Usage: bash deployments/speech/smoke_test.sh [speech.wav ["reference transcript"]]
 #
 # Without arguments: health, readiness, model list, the realtime WebSocket
@@ -51,12 +51,12 @@ print(f"{len(turns)} utterance(s) written to {out}", file=sys.stderr)
 PY
 }
 
-step "health / ready / models ($SPEECH_API_URL)"
+step "health / speech ready / models ($SPEECH_API_URL)"
 curl -fsS "$SPEECH_API_URL/health" | $JQ
-curl -fsS "$SPEECH_API_URL/ready" | $JQ
+curl -fsS "$SPEECH_API_URL/v1/services/speech/ready" | $JQ
 curl -fsS "$SPEECH_API_URL/v1/models" | $JQ
 curl -fsS "$SPEECH_API_URL/v1/models" | grep -q "5CD-AI/VieGem-ASR" \
-    || die "speech-api does not serve VieGem-ASR"
+    || die "the speech service does not serve VieGem-ASR"
 
 step "realtime protocol on 3 s of silence; diarization refused"
 uv run --no-sync python - "$SPEECH_API_URL" "$OUT/silence.wav" <<'PY'

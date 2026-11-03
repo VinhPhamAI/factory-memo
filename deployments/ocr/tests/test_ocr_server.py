@@ -162,6 +162,11 @@ class AppTest(unittest.TestCase):
         with mock.patch("ocr_server.app.pdf_page_count", return_value=3):
             self.assertEqual(self.post(client, PDF_BYTES).status_code, 413)
 
+    def test_models_lists_the_vlm(self) -> None:
+        models = self.client(StubRecognizer()).get("/v1/models").json()["data"]
+        self.assertEqual(models[0]["id"], "PaddleOCR-VL-1.6-0.9B")
+        self.assertNotIn("doc_preprocessing", models[0]["capabilities"])
+
     def test_ready_reports_an_unreachable_vlm_server(self) -> None:
         response = self.client(StubRecognizer()).get("/ready")
         self.assertEqual(response.status_code, 503)

@@ -1,7 +1,9 @@
 """Client for the VieGem-ASR speech service (speech recognition, no diarization).
 
-The service (`speech-api` in deployments/ai.compose.yml) runs the VieGem-ASR
-CTC model with model-based end-of-utterance detection. Ways to send audio:
+The service (`ai-speech` in deployments/ai.compose.yml) runs the VieGem-ASR
+CTC model with model-based end-of-utterance detection. Clients reach it
+through `ai-services-api` (`SPEECH_API_URL`), which forwards the speech paths
+below unchanged. Ways to send audio:
 
 - `SpeechClient.atranscribe_file` posts one complete WAV to
   `/v1/audio/transcriptions` and returns its utterance.
@@ -37,6 +39,8 @@ from websockets.asyncio.client import connect
 
 REALTIME_PATH = "/v1/audio/transcriptions/realtime"
 TRANSCRIPTION_PATH = "/v1/audio/transcriptions"
+# The speech worker's own readiness, as reported by ai-services-api.
+READY_PATH = "/v1/services/speech/ready"
 # A frame is quiet when it is less than MARGIN above the noise floor and at
 # least BELOW_SPEECH under the loud level, or below an absolute level (digital
 # silence). The second condition keeps speech from counting as quiet when the
@@ -463,7 +467,13 @@ class SpeechClient:
         return self._json(response)
 
     async def aready(self) -> dict[str, Any]:
-        return await self.aget("/ready")
+        """The speech service's readiness report.
+
+        Raises:
+            SpeechServiceError: The service is loading, down or unreachable.
+        """
+
+        return await self.aget(READY_PATH)
 
     async def _post_file(
         self, path: str, name: str, content: bytes, data: dict[str, str]

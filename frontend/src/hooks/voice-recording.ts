@@ -60,7 +60,7 @@ export function applyTranscriptEvent(
 
 const SERVER_ERRORS: Record<string, string> = {
   speech_unavailable:
-    "Dịch vụ nhận dạng giọng nói chưa sẵn sàng. Kiểm tra speech-api rồi thử lại.",
+    "Dịch vụ nhận dạng giọng nói chưa sẵn sàng. Kiểm tra ai-services-api và ai-speech rồi thử lại.",
   kb: "Knowledge base này không hỗ trợ ghi âm.",
   start: "Thông tin bắt đầu ghi âm không hợp lệ.",
   empty: "Không nhận ra lời nói nào trong bản ghi.",

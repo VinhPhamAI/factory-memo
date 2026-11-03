@@ -1,8 +1,10 @@
 # Speech service (VieGem-ASR)
 
-`speech-api` in the AI overlay [`deployments/ai.compose.yml`](../ai.compose.yml)
+The `ai-speech` worker in the AI overlay [`deployments/ai.compose.yml`](../ai.compose.yml)
 serves [5CD-AI/VieGem-ASR](https://huggingface.co/5CD-AI/VieGem-ASR) with a
-FastAPI server in [`viegem_server/`](viegem_server/):
+FastAPI server in [`viegem_server/`](viegem_server/). Clients reach it through
+[`ai-services-api`](../ai-services-api/README.md) on `127.0.0.1:8080`, which
+forwards the paths below unchanged:
 
 - **ASR:** VieGem-ASR, a 359M-parameter CTC model for Vietnamese and
   Vietnamese–English code-switching on the EmbeddingGemma 2 audio encoder.
@@ -18,9 +20,9 @@ FastAPI server in [`viegem_server/`](viegem_server/):
   near its start, so `end` is only one frame later than `start`.
 
 The overlay joins the backend Compose project (`knowledge-agent`), so the API
-container reaches the service at `http://speech-api:8080`. The port is bound to
-`127.0.0.1` without an API key; put an authenticating TLS proxy in front before
-exposing it beyond the host.
+container reaches the service at `http://ai-services-api:8080`. The worker has
+no host port. The gateway port is bound to `127.0.0.1` without an API key; put
+an authenticating TLS proxy in front before exposing it beyond the host.
 
 **License:** the model is CC-BY-NC-SA-4.0 (non-commercial research use) and
 also subject to the Gemma Terms of Use. Check both before any other use.
@@ -33,10 +35,10 @@ settings in [`.env.example`](../../.env.example)):
 
 ```sh
 bash deployments/speech/setup.sh       # GPU/Docker checks, model downloads
-bash deployments/speech/up.sh          # build image, start, wait for /ready
+bash deployments/speech/up.sh          # build, start ai-services-api + ai-speech, wait until ready
 bash deployments/speech/smoke_test.sh  # health, protocol, diarization refused
 bash deployments/speech/smoke_test.sh speech.wav "reference text"  # + accuracy
-docker compose -f deployments/docker-compose.yml -f deployments/ai.compose.yml logs -f speech-api
+docker compose -f deployments/docker-compose.yml -f deployments/ai.compose.yml logs -f ai-speech
 ```
 
 `setup.sh` downloads pinned revisions into `models/` (ignored by Git), mounted
@@ -54,7 +56,6 @@ service needs about 2 GB of GPU memory; `SPEECH_GPU_ID` selects the device.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `SPEECH_API_PORT` | `8080` | Host port (bound to `127.0.0.1`) |
 | `SPEECH_GPU_ID` | `0` | GPU used by the container |
 | `SPEECH_EOU_MS` | `800` | Default end-of-utterance silence; sessions may override it (200–5000) |
 | `SPEECH_LANGUAGE` | `vi-VN` | Language echoed in responses; it does not change recognition |
@@ -65,14 +66,16 @@ service needs about 2 GB of GPU memory; `SPEECH_GPU_ID` selects the device.
 
 ## API
 
-- `GET /health` (process up), `GET /ready` (models loaded, 503 before; `vad`
-  names the VAD or is `null`), `GET /v1/models`.
+- The worker's `GET /ready` (models loaded, 503 before; `vad` names the VAD or
+  is `null`) is `GET /v1/services/speech/ready` on the gateway, and its models
+  are part of the gateway's `GET /v1/models`.
 - `POST /v1/audio/transcriptions`: multipart `file` (WAV, FLAC, OGG, …, any
   rate, mono or stereo) and `response_format` `json`, `text` or `verbose_json`.
   `verbose_json` returns `duration`, `text` and `words[]` with `word`, `start`,
   `end`, `confidence`. Files over 30 s are cut at their quietest point between
   20 s and 30 s and transcribed as one batch. Limits: 200 MB, one hour.
-- `POST /transcribe`: multipart `file`; returns `{"text": "..."}`.
+- `POST /transcribe` (worker only, not exposed by the gateway): multipart
+  `file`; returns `{"text": "..."}`.
 - WebSocket `/v1/audio/transcriptions/realtime`: wait for `session.created`,
   send at most one `session.update` before any audio, then binary mono PCM16
   frames (8–96 kHz), and finish with `{"type": "input_audio_buffer.commit"}`:

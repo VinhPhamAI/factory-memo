@@ -1,19 +1,43 @@
-# Self-hosted AI services. Overlay on the backend stack so the API reaches them
-# by service name (same Compose project and network):
+# Self-hosted AI services. Overlay on the backend stack (same Compose project
+# and network), so the backend reaches them at http://ai-services-api:8080.
+#
+# ai-services-api is the entry point: one FastAPI app and port that forwards
+# each request to the worker owning its path (ai-services-api/services.yaml).
+# Workers have no host ports, except ai-embedding (8001, kept for existing
+# clients). Start the gateway with the workers you need:
 #   docker compose --env-file .env -f deployments/docker-compose.yml \
-#     -f deployments/ai.compose.yml up -d --build speech-api ocr-api
-# Start a single service by naming it (ocr-api also starts ocr-vlm).
+#     -f deployments/ai.compose.yml up -d --build ai-services-api ai-speech ai-ocr ai-embedding
+# (ai-ocr also starts ai-ocr-vlm), or: bash deployments/ai-services-api/up.sh speech ocr embedding
 
 services:
+  ai-services-api:
+    build:
+      context: ./ai-services-api
+    image: local/ai-services-api
+    container_name: ai-services-api
+    restart: unless-stopped
+    environment:
+      # Comma-separated service names to enable; empty enables all in services.yaml.
+      AI_SERVICES: "${AI_SERVICES:-}"
+      AI_REQUEST_TIMEOUT_S: "${AI_REQUEST_TIMEOUT_S:-900}"
+    ports:
+      - "127.0.0.1:${AI_SERVICES_API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
   # VieGem-ASR (5CD-AI/VieGem-ASR): Vietnamese / Vietnamese-English CTC speech
   # recognition on the EmbeddingGemma 2 audio encoder, with Silero voice
   # activity detection and model-based end-of-utterance detection. No speaker
   # diarization. Download the weights first with deployments/speech/setup.sh.
-  speech-api:
+  ai-speech:
     build:
       context: ./speech
     image: local/viegem-asr:cuda
-    container_name: speech-api
+    container_name: ai-speech
     restart: unless-stopped
     environment:
       VIEGEM_MODEL_DIR: /models/VieGem-ASR
@@ -28,8 +52,6 @@ services:
       SPEECH_VAD: "${SPEECH_VAD:-1}"
       SPEECH_VAD_THRESHOLD: "${SPEECH_VAD_THRESHOLD:-0.5}"
       SPEECH_COMPILE: "${SPEECH_COMPILE:-0}"
-    ports:
-      - "127.0.0.1:${SPEECH_API_PORT:-8080}:8080"
     volumes:
       - ../models/VieGem-ASR:/models/VieGem-ASR:ro
       - ../models/embeddinggemma-2:/models/embeddinggemma-2:ro
@@ -49,13 +71,13 @@ services:
               capabilities: [gpu]
 
   # PaddleOCR-VL-1.6 document OCR, sized for one or two people testing:
-  # ocr-vlm serves the 0.9B VLM with vLLM (about 5.5 GB of GPU memory, see
-  # ocr/vllm_config.yaml); ocr-api runs the PaddleOCR-VL pipeline (layout
-  # detection, reading order, Markdown) and sends each region to ocr-vlm.
+  # ai-ocr-vlm serves the 0.9B VLM with vLLM (about 5.5 GB of GPU memory, see
+  # ocr/vllm_config.yaml); ai-ocr runs the PaddleOCR-VL pipeline (layout
+  # detection, reading order, Markdown) and sends each region to ai-ocr-vlm.
   # Both images are PaddleOCR's offline images with the models built in.
-  ocr-vlm:
+  ai-ocr-vlm:
     image: "ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-vllm-server:${OCR_IMAGE_TAG:-0006f78-ppocr3.6-pdx3.6-nvidia-gpu-offline}"
-    container_name: ocr-vlm
+    container_name: ai-ocr-vlm
     restart: unless-stopped
     command: ["paddleocr", "genai_server", "--model_name", "PaddleOCR-VL-1.6-0.9B",
               "--host", "0.0.0.0", "--port", "8080", "--backend", "vllm",
@@ -77,26 +99,24 @@ services:
               device_ids: ["${OCR_GPU_ID:-0}"]
               capabilities: [gpu]
 
-  ocr-api:
+  ai-ocr:
     build:
       context: ./ocr
       args:
         BASE_IMAGE: "ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${OCR_IMAGE_TAG:-0006f78-ppocr3.6-pdx3.6-nvidia-gpu-offline}"
-    image: local/paddleocr-vl-api:cuda
-    container_name: ocr-api
+    image: local/paddleocr-vl-ocr:cuda
+    container_name: ai-ocr
     restart: unless-stopped
     environment:
-      OCR_VLM_URL: http://ocr-vlm:8080/v1
+      OCR_VLM_URL: http://ai-ocr-vlm:8080/v1
       # 1 loads the orientation and unwarping models so requests can use them.
       OCR_DOC_PREPROCESSING: "${OCR_DOC_PREPROCESSING:-0}"
       OCR_MAX_UPLOAD_MB: "${OCR_MAX_UPLOAD_MB:-50}"
       OCR_MAX_PAGES: "${OCR_MAX_PAGES:-100}"
       OCR_MAX_QUEUE: "${OCR_MAX_QUEUE:-4}"
       OCR_LAYOUT_BATCH: "${OCR_LAYOUT_BATCH:-1}"
-    ports:
-      - "127.0.0.1:${OCR_API_PORT:-8090}:8080"
     depends_on:
-      ocr-vlm:
+      ai-ocr-vlm:
         condition: service_healthy
     shm_size: "1gb"
     healthcheck:
@@ -111,4 +131,38 @@ services:
           devices:
             - driver: nvidia
               device_ids: ["${OCR_GPU_ID:-0}"]
+              capabilities: [gpu]
+
+  # Text embeddings: microsoft/harrier-oss-v1-0.6b (1024 dimensions) on Text
+  # Embeddings Inference. Same settings as the earlier `docker run` of the
+  # tei-embeddings container (deployments/embedding/README.md). Unlike the other
+  # workers it keeps its own host port (0.0.0.0:8001 by default) for existing
+  # clients; new clients should use ai-services-api (/v1/embeddings).
+  ai-embedding:
+    image: "ghcr.io/huggingface/text-embeddings-inference:${EMBEDDING_TEI_IMAGE_TAG:-cuda-1.9}"
+    container_name: ai-embedding
+    restart: unless-stopped
+    command: ["--model-id", "${EMBEDDING_TEI_MODEL:-microsoft/harrier-oss-v1-0.6b}",
+              "--max-batch-tokens", "${EMBEDDING_TEI_MAX_BATCH_TOKENS:-8192}",
+              "--max-concurrent-requests", "${EMBEDDING_TEI_MAX_CONCURRENT_REQUESTS:-256}"]
+    ports:
+      - "${EMBEDDING_TEI_BIND:-0.0.0.0}:${EMBEDDING_TEI_PORT:-8001}:80"
+    volumes:
+      # Hugging Face cache; the model is downloaded here on first start.
+      - "${EMBEDDING_TEI_DATA_DIR:-/mnt/data/embeddings/data}:/data"
+    cpus: 4
+    mem_limit: 8g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Loading the model took about 5 minutes on the A40 host (CPU-bound).
+      start_period: 600s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${EMBEDDING_TEI_GPU_ID:-0}"]
               capabilities: [gpu]

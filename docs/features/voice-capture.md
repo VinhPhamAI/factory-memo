@@ -16,7 +16,7 @@ remains available to existing clients (see [Typed text](#typed-text)).
 Browser mic ─ AudioWorklet (PCM16, 16 kHz) ─ WS /v1/voice/{kb}/record ─ FastAPI
                                                                           │
               data/audio/<time>_<name>.wav  ◄── every frame, written first ┤
-              speech-api realtime ASR (VieGem-ASR) ◄── same frames ────────┘
+     ai-services-api → ai-speech realtime ASR (VieGem-ASR) ◄── same frames ┘
 Stop ─► transcript "[T01] Unknown speaker: …" ─► kb_<name>.raw_conversations (pending)
      ─► Quản lý tri thức: select mode → extraction → knowledge_items/chunks (draft)
      ─► background (optional): LLM-cleaned copy of each turn, for reading only

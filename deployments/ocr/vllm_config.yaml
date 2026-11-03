@@ -1,4 +1,4 @@
-# vLLM options for the PaddleOCR-VL-1.6 server (ocr-vlm), sized for one or two
+# vLLM options for the PaddleOCR-VL-1.6 server (ai-ocr-vlm), sized for one or two
 # people testing, not production load. `paddleocr genai_server` merges these
 # over its defaults (gpu-memory-utilization 0.5, max-num-batched-tokens 131072,
 # api-server-count 4, max-model-len 16384).

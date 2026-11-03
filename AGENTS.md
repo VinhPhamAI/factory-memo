@@ -175,5 +175,7 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
   [conflicts](docs/features/conflict-detection.md): jobs, extraction/review and duplicates.
 - [Voice capture](docs/features/voice-capture.md), [uploads](docs/features/document-uploads.md),
   [speech service](deployments/speech/README.md): capture, storage and deployment.
-- [OCR service](deployments/ocr/README.md): PaddleOCR-VL deployment and API.
+- [AI services API](deployments/ai-services-api/README.md): the one port in front of
+  the speech, OCR and embedding workers; [OCR service](deployments/ocr/README.md),
+  [embedding service](deployments/embedding/README.md).
 - [Snapshot guide](backend/knowledge_bases/industrial_qa/SNAPSHOT.md): Hugging Face restore/export.

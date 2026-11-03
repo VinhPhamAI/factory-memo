@@ -1,8 +1,8 @@
 """Tests for the VieGem-ASR speech client.
 
-Offline tests use a fake WebSocket. Live tests run against a started
-speech-api service when SPEECH_API_URL_TEST is set (e.g. http://127.0.0.1:8080)
-and SPEECH_TEST_WAV names a WAV file of Vietnamese speech.
+Offline tests use a fake WebSocket. Live tests run against the speech service
+through ai-services-api when SPEECH_API_URL_TEST is set (e.g.
+http://127.0.0.1:8080) and SPEECH_TEST_WAV names a WAV file of Vietnamese speech.
 """
 
 from __future__ import annotations
@@ -223,7 +223,7 @@ LIVE_WAV = os.getenv("SPEECH_TEST_WAV")
 
 
 @unittest.skipUnless(LIVE_URL and LIVE_WAV,
-                     "set SPEECH_API_URL_TEST and SPEECH_TEST_WAV to run against speech-api")
+                     "set SPEECH_API_URL_TEST and SPEECH_TEST_WAV to run against ai-services-api")
 class LiveSpeechServiceTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.client = SpeechClient(SpeechSettings(base_url=LIVE_URL or "", timeout_seconds=120))
