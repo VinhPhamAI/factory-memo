@@ -1,7 +1,11 @@
 # Database schema proposal
 
-**Status: proposed; not implemented.** This document defines the target tables,
-relationships, and the work handled by each service. It does not change running databases.
+**Status: tables created; not used by services.** This document defines the target tables,
+relationships, and the work handled by each service. The models in `backend/src/storage/orm/`
+and the initial Alembic revisions create these tables, the updated processing tables and the
+database rules in a separate database (`APP_DATABASE_URL`); no API, worker or agent
+reads or writes them yet, and existing data has not been moved. See
+[database migrations](../development/database-migrations.md) for commands and enforced rules.
 
 ## Purpose and scope
 
@@ -386,6 +390,16 @@ They do not introduce another collection of searchable content.
 | `extraction_runs` | Processing attempt settings/results and checks for identical content | Reference `knowledge_sources`; keep the values used to identify matching content/settings and the attempt history |
 | `content_signatures` | Near-duplicate warnings | Reference `knowledge_sources`; keep the confirmation step for similar content |
 | `knowledge_conflicts` | Suspected conflicts and human review | Reference `knowledge_chunks`; preserve decisions and replacement links |
+
+Implemented models of these tables:
+
+- Replace the text collection name with `knowledge_base_id`, and evidence IDs with
+  `source_id` or chunk IDs. Composite foreign keys on `(id, knowledge_base_id)` keep
+  each record in the same collection as its source or chunks.
+- Drop the job `source_kind`; the source row has its kind.
+- Add `knowledge_base_id` to unique keys that held within one `kb_<name>` database,
+  such as the active-content key of `extraction_runs`.
+- Store `job_id` as a reference to `ingestion_jobs`.
 
 The old original-document chunk tables, keyword-scoring tables, and `rag_indexes`
 are not part of the proposed search storage. Stop using them only after data has

@@ -37,7 +37,9 @@ Paths in this table are relative to the repository root.
 
 - [Product requirements](../features/project-overview.md) define the intended experience.
 - [System responsibilities](../architecture/system-architecture.md) separate current and intended boundaries.
-- [Database proposal](../architecture/database-schema.md) is not an implemented migration.
+- [Database proposal](../architecture/database-schema.md) has tables created by
+  [migrations](database-migrations.md) (`backend/src/storage/orm/`, `backend/migrations/`)
+  in the `APP_DATABASE_URL` database; services do not use them yet.
 - [Project guidance](../../AGENTS.md) preserves knowledge integrity and evaluation rules.
 
 Check the current code and configuration before reporting implementation status.

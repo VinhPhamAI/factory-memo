@@ -1,0 +1,127 @@
+# Backend database migrations
+
+Use Alembic to manage the fifteen application tables in the
+[schema proposal](../architecture/database-schema.md): eleven proposed tables plus
+`ingestion_jobs`, `extraction_runs`, `content_signatures` and `knowledge_conflicts`
+rebuilt on shared IDs. APIs, workers and agents do not use them yet; existing data
+has not been migrated. Service code still manages `knowledge_base_registry`, its own
+`ingestion_jobs` in the `DATABASE_URL` database and per-collection `kb_<name>` databases.
+
+The new tables live in a separate database, because the new and service-created
+`ingestion_jobs` share a name.
+
+## Locations
+
+| Path | Contents |
+|---|---|
+| `backend/src/storage/orm/` | Models, allowed values and IDs |
+| `backend/migrations/env.py` | Database selection, autogenerate filters and vector rendering |
+| `backend/migrations/versions/` | Revisions: `<random revision ID>_<slug>.py` |
+| `pyproject.toml` (`[tool.alembic]`) | Settings; no `alembic.ini` |
+| `backend/tests/test_database_migrations.py` | Model and migration tests |
+
+## Settings
+
+| Variable | Use |
+|---|---|
+| `APP_DATABASE_URL` | Target database for the application tables, separate from `DATABASE_URL` |
+| `MIGRATION_DATABASE_URL` | Optional setup-owner URL; takes precedence over `APP_DATABASE_URL` |
+| `EMBEDDING_DIM` | Required at table creation; sets `knowledge_chunks.embedding` to `vector(EMBEDDING_DIM)` |
+
+Alembic loads the repository `.env` and never falls back to `DATABASE_URL`.
+Match `EMBEDDING_DIM` to the embedding model.
+Above 2000 dimensions, pgvector cannot build the HNSW index; dense search scans
+the table until another index type is added by migration.
+
+## Initial revisions
+
+| Revision | Contents |
+|---|---|
+| `eda1239388ad_prepare_database` | Hand-written: stops if the database holds the service-created `ingestion_jobs` (a `kb` column); `CREATE EXTENSION IF NOT EXISTS vector`; downgrade keeps the extension |
+| `2e755e6df2ca_create_application_tables` | Unedited autogenerate output: tables, columns, defaults, constraints, generated `search_vector`, B-tree, GIN and partial indexes |
+| `3665f6870fa4_add_database_rules` | Hand-written: trigger functions, triggers and dimension-dependent HNSW index (excluded from models) |
+
+The `env.py` render hook emits `Vector(embedding_dim_from_env())` to read the size
+when the revision runs.
+
+## Apply migrations
+
+Set `APP_DATABASE_URL` and `EMBEDDING_DIM` in `.env`, then run from the repository root:
+
+```bash
+bash deployments/migrate.sh
+```
+
+The script starts Compose PostgreSQL, creates the target database if missing,
+runs `alembic upgrade head` and `alembic check`, and prints the current revision.
+It is safe to rerun and refuses the `DATABASE_URL` database. Options:
+`--skip-postgres` for another server, `--skip-check` to skip the comparison,
+`--help`. Creating the database needs an account with `CREATEDB`.
+
+Equivalent manual steps:
+
+1. Start the database: `docker compose -f deployments/docker-compose.yml up -d postgres`.
+2. Create the application database once, for example:
+   `docker compose -f deployments/docker-compose.yml exec postgres psql -U voice_agent -d voice_agent -c 'CREATE DATABASE voice_agent_app'`.
+3. Set `APP_DATABASE_URL` to it and check the target and revision: `uv run alembic current`.
+4. Apply: `uv run alembic upgrade head` (safe to rerun).
+5. Check model/database alignment: `uv run alembic check`. Expected:
+   `No new upgrade operations detected.`
+
+Preview SQL without connecting: `uv run alembic upgrade head --sql`.
+`make setup` does not run these migrations yet.
+
+## Change the schema
+
+1. Add a failing test for new rules and update `backend/src/storage/orm/`.
+2. Set `MIGRATION_DATABASE_URL` to a disposable database; run `uv run alembic upgrade head`.
+3. Generate and review: `uv run alembic revision --autogenerate -m "add machine parts"`.
+4. Use `uv run alembic revision -m "..."` for a separate hand-written revision covering
+   changed check constraints or generated expressions, triggers, functions and
+   extensions; autogenerate does not detect them.
+5. On the disposable database, run `uv run alembic` with each command in order:
+   `upgrade head`, `check`, `downgrade -1`, `upgrade head`.
+6. Run the tests below. Document data migration and recovery when changing existing rows.
+
+Never edit a revision that has been applied to a shared database; add a new one.
+
+## Database rules
+
+The database enforces:
+
+- Allowed roles/statuses/kinds, JSON objects, non-negative file sizes and lowercase
+  hexadecimal SHA-256 values.
+- Trimmed lowercase usernames; unique usernames, machine codes, collection names
+  and storage keys, including after soft deletion.
+- Immutable `created_at`; automatic `updated_at` unless explicitly set, including
+  on processing tables.
+- Files for document/image sources; at least one reference per evidence link;
+  matching chunk/source collections and immutable collection membership.
+- Clearing stale embeddings when `search_text` changes unless replaced in the same
+  update; `simple` text search for all collections (lowercase, no language stemming).
+- Processing records in the collection of their source or chunks (composite foreign
+  keys); one queued or running job per source; one running or done extraction run
+  per collection, content hash, mode and fingerprint; ordered conflict pairs
+  (`a_id < b_id`), unique per judge fingerprint, with review history as a JSON array.
+- Conversation ownership by inquiry requesters; matching inquiries for response
+  files and their events; immutable inquiry events.
+- Foreign keys that block deletion of linked history.
+
+Permissions and workflow transitions remain backend checks. The database does not
+enforce chunk source presence, enabled expert/admin assignees, status transitions
+or soft-deletion filters. Workers still lease jobs and create the next stage in
+the same transaction.
+
+## Tests
+
+```bash
+uv run python -m unittest backend.tests.test_database_migrations -v
+```
+
+Without `TEST_DATABASE_URL`, only model unit tests run. With it, each integration
+test class creates and migrates a disposable database, checks models and rules,
+then drops it. The URL's database is used only to create/drop test databases:
+
+```bash
+TEST_DATABASE_URL=postgresql+psycopg://voice_agent:voice_agent@localhost:5434/voice_agent uv run python -m unittest backend.tests.test_database_migrations -v
+```
