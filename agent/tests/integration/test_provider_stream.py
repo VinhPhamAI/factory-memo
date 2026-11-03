@@ -51,11 +51,13 @@ def provider_server(*, reason="stop", fragments=("first", "second")):
             self.end_headers()
             try:
                 for index, fragment in enumerate(fragments):
-                    self.send_chunk(fragment, None)
                     if index == 0:
+                        # Set before sending: a fast client can otherwise read
+                        # the chunk before this thread marks it as sent.
                         first.set()
-                        if not release.wait(15):
-                            return
+                    self.send_chunk(fragment, None)
+                    if index == 0 and not release.wait(15):
+                        return
                 self.send_chunk(None, reason)
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
