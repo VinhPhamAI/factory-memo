@@ -1,6 +1,6 @@
 # Agent and conversations implementation plan
 
-Status: phase 1 (text chat and history) implemented and verified with a controlled model provider; speech, photos and retrieval not started. Scope: Section 4 of the current product checklist. Review: [phase 1 code review](../reports/code-reviewer-261103-1906-agent-conversations-phase-1.md).
+Status: phase 1 implemented and verified live with a controlled model provider. Phases 2 and 3 built and tested with controlled dependencies: search tool and citations (agent, backend history, UI), photo input (agent only), composer speech-to-text (backend + UI). Blocked: live knowledge search (no API contract), backend photo authorization (no files API), real Vietnamese speech (models must not run on this laptop), knowledge smoke test. Reviews: [phase 1](../reports/code-reviewer-261103-1906-agent-conversations-phase-1.md), [phases 2–3](../reports/code-reviewer-261103-1906-agent-retrieval-photo-speech.md).
 
 Start from a branch containing auth merge `a5ef5f5`. Apply the application
 migrations, start the standalone agent with its own database, and verify real

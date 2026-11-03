@@ -3,8 +3,9 @@
 Scope: the implemented `/v1/conversations` API that lets a signed-in user chat
 with the [standalone agent](../../agent/README.md). The backend stores the
 conversation list (`conversations` table in the application database); the agent
-stores the messages in its own `agent_memory` checkpoints. The agent has no
-knowledge search yet: answers cite no sources.
+stores the messages in its own `agent_memory` checkpoints. The agent supports
+knowledge search with citations and photo input, but neither is connected yet
+(see [Limits](#limits)), so answers currently cite no sources.
 
 Owners: routes in `backend/api/conversations.py`, queries in
 `backend/src/storage/conversations.py`, agent client in `backend/src/clients/agent.py`,
@@ -35,6 +36,7 @@ Every route requires a bearer access token (`401` without one).
 | `DELETE /v1/conversations/{id}` | — | `204`; soft delete |
 | `GET /v1/conversations/{id}/history` | — | `200` `{conversation_id, messages: [{role, text}], truncated}` |
 | `POST /v1/conversations/{id}/stream` | `{message}` | `200` `text/event-stream` |
+| `POST /v1/speech/transcriptions` | multipart `file` (PCM16 WAV, at most 120 s and 16 MB) | `200` `{text}` for the composer; nothing is stored |
 
 `Conversation` is `{id, title, created_at, updated_at}`. A message the agent accepts, or
 renaming moves `updated_at`.
@@ -55,9 +57,18 @@ renaming moves `updated_at`.
   answer unconfirmed: reopen history to see what was saved.
 - Closing the browser request closes the agent stream, which stops generation and
   frees the conversation for a new message. Nothing is resent automatically.
-- History comes from the agent checkpoint: saved user inputs and completed
-  answers, oldest first, newest 200 messages at most (`truncated` marks omitted
-  older ones). A failed turn shows the user input with no answer.
+- History comes from the agent checkpoint: `{role, text, citations, attachment}`
+  for saved user inputs and completed answers, oldest first, newest 200 messages
+  at most (`truncated` marks omitted older ones). A failed turn shows the user
+  input with no answer.
+- `complete` and history carry the same saved `citations`
+  (`{marker, evidence_id, title, excerpt, location}`); the UI links only those
+  `[Sn]` markers and shows the excerpt. `complete.search` tells an empty search
+  (`empty`) from a failed one (`unavailable`).
+- Speech: the composer's microphone records a clip, the backend transcribes it
+  through the AI services gateway (`SPEECH_API_URL`, `POST /v1/audio/transcriptions`),
+  and the text is placed in the composer for editing; the user sends it like typed
+  text. `413` too long, `422` not a PCM16 WAV, `503` speech service unavailable.
 - Deleting hides the conversation; the row, its agent checkpoint and inquiries
   that reference it are kept.
 
@@ -97,6 +108,18 @@ history/stream return `503`.
   can take all `AGENT_MAX_CONCURRENT_REQUESTS` slots, and others then get `429`.
 - One agent process: the one-active-answer rule per conversation is enforced in
   that process only.
-- No knowledge search, citations, photos or voice input in this chat yet. The
-  legacy knowledge-base QA endpoint (`/v1/knowledge-agent/<kb>/stream`) still
+- Knowledge search is not connected: the agent has no live retrieval client and
+  the backend sends no `search_scope` until the knowledge search API contract
+  (authentication, fields, errors, source links) is agreed. Citations cannot open
+  their source document yet.
+- Photos are not connected: the agent accepts a validated photo per message, but
+  the backend has no per-user files API to authorize and read one, and the
+  configured model's image support is unverified.
+- Speech-to-text has been tested against a controlled gateway only; no real
+  Vietnamese recording has been checked, because the speech models run outside
+  this laptop.
+- The backend has no request-size limit: FastAPI stores a multipart upload in a
+  temporary file before the route checks sign-in, so the 16 MB speech limit applies
+  only after authentication (the older upload endpoints behave the same way).
+- The legacy knowledge-base QA endpoint (`/v1/knowledge-agent/<kb>/stream`) still
   exists, but the live UI no longer shows it.
