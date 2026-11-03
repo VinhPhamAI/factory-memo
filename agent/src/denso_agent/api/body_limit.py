@@ -2,7 +2,8 @@
 
 from starlette.responses import JSONResponse
 
-MAX_BODY_BYTES = 128 * 1024
+# Room for one 3 MiB photo in base64 plus the message.
+MAX_BODY_BYTES = 5 * 1024 * 1024
 
 
 class BodyLimitMiddleware:
@@ -17,7 +18,7 @@ class BodyLimitMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        """Reject declared or chunked bodies exceeding 128 KiB.
+        """Reject declared or chunked bodies exceeding 5 MiB.
 
         Args:
             scope: ASGI connection metadata.
@@ -36,7 +37,7 @@ class BodyLimitMiddleware:
             {
                 "error": {
                     "code": "payload_too_large",
-                    "message": "Request body exceeds 128 KiB.",
+                    "message": "Request body exceeds 5 MiB.",
                 }
             },
             status_code=413,

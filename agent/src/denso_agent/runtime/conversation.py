@@ -1,6 +1,7 @@
 """Bound active requests and translate graph progress into public events."""
 
 import asyncio
+import base64
 from contextlib import aclosing
 from typing import Awaitable, Callable
 from uuid import UUID
@@ -11,18 +12,20 @@ from langchain_core.messages import AIMessage, HumanMessage
 from denso_agent.api.sse import encode_event
 from denso_agent.config import RuntimeSettings
 from denso_agent.runtime.errors import AgentError
-from denso_agent.schemas.chat import ChatHistory, HistoryMessage
+from denso_agent.runtime.graph import TurnImage
+from denso_agent.schemas.chat import AttachmentRef, ChatHistory, HistoryMessage, ImageAttachment
+from denso_agent.schemas.citations import Citation, SearchScope
 from denso_agent.schemas.events import CompleteEvent, ErrorEvent, StatusEvent, TextEvent
 
 
-def _answer_from_update(update: object) -> str:
+def _answer_from_update(update: object) -> AIMessage:
     """Extract the single completed assistant answer from a graph update.
 
     Args:
         update: LangGraph update containing the current answer node's result.
 
     Returns:
-        The original answer text, preserving whitespace and Unicode characters.
+        The saved assistant message; its text keeps whitespace and Unicode.
 
     Raises:
         ValueError: The update lacks one unambiguous, nonempty assistant string.
@@ -39,7 +42,15 @@ def _answer_from_update(update: object) -> str:
         or not messages[0].content.strip()
     ):
         raise ValueError("Expected one completed assistant text message.")
-    return messages[0].content
+    return messages[0]
+
+
+def _citations(message: AIMessage) -> list[Citation]:
+    """Validate the citations saved on an answer; older answers have none."""
+    return [
+        Citation.model_validate(item)
+        for item in message.additional_kwargs.get("citations", [])
+    ]
 
 
 class Admission:
@@ -150,6 +161,13 @@ class AgentRuntime:
             HistoryMessage(
                 role="user" if isinstance(message, HumanMessage) else "assistant",
                 text=message.content,
+                citations=_citations(message) if isinstance(message, AIMessage) else [],
+                attachment=(
+                    AttachmentRef.model_validate(message.additional_kwargs["attachment"])
+                    if isinstance(message, HumanMessage)
+                    and "attachment" in message.additional_kwargs
+                    else None
+                ),
             )
             for message in state.values.get("messages", [])
             if isinstance(message, (HumanMessage, AIMessage))
@@ -172,18 +190,28 @@ class AgentRuntime:
             truncated=len(selected) < len(public),
         )
 
-    async def stream(self, conversation_id: UUID, message: str, request_id: UUID):
+    async def stream(
+        self,
+        conversation_id: UUID,
+        message: str,
+        request_id: UUID,
+        search_scope: SearchScope | None = None,
+        attachment: ImageAttachment | None = None,
+    ):
         """Stream provisional text, then return the full answer after persistence.
 
         Args:
             conversation_id: Caller-owned checkpoint thread identifier.
             message: Validated current human input.
             request_id: Server-generated tracing identifier.
+            search_scope: Knowledge bases the caller authorized; None disables search.
+            attachment: Optional photo; its reference is saved with the message
+                and its bytes reach only this turn's model call.
         Yields:
             Typed SSE frames; at most one connected terminal event.
         """
         sequence = 0
-        final_answer: str | None = None
+        final_answer: AIMessage | None = None
 
         def event(name, event_type, **fields):
             """Number and encode the next public event in this request."""
@@ -203,8 +231,39 @@ class AgentRuntime:
             yield event("status", StatusEvent)
             async with asyncio.timeout(self.settings.request_timeout):
                 iterator = self.graph.astream(
-                    {"messages": [HumanMessage(content=message)]},
-                    config={"configurable": {"thread_id": str(conversation_id)}},
+                    {
+                        "messages": [
+                            HumanMessage(
+                                content=message,
+                                additional_kwargs=(
+                                    {
+                                        "attachment": AttachmentRef(
+                                            file_id=attachment.file_id,
+                                            media_type=attachment.media_type,
+                                        ).model_dump()
+                                    }
+                                    if attachment
+                                    else {}
+                                ),
+                            )
+                        ]
+                    },
+                    config={
+                        "configurable": {
+                            "thread_id": str(conversation_id),
+                            "search_scope": search_scope,
+                            # Bytes, not text: configuration strings can be
+                            # copied into checkpoint metadata.
+                            "image": (
+                                TurnImage(
+                                    attachment.media_type,
+                                    base64.b64decode(attachment.data),
+                                )
+                                if attachment
+                                else None
+                            ),
+                        }
+                    },
                     stream_mode=["custom", "updates"],
                     version="v2",
                     durability="sync",
@@ -223,7 +282,13 @@ class AgentRuntime:
                             final_answer = _answer_from_update(part["data"])
                 if final_answer is None:
                     raise ValueError("No completed answer-node result was received.")
-            yield event("complete", CompleteEvent, answer=final_answer)
+            yield event(
+                "complete",
+                CompleteEvent,
+                answer=final_answer.content,
+                citations=_citations(final_answer),
+                search=final_answer.additional_kwargs.get("search", "not_used"),
+            )
         except TimeoutError:
             yield event(
                 "error",

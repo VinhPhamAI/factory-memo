@@ -94,7 +94,13 @@ async def answer(body: ChatRequest, request: Request):
     runtime.admission.acquire(str(body.conversation_id))
     try:
         return AgentStreamResponse(
-            runtime.stream(body.conversation_id, body.message, uuid4()),
+            runtime.stream(
+                body.conversation_id,
+                body.message,
+                uuid4(),
+                body.search_scope,
+                body.attachment,
+            ),
             runtime.admission,
             str(body.conversation_id),
         )

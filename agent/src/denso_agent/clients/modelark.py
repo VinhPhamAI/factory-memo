@@ -1,14 +1,38 @@
 """Direct ModelArk Chat Completions streaming with bounded answer storage."""
 
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from httpx import HTTPError
 from openai import APIError, APITimeoutError, AsyncOpenAI, BadRequestError
 
 from denso_agent.runtime.errors import AgentError
+from denso_agent.runtime.retrieval import SEARCH_TOOL
 
 MAX_ANSWER_CHARACTERS = 32_000
+# Enough for one tool call with a short query.
+ROUTING_MAX_TOKENS = 256
+
+
+@contextmanager
+def _provider_errors() -> Iterator[None]:
+    """Turn SDK and transport failures into public errors without provider details."""
+    try:
+        yield
+    except APITimeoutError as exc:
+        raise AgentError("timeout", "The provider request timed out.", True) from exc
+    except BadRequestError as exc:
+        # Inspect machine-readable codes only; never expose raw provider bodies.
+        code = str(getattr(exc, "code", "") or "").lower()
+        if code in {"context_length_exceeded", "context_window_exceeded"}:
+            raise AgentError(
+                "context_limit", "The model input exceeded its context limit."
+            ) from exc
+        raise AgentError("provider_error", "The provider rejected the request.") from exc
+    except (APIError, HTTPError, ValueError) as exc:
+        raise AgentError("provider_error", "The provider request failed.", True) from exc
 
 
 class ModelArk:
@@ -57,7 +81,7 @@ class ModelArk:
         """
         if self.client is None:
             raise RuntimeError("ModelArk client is not open")
-        try:
+        with _provider_errors():
             stream = await self.client.chat.completions.create(
                 model=self.settings.model,
                 messages=messages,
@@ -65,24 +89,46 @@ class ModelArk:
                 max_tokens=self.settings.max_output_tokens,
             )
             return await self.consume(stream, writer)
-        except APITimeoutError as exc:
-            raise AgentError(
-                "timeout", "The provider request timed out.", True
-            ) from exc
-        except BadRequestError as exc:
-            # Inspect machine-readable codes only; never expose raw provider bodies.
-            code = str(getattr(exc, "code", "") or "").lower()
-            if code in {"context_length_exceeded", "context_window_exceeded"}:
-                raise AgentError(
-                    "context_limit", "The model input exceeded its context limit."
-                ) from exc
-            raise AgentError(
-                "provider_error", "The provider rejected the request."
-            ) from exc
-        except (APIError, HTTPError, ValueError) as exc:
-            raise AgentError(
-                "provider_error", "The provider request failed.", True
-            ) from exc
+
+    async def route(self, messages: list[dict]) -> object:
+        """Ask the model, without streaming, whether to call search_knowledge.
+
+        The reply is private: its text is discarded and only the first
+        `search_knowledge` call is used, so at most one search runs per turn.
+
+        Args:
+            messages: Routing instruction and bounded conversation context.
+
+        Returns:
+            None when the model answered without a tool call; otherwise the
+            raw `query` argument, or "" for an unknown tool or malformed
+            arguments. The caller validates the query.
+
+        Raises:
+            AgentError: Provider timeout or request failure.
+        """
+        if self.client is None:
+            raise RuntimeError("ModelArk client is not open")
+        with _provider_errors():
+            reply = await self.client.chat.completions.create(
+                model=self.settings.model,
+                messages=messages,
+                tools=[SEARCH_TOOL],
+                tool_choice="auto",
+                max_tokens=ROUTING_MAX_TOKENS,
+            )
+        calls = reply.choices[0].message.tool_calls if reply.choices else None
+        if not calls:
+            return None
+        for call in calls:
+            if call.function.name != SEARCH_TOOL["function"]["name"]:
+                continue
+            try:
+                arguments = json.loads(call.function.arguments or "")
+            except ValueError:
+                return ""
+            return arguments.get("query", "") if isinstance(arguments, dict) else ""
+        return ""
 
     @staticmethod
     async def consume(stream, writer: Callable[[dict], Any]) -> str:

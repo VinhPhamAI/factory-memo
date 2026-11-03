@@ -9,6 +9,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import ValidationError
 
+from denso_agent.api.body_limit import MAX_BODY_BYTES
 from denso_agent.app import create_app
 from denso_agent.config import RuntimeSettings
 from denso_agent.runtime.conversation import AgentRuntime
@@ -30,9 +31,10 @@ class FakeGraph:
         self.save_release = None
         self.save_waiting = asyncio.Event()
 
-    async def astream(self, *_args, **_kwargs):
+    async def astream(self, *args, **kwargs):
         """Emit provisional fragments and a separate completed node result."""
         self.calls += 1
+        self.args, self.kwargs = args, kwargs
         try:
             for fragment in self.fragments:
                 yield {"type": "custom", "data": {"delta": fragment}}
@@ -144,8 +146,8 @@ async def test_chunked_body_cap(client, runtime):
 
     async def chunks():
         """Send a body without a Content-Length header."""
-        yield b" " * 65536
-        yield b" " * 65537
+        yield b" " * (MAX_BODY_BYTES // 2)
+        yield b" " * (MAX_BODY_BYTES // 2 + 1)
 
     response = await client.post(
         "/v1/agent/stream", content=chunks(), headers={"Authorization": "Bearer secret"}
@@ -155,10 +157,10 @@ async def test_chunked_body_cap(client, runtime):
 
 
 async def test_exact_body_cap_reaches_validation(client):
-    """A body exactly 128 KiB reaches JSON validation rather than size rejection."""
+    """A body exactly at the cap reaches JSON validation rather than size rejection."""
     response = await client.post(
         "/v1/agent/stream",
-        content=b" " * (128 * 1024),
+        content=b" " * (MAX_BODY_BYTES),
         headers={"Authorization": "Bearer secret"},
     )
     assert response.status_code == 422
@@ -177,7 +179,7 @@ async def test_declared_oversize_rejected_without_reading_body(client):
         content=forbidden_body(),
         headers={
             "Authorization": "Bearer secret",
-            "Content-Length": str(128 * 1024 + 1),
+            "Content-Length": str(MAX_BODY_BYTES + 1),
         },
     )
     assert response.status_code == 413
@@ -511,9 +513,9 @@ async def test_history_returns_ordered_public_messages_only(client, runtime):
     assert response.status_code == 200
     assert reads == [{"configurable": {"thread_id": str(conversation)}}]
     assert response.json()["messages"] == [
-        {"role": "user", "text": "Máy ép báo lỗi E12"},
-        {"role": "assistant", "text": "Kiểm tra cảm biến áp suất."},
-        {"role": "user", "text": "Đã kiểm tra"},
+        {"role": "user", "text": "Máy ép báo lỗi E12", "citations": [], "attachment": None},
+        {"role": "assistant", "text": "Kiểm tra cảm biến áp suất.", "citations": [], "attachment": None},
+        {"role": "user", "text": "Đã kiểm tra", "citations": [], "attachment": None},
     ]
     assert "private" not in response.text
 
@@ -553,3 +555,67 @@ async def test_history_storage_failure_is_unavailable(client, runtime):
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "unavailable"
     assert "controlled" not in response.text
+
+
+CITATION = {
+    "marker": "S1",
+    "evidence_id": "chunk-71",
+    "title": "MR-JE manual",
+    "excerpt": "Kiểm tra cảm biến.",
+    "location": "trang 71",
+}
+
+
+def cited_answer(text="Kiểm tra [S1]."):
+    """Build a saved answer carrying citations and a search status."""
+    return AIMessage(
+        content=text, additional_kwargs={"citations": [CITATION], "search": "results"}
+    )
+
+
+async def test_search_scope_reaches_the_graph_only_from_the_service_request(
+    client, runtime
+):
+    """The trusted scope is passed in run configuration; absent means no search."""
+    body = {**payload(), "search_scope": {"knowledge_bases": ["industrial_qa"]}}
+    await client.post("/v1/agent/stream", json=body, headers=AUTH)
+    scope = runtime.graph.kwargs["config"]["configurable"]["search_scope"]
+    assert scope.knowledge_bases == ["industrial_qa"]
+
+    await client.post("/v1/agent/stream", json=payload(), headers=AUTH)
+    assert runtime.graph.kwargs["config"]["configurable"]["search_scope"] is None
+
+    for bad in ({"knowledge_bases": []}, {"knowledge_bases": ["a"], "url": "x"}):
+        response = await client.post(
+            "/v1/agent/stream", json={**payload(), "search_scope": bad}, headers=AUTH
+        )
+        assert response.status_code == 422
+
+
+async def test_complete_and_history_carry_the_saved_citations(client, runtime):
+    """Completion and history project citations from the same saved message."""
+    runtime.graph.final_updates = [{"answer": {"messages": [cited_answer()]}}]
+    response = await client.post("/v1/agent/stream", json=payload(), headers=AUTH)
+    complete = [data for name, data in parse_events(response.text) if name == "complete"]
+    assert complete[0]["citations"] == [CITATION]
+    assert complete[0]["search"] == "results"
+
+    runtime.graph.aget_state = saved_state(
+        [HumanMessage(content="E12?"), cited_answer(), AIMessage(content="plain")]
+    )
+    history = (await client.get(history_path(), headers=AUTH)).json()["messages"]
+    assert history == [
+        {"role": "user", "text": "E12?", "citations": [], "attachment": None},
+        {"role": "assistant", "text": "Kiểm tra [S1].", "citations": [CITATION], "attachment": None},
+        {"role": "assistant", "text": "plain", "citations": [], "attachment": None},
+    ]
+
+
+async def test_answer_without_saved_metadata_completes_without_citations(
+    client, runtime
+):
+    """Answers saved before citations existed still complete and reopen."""
+    response = await client.post("/v1/agent/stream", json=payload(), headers=AUTH)
+    complete = [data for name, data in parse_events(response.text) if name == "complete"]
+    assert complete[0]["citations"] == []
+    assert complete[0]["search"] == "not_used"

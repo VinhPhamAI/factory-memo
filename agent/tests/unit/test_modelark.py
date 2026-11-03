@@ -170,3 +170,69 @@ async def test_conflicting_finish_markers_never_turn_failure_into_success():
         await ModelArk.consume(stream, lambda _: None)
     assert caught.value.code == "provider_error"
     assert stream.closed
+
+
+def routing_model(*tool_calls, content="private routing text", error=None):
+    """Build a ModelArk whose SDK returns one non-streamed routing reply."""
+    requests = []
+
+    async def create(**request):
+        """Record the request and return the configured tool calls."""
+        requests.append(request)
+        if error:
+            raise error
+        calls = [
+            SimpleNamespace(function=SimpleNamespace(name=name, arguments=arguments))
+            for name, arguments in tool_calls
+        ]
+        message = SimpleNamespace(content=content, tool_calls=calls or None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    model = ModelArk(SimpleNamespace(model="test", max_output_tokens=10))
+    model.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    return model, requests
+
+
+@pytest.mark.asyncio
+async def test_route_offers_one_search_tool_and_returns_its_query():
+    """The routing request offers search_knowledge and returns only the query."""
+    from denso_agent.runtime.retrieval import SEARCH_TOOL
+
+    model, requests = routing_model(
+        ("search_knowledge", '{"query": "E12 áp suất", "knowledge_base": "other"}'),
+        ("search_knowledge", '{"query": "second call"}'),
+    )
+    query = await model.route([{"role": "user", "content": "E12?"}])
+    assert query == "E12 áp suất"
+    assert requests[0]["tools"] == [SEARCH_TOOL]
+    assert requests[0]["tool_choice"] == "auto"
+    assert "stream" not in requests[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "calls,expected",
+    [
+        ((), None),
+        ((("delete_records", '{"query": "x"}'),), ""),
+        ((("search_knowledge", "{not json"),), ""),
+        ((("search_knowledge", '{"q": "x"}'),), ""),
+        ((("search_knowledge", '["x"]'),), ""),
+    ],
+)
+async def test_route_reports_direct_answers_and_unusable_calls(calls, expected):
+    """No call means a direct answer; unknown or malformed calls are unusable."""
+    model, _ = routing_model(*calls)
+    assert await model.route([]) == expected
+
+
+@pytest.mark.asyncio
+async def test_route_failure_is_a_sanitized_provider_error():
+    """A failed routing request uses the same public errors as answering."""
+    model, _ = routing_model(error=ReadError("private upstream address"))
+    with pytest.raises(AgentError) as caught:
+        await model.route([])
+    assert caught.value.code == "provider_error"
+    assert "private" not in caught.value.message

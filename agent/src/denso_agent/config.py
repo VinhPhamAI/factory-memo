@@ -51,6 +51,15 @@ class RuntimeSettings(DatabaseSettings):
     context_max_characters: int = Field(
         default=60000, alias="AGENT_CONTEXT_MAX_CHARACTERS", ge=1, le=1000000
     )
+    search_timeout: float = Field(
+        default=10, alias="AGENT_SEARCH_TIMEOUT_SECONDS", gt=0, le=120
+    )
+    search_max_results: int = Field(
+        default=5, alias="AGENT_SEARCH_MAX_RESULTS", ge=1, le=20
+    )
+    search_max_excerpt_characters: int = Field(
+        default=1500, alias="AGENT_SEARCH_MAX_EXCERPT_CHARACTERS", ge=100, le=10000
+    )
     history_max_messages: int = Field(
         default=200, alias="AGENT_HISTORY_MAX_MESSAGES", ge=1, le=10000
     )

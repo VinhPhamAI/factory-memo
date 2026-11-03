@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from denso_agent.schemas.citations import Citation, SearchStatus
+
 
 class Event(BaseModel):
     """Identify an event's request, conversation and stream position."""
@@ -31,6 +33,8 @@ class CompleteEvent(Event):
 
     finish_reason: Literal["stop"] = "stop"
     answer: str
+    citations: list[Citation] = []
+    search: SearchStatus = "not_used"
 
 
 class ErrorEvent(Event):
