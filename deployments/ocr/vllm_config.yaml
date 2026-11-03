@@ -1,0 +1,15 @@
+# vLLM options for the PaddleOCR-VL-1.6 server (ocr-vlm), sized for one or two
+# people testing, not production load. `paddleocr genai_server` merges these
+# over its defaults (gpu-memory-utilization 0.5, max-num-batched-tokens 131072,
+# api-server-count 4, max-model-len 16384).
+
+# Share of the GPU's total memory this server may use: weights (about 2 GB),
+# activations and KV cache. 0.12 of a 46 GB A40 is about 5.5 GB.
+gpu-memory-utilization: 0.12
+# Layout blocks decoded at once; the API sends at most this many per page.
+max-num-seqs: 8
+max-num-batched-tokens: 16384
+# One API process instead of four.
+api-server-count: 1
+# Host RAM cache for processed images; blocks are rarely repeated.
+mm-processor-cache-gb: 0

@@ -1,7 +1,8 @@
 # Self-hosted AI services. Overlay on the backend stack so the API reaches them
 # by service name (same Compose project and network):
 #   docker compose --env-file .env -f deployments/docker-compose.yml \
-#     -f deployments/ai.compose.yml up -d --build speech-api
+#     -f deployments/ai.compose.yml up -d --build speech-api ocr-api
+# Start a single service by naming it (ocr-api also starts ocr-vlm).
 
 services:
   # VieGem-ASR (5CD-AI/VieGem-ASR): Vietnamese / Vietnamese-English CTC speech
@@ -45,4 +46,69 @@ services:
           devices:
             - driver: nvidia
               device_ids: ["${SPEECH_GPU_ID:-0}"]
+              capabilities: [gpu]
+
+  # PaddleOCR-VL-1.6 document OCR, sized for one or two people testing:
+  # ocr-vlm serves the 0.9B VLM with vLLM (about 5.5 GB of GPU memory, see
+  # ocr/vllm_config.yaml); ocr-api runs the PaddleOCR-VL pipeline (layout
+  # detection, reading order, Markdown) and sends each region to ocr-vlm.
+  # Both images are PaddleOCR's offline images with the models built in.
+  ocr-vlm:
+    image: "ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-vllm-server:${OCR_IMAGE_TAG:-0006f78-ppocr3.6-pdx3.6-nvidia-gpu-offline}"
+    container_name: ocr-vlm
+    restart: unless-stopped
+    command: ["paddleocr", "genai_server", "--model_name", "PaddleOCR-VL-1.6-0.9B",
+              "--host", "0.0.0.0", "--port", "8080", "--backend", "vllm",
+              "--backend_config", "/config/vllm_config.yaml"]
+    volumes:
+      - ./ocr/vllm_config.yaml:/config/vllm_config.yaml:ro
+    shm_size: "1gb"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${OCR_GPU_ID:-0}"]
+              capabilities: [gpu]
+
+  ocr-api:
+    build:
+      context: ./ocr
+      args:
+        BASE_IMAGE: "ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${OCR_IMAGE_TAG:-0006f78-ppocr3.6-pdx3.6-nvidia-gpu-offline}"
+    image: local/paddleocr-vl-api:cuda
+    container_name: ocr-api
+    restart: unless-stopped
+    environment:
+      OCR_VLM_URL: http://ocr-vlm:8080/v1
+      # 1 loads the orientation and unwarping models so requests can use them.
+      OCR_DOC_PREPROCESSING: "${OCR_DOC_PREPROCESSING:-0}"
+      OCR_MAX_UPLOAD_MB: "${OCR_MAX_UPLOAD_MB:-50}"
+      OCR_MAX_PAGES: "${OCR_MAX_PAGES:-100}"
+      OCR_MAX_QUEUE: "${OCR_MAX_QUEUE:-4}"
+      OCR_LAYOUT_BATCH: "${OCR_LAYOUT_BATCH:-1}"
+    ports:
+      - "127.0.0.1:${OCR_API_PORT:-8090}:8080"
+    depends_on:
+      ocr-vlm:
+        condition: service_healthy
+    shm_size: "1gb"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=10).read()"]
+      interval: 15s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${OCR_GPU_ID:-0}"]
               capabilities: [gpu]

@@ -159,6 +159,21 @@ audio into transcript turns for the UI's voice capture, which saves the original
 audio to `data/audio/` and ingests the transcript into the selected knowledge
 base; see [voice capture](docs/features/voice-capture.md) for storage and schema.
 
+### Optional: OCR service
+
+`ocr-api` (PaddleOCR-VL-1.6 OCR of PDF, PNG and JPEG files to JSON regions and
+Markdown) and its vLLM model server `ocr-vlm` are also in the AI overlay. They
+need an NVIDIA GPU (about 7 GB of memory in total) and are sized for one or two
+testers. The ingestion pipeline does not use them yet:
+
+```bash
+docker compose --env-file .env -f deployments/docker-compose.yml \
+  -f deployments/ai.compose.yml up -d --build ocr-api
+bash deployments/ocr/smoke_test.sh [document.pdf]
+```
+
+See the [OCR service guide](deployments/ocr/README.md).
+
 ## 3. API and QA UI
 
 **API in Docker Compose** (loads provider settings from the root `.env`):
