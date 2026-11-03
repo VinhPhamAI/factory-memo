@@ -5174,3 +5174,8 @@ button.ref-chip:hover,
     animation: none;
   }
 }
+
+/* Agent chat has no evidence column until knowledge search is added. */
+.ask-layout.agent-chat-layout {
+  grid-template-columns: minmax(0, 1fr);
+}

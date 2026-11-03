@@ -1,10 +1,10 @@
 # Factory memo frontend
 
-A Vietnamese-language QA UI for the backend knowledge agent, with a knowledge-base
-selector, streaming answers and a sources panel. React, TypeScript, Vite, Tailwind
-CSS and shadcn/ui. API mode requires sign-in; mock mode needs no account.
+A Vietnamese-language UI for chatting with the standalone agent and capturing
+and reviewing factory knowledge. React, TypeScript, Vite, Tailwind CSS and
+shadcn/ui. API mode requires sign-in; mock mode needs no account.
 
-`api` is the default mode. It offers QA (`/ask`) and live voice capture
+`api` is the default mode. It offers agent chat (`/ask`) and live voice capture
 (`/capture`): microphone recording with live speaker-lettered transcript. The
 **Quản lý tri thức** tab (`/knowledge`) lists original uploads, converted text and
 extracted results, with per-source mode selection and shared review. TXT files
@@ -62,41 +62,26 @@ owns the client:
   API and a `BroadcastChannel`. A tab that loses a refresh race may need to sign
   in again.
 
-## Live QA
+## Agent chat
 
-- The selector loads `GET /v1/knowledge-agent/knowledge-bases`; it never substitutes
-  fixture KBs when the API is unavailable. Failed/empty lists block sending and
-  offer retry.
-- Questions POST only `query` and `thread_id` to
-  `/v1/knowledge-agent/{kb}/stream`. Model choice and retrieval policy remain on
-  the backend. Browser fixtures and local files are never sent as inference data.
-- Each chat is bound to its KB. Follow-up questions reuse its thread ID. Switching
-  KB opens a new chat, and the history selector shows only that KB's chats.
-- Answers handle deltas, resets, citations, completion, failure and stop. Public
-  tool phases become short progress labels; tool payloads/reasoning are not shown.
-  An interrupted stream is marked incomplete even if partial text was received.
-- Backend `[K:<id>]` and `[D:<id>]` identifiers remain in stored responses; the UI
-  and copied answer show numbered references `[1]`, `[2]` in order of first mention.
-  Numbered references open source cards with titles and available content, matching
-  the demo presentation. During streaming, unresolved citations show `[…]` until
-  validated metadata arrives. Knowledge sources show their returned claim.
-  Case records instead use the demo's card layout with the stored facets
-  (context, observation, diagnostic reasoning, action and outcome), actual scope
-  and review status, and clickable turn chips for supplied evidence quotes.
-  Diagnostic checks and corrective actions remain combined because the current
-  stored schema has one `action` field; the UI never infers seven demo fields or
-  a confirmed repair from a planned action. Missing outcomes stay unreported.
-  `case_card`, allowlisted `scope`, and `status` are optional additive citation
-  fields. Old saved case claims can use the exact ordered
-  `Observation/Reasoning/Action/Outcome` format as a display fallback; unrecognized
-  text stays intact. Old chats cannot gain missing turn quotes/review metadata
-  without asking the backend again.
-  Document citations currently contain only ID/title; the panel says a preview is
-  unavailable rather than inventing content or pages.
-  Retrieval does not imply expert approval, and searchable records may be drafts.
-- QA chats persist in a separate IndexedDB database per configured API base URL,
-  without demo sources/cards. Backend conversation memory is per KB and is lost on
-  API restart; restoring browser history does not restore server memory.
+`/ask` and `/ask/:threadId` chat with the standalone agent through the backend
+[conversations API](../docs/features/conversations.md); `src/services/conversations-api.ts`
+owns the client and `src/pages/conversations.tsx` the screen.
+
+- Conversations are saved on the server per account. The selector lists them,
+  newest activity first; rename and delete act on the open one. The first message
+  of a new chat creates it, titled with the message's first 80 characters.
+- Provisional `text` deltas are replaced by `complete.answer` once the agent saved
+  it. An `error` event marks the answer failed with its message. A stream that ends
+  without a final event is marked unconfirmed with a link that reloads the saved
+  history. Nothing is resent automatically.
+- Switching conversations stops the open answer, and its late text never reaches
+  the newly opened chat. Stop aborts the request; the agent stops generating.
+- A `401` refreshes the access token once and repeats the request.
+- The agent has no knowledge search yet, so answers carry no sources. The legacy
+  knowledge-base QA (`/v1/knowledge-agent/{kb}/stream`, the KB selector and the
+  citation panel in `src/pages/ask.tsx`) is no longer shown in API mode; mock mode
+  still uses that page with fixture data.
 
 ## Optional mock demo
 
