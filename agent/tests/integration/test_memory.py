@@ -4,9 +4,11 @@ import asyncio
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage
+import httpx
 import psycopg
 import pytest
 
+from denso_agent.app import create_app
 from denso_agent.clients.checkpoints import checkpoint_store, check_readiness
 from denso_agent.config import RuntimeSettings, SetupSettings
 from denso_agent.runtime.conversation import AgentRuntime
@@ -177,3 +179,43 @@ async def test_final_checkpoint_failure_never_acknowledges_completion(
         )
         assert "event: complete" in frames
         assert "Fresh after failed save" in str(provider.inputs[-1])
+
+
+async def test_history_endpoint_reads_saved_turns_after_restart(database):
+    """A new pool returns saved turns in order; failed answers stay unsaved."""
+    await setup_database(SetupSettings(**database))
+    settings = runtime_settings(database)
+    provider = ControlledProvider()
+    conversation = uuid4()
+    async with checkpoint_store(database["database_url"]) as saver:
+        graph = build_graph(provider, saver, settings)
+        await run_turn(graph, saver, settings, conversation, "Máy số 3 báo lỗi")
+        provider.mode = "failure"
+        await run_turn(graph, saver, settings, conversation, "Kết quả thế nào?")
+    async with checkpoint_store(database["database_url"]) as saver:
+        runtime = AgentRuntime(
+            build_graph(provider, saver, settings),
+            lambda: check_readiness(saver),
+            settings,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=create_app(settings=settings, runtime=runtime)
+            ),
+            base_url="http://agent.test",
+        ) as client:
+            headers = {"Authorization": "Bearer test-token"}
+            saved = await client.get(
+                f"/v1/agent/conversations/{conversation}/history", headers=headers
+            )
+            empty = await client.get(
+                f"/v1/agent/conversations/{uuid4()}/history", headers=headers
+            )
+    assert saved.status_code == 200
+    assert saved.json()["messages"] == [
+        {"role": "user", "text": "Máy số 3 báo lỗi"},
+        {"role": "assistant", "text": "complete answer"},
+        {"role": "user", "text": "Kết quả thế nào?"},
+    ]
+    assert saved.json()["truncated"] is False
+    assert empty.json()["messages"] == []

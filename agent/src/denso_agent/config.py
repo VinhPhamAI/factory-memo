@@ -51,6 +51,12 @@ class RuntimeSettings(DatabaseSettings):
     context_max_characters: int = Field(
         default=60000, alias="AGENT_CONTEXT_MAX_CHARACTERS", ge=1, le=1000000
     )
+    history_max_messages: int = Field(
+        default=200, alias="AGENT_HISTORY_MAX_MESSAGES", ge=1, le=10000
+    )
+    history_max_characters: int = Field(
+        default=400000, alias="AGENT_HISTORY_MAX_CHARACTERS", ge=1, le=10000000
+    )
 
     @field_validator("base_url")
     @classmethod

@@ -49,6 +49,8 @@ Both files are ignored; examples contain placeholders.
 | `AGENT_MAX_CONCURRENT_REQUESTS` | Global active requests: 4. |
 | `AGENT_CONTEXT_MAX_MESSAGES` | Recent input messages: 40. |
 | `AGENT_CONTEXT_MAX_CHARACTERS` | Recent input characters: 60000. |
+| `AGENT_HISTORY_MAX_MESSAGES` | Newest messages returned by history: 200. |
+| `AGENT_HISTORY_MAX_CHARACTERS` | Characters returned by history: 400000. |
 
 ### Setup and container URLs
 
@@ -95,7 +97,7 @@ The runtime reads custom text and node updates from one graph stream:
 - Database failure may leave a saved full answer without acknowledgement; no rollback guarantee.
 - Use fresh human input after failure, never `None` resume. Manual resend can duplicate context.
 - No automatic retry or replay. Manual requests may repeat effects; recovery after a crash is not guaranteed.
-- Lost final event → unconfirmed completion; no retrieval endpoint. Provider cancellation is best effort.
+- Lost final event → unconfirmed completion; read the history endpoint to see what was saved. Provider cancellation is best effort.
 
 ## Run and reload safely
 

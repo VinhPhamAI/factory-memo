@@ -426,3 +426,130 @@ async def test_old_response_cleanup_preserves_new_reservation(runtime):
     await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
     assert runtime.admission.active_count == 1
     runtime.admission.release(key)
+
+
+class StateSnapshot:
+    """Mimic the values attribute of a LangGraph state snapshot."""
+
+    def __init__(self, messages):
+        """Store saved messages under the graph message channel, or none."""
+        self.values = {} if messages is None else {"messages": messages}
+
+
+def saved_state(messages, reads=None):
+    """Return a fake aget_state that records configs and returns messages."""
+
+    async def aget_state(config):
+        """Record the requested thread and return the controlled snapshot."""
+        if reads is not None:
+            reads.append(config)
+        return StateSnapshot(messages)
+
+    return aget_state
+
+
+def history_path(conversation_id=None):
+    """Build the history route for a new or given conversation."""
+    return f"/v1/agent/conversations/{conversation_id or uuid4()}/history"
+
+
+AUTH = {"Authorization": "Bearer secret"}
+
+
+async def test_history_requires_service_token_before_reading_state(client, runtime):
+    """History reads no checkpoint for a missing or incorrect service token."""
+    reads = []
+    runtime.graph.aget_state = saved_state([], reads)
+    for headers in ({}, {"Authorization": "Bearer wrong"}):
+        response = await client.get(history_path(), headers=headers)
+        assert response.status_code == 401
+    assert reads == []
+
+
+async def test_history_rejects_non_uuid_conversation(client, runtime):
+    """A malformed conversation ID fails validation without a checkpoint read."""
+    reads = []
+    runtime.graph.aget_state = saved_state([], reads)
+    response = await client.get(
+        "/v1/agent/conversations/not-a-uuid/history", headers=AUTH
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert reads == []
+
+
+async def test_history_of_new_conversation_is_empty(client, runtime):
+    """A thread without a checkpoint returns no messages."""
+    runtime.graph.aget_state = saved_state(None)
+    conversation = uuid4()
+    response = await client.get(history_path(conversation), headers=AUTH)
+    assert response.status_code == 200
+    assert response.json() == {
+        "conversation_id": str(conversation),
+        "messages": [],
+        "truncated": False,
+    }
+
+
+async def test_history_returns_ordered_public_messages_only(client, runtime):
+    """Saved user and assistant text keeps order; other message kinds are hidden."""
+    from langchain_core.messages import SystemMessage, ToolMessage
+
+    reads = []
+    runtime.graph.aget_state = saved_state(
+        [
+            HumanMessage(content="Máy ép báo lỗi E12"),
+            ToolMessage(content="private tool output", tool_call_id="call-1"),
+            SystemMessage(content="private instruction"),
+            AIMessage(content="Kiểm tra cảm biến áp suất."),
+            HumanMessage(content="Đã kiểm tra"),
+        ],
+        reads,
+    )
+    conversation = uuid4()
+    response = await client.get(history_path(conversation), headers=AUTH)
+    assert response.status_code == 200
+    assert reads == [{"configurable": {"thread_id": str(conversation)}}]
+    assert response.json()["messages"] == [
+        {"role": "user", "text": "Máy ép báo lỗi E12"},
+        {"role": "assistant", "text": "Kiểm tra cảm biến áp suất."},
+        {"role": "user", "text": "Đã kiểm tra"},
+    ]
+    assert "private" not in response.text
+
+
+async def test_history_keeps_newest_messages_within_limit(settings, runtime):
+    """A long history returns the newest messages in order and marks truncation."""
+    limited = settings.model_copy(update={"history_max_messages": 2})
+    runtime.settings = limited
+    runtime.graph.aget_state = saved_state(
+        [
+            HumanMessage(content="one"),
+            AIMessage(content="two"),
+            HumanMessage(content="three"),
+        ]
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(
+            app=create_app(settings=limited, runtime=runtime)
+        ),
+        base_url="http://agent.test",
+    ) as connection:
+        response = await connection.get(history_path(), headers=AUTH)
+    body = response.json()
+    assert [message["text"] for message in body["messages"]] == ["two", "three"]
+    assert body["truncated"] is True
+
+
+async def test_history_storage_failure_is_unavailable(client, runtime):
+    """A checkpoint read failure is reported as 503, not as empty history."""
+
+    async def aget_state(_config):
+        """Fail as the database driver would."""
+        raise OSError("controlled database failure")
+
+    runtime.graph.aget_state = aget_state
+    response = await client.get(history_path(), headers=AUTH)
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "unavailable"
+    assert "controlled" not in response.text

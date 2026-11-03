@@ -1,15 +1,19 @@
 """Authenticate, validate and delegate requests to the agent runtime."""
 
-from uuid import uuid4
+import logging
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from denso_agent.api.authentication import authenticate
 from denso_agent.api.stream_response import AgentStreamResponse
-from denso_agent.schemas.chat import ChatRequest, ErrorResponse
+from denso_agent.schemas.chat import ChatHistory, ChatRequest, ErrorResponse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+UNAVAILABLE = {"code": "unavailable", "message": "Agent service is unavailable."}
 
 
 @router.get("/healthz")
@@ -31,6 +35,34 @@ async def ready(request: Request):
     if runtime is None or not await runtime.ready():
         return JSONResponse({"status": "unavailable"}, status_code=503)
     return {"status": "ready"}
+
+
+@router.get(
+    "/v1/agent/conversations/{conversation_id}/history",
+    dependencies=[Depends(authenticate)],
+    response_model=ChatHistory,
+    responses={code: {"model": ErrorResponse} for code in (401, 422, 503)},
+)
+async def history(conversation_id: UUID, request: Request) -> ChatHistory:
+    """Return the saved public messages of one conversation.
+
+    Args:
+        conversation_id: Conversation UUID chosen by the caller.
+        request: Request carrying application-owned runtime resources.
+    Returns:
+        Ordered saved messages, newest within the configured limit.
+    Raises:
+        HTTPException: The runtime or checkpoint store is unavailable.
+    """
+    runtime = request.app.state.runtime
+    if runtime is None:
+        raise HTTPException(503, detail=UNAVAILABLE)
+    try:
+        return await runtime.load_history(conversation_id)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        # Log only the class name; driver messages can include connection details.
+        logger.warning("History read failed: %s", type(error).__name__)
+        raise HTTPException(503, detail=UNAVAILABLE) from error
 
 
 @router.post(
@@ -58,10 +90,7 @@ async def answer(body: ChatRequest, request: Request):
     """
     runtime = request.app.state.runtime
     if runtime is None:
-        raise HTTPException(
-            503,
-            detail={"code": "unavailable", "message": "Agent service is unavailable."},
-        )
+        raise HTTPException(503, detail=UNAVAILABLE)
     runtime.admission.acquire(str(body.conversation_id))
     try:
         return AgentStreamResponse(

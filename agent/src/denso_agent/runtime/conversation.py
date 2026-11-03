@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from denso_agent.api.sse import encode_event
 from denso_agent.config import RuntimeSettings
 from denso_agent.runtime.errors import AgentError
+from denso_agent.schemas.chat import ChatHistory, HistoryMessage
 from denso_agent.schemas.events import CompleteEvent, ErrorEvent, StatusEvent, TextEvent
 
 
@@ -125,6 +126,51 @@ class AgentRuntime:
         self.ready = ready
         self.settings = settings
         self.admission = Admission(settings.max_concurrent_requests)
+
+    async def load_history(self, conversation_id: UUID) -> ChatHistory:
+        """Read the saved public messages of one conversation checkpoint.
+
+        Only human inputs and assistant answers with text content are public;
+        tool, system and other internal messages are left out. When the
+        history exceeds the configured message or character limit, the newest
+        messages that fit are returned in chronological order.
+
+        Args:
+            conversation_id: Checkpoint thread identifier.
+        Returns:
+            Ordered messages and whether older messages were omitted. A
+            conversation without a checkpoint has no messages.
+        Raises:
+            Exception: The checkpoint store could not be read.
+        """
+        state = await self.graph.aget_state(
+            {"configurable": {"thread_id": str(conversation_id)}}
+        )
+        public = [
+            HistoryMessage(
+                role="user" if isinstance(message, HumanMessage) else "assistant",
+                text=message.content,
+            )
+            for message in state.values.get("messages", [])
+            if isinstance(message, (HumanMessage, AIMessage))
+            and isinstance(message.content, str)
+        ]
+        selected: list[HistoryMessage] = []
+        characters = 0
+        for message in reversed(public):
+            characters += len(message.text)
+            if (
+                len(selected) >= self.settings.history_max_messages
+                or characters > self.settings.history_max_characters
+            ):
+                break
+            selected.append(message)
+        selected.reverse()
+        return ChatHistory(
+            conversation_id=conversation_id,
+            messages=selected,
+            truncated=len(selected) < len(public),
+        )
 
     async def stream(self, conversation_id: UUID, message: str, request_id: UUID):
         """Stream provisional text, then return the full answer after persistence.

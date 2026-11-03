@@ -60,7 +60,7 @@ data: {"request_id":"22222222-2222-4222-8222-222222222222","conversation_id":"11
 - Replace accumulated text; never append the full answer. Unprocessed fragments do not affect this value.
 - One final event per connected request: `complete` or `error`.
 - No `complete` means unfinished. HTTP 200 alone does not confirm success.
-- Disconnections can lose the final event. No replay or answer-retrieval endpoint exists.
+- Disconnections can lose the final event. No replay exists; read [saved history](#read-saved-history) to see whether the answer was saved.
 - Strict client validators must accept the added `answer` field. Event names, request fields, and authentication are unchanged.
 
 ## Handle errors
@@ -91,6 +91,24 @@ Codes: `timeout`, `provider_error`, `context_limit`, `output_limit`,
 - No automatic retry or replay occurs.
 - Length-limited, filtered, empty, and unfinished answers never complete successfully.
 - Raw exceptions, provider error bodies, credentials, and private reasoning are excluded.
+
+## Read saved history
+
+`GET /v1/agent/conversations/{conversation_id}/history` with the same
+`Authorization: Bearer <AGENT_API_TOKEN>` header.
+
+```json
+{"conversation_id":"11111111-1111-4111-8111-111111111111","messages":[{"role":"user","text":"Explain the service scope."},{"role":"assistant","text":"This service maintains conversations."}],"truncated":false}
+```
+
+| Rule | Behavior |
+|---|---|
+| Source | The conversation's latest checkpoint; no separate message table. |
+| Messages | Saved user inputs and completed assistant answers, oldest first. Tool, system, and other internal messages are excluded. |
+| Unknown conversation | HTTP 200 with an empty list. The caller checks ownership first. |
+| Failed turn | The saved user input appears without an answer; provisional text never appears. |
+| Limit | Newest messages within `AGENT_HISTORY_MAX_MESSAGES` (200) and `AGENT_HISTORY_MAX_CHARACTERS` (400000); `truncated` is true when older messages were left out. |
+| Errors | 401 `unauthorized`, 422 `invalid_request` (not a UUID), 503 `unavailable` (runtime or checkpoint read failed; never an empty list). |
 
 ## Check health
 
