@@ -16,8 +16,8 @@ remains available to existing clients (see [Typed text](#typed-text)).
 Browser mic ─ AudioWorklet (PCM16, 16 kHz) ─ WS /v1/voice/{kb}/record ─ FastAPI
                                                                           │
               data/audio/<time>_<name>.wav  ◄── every frame, written first ┤
-              speech-api realtime ASR + diarization ◄── same frames ───────┘
-Stop ─► transcript "[T01] Speaker A: …" ─► kb_<name>.raw_conversations (pending)
+     ai-services-api → ai-speech realtime ASR (VieGem-ASR) ◄── same frames ┘
+Stop ─► transcript "[T01] Unknown speaker: …" ─► kb_<name>.raw_conversations (pending)
      ─► Quản lý tri thức: select mode → extraction → knowledge_items/chunks (draft)
      ─► background (optional): LLM-cleaned copy of each turn, for reading only
 Management detail: transcript (raw / cleaned, audio per turn) | results (approve / reject)
@@ -33,7 +33,7 @@ is described in the [KB guide](../../backend/knowledge_bases/README.md#knowledge
 | Data | Location | Notes |
 | --- | --- | --- |
 | Original audio | `data/audio/<YYYYMMDD-HHMMSS>_<slug of the conversation name>.wav` (`VOICE_AUDIO_DIR`) | PCM16 mono at the browser's rate (normally 16 kHz). Written frame by frame, so it is complete even when recognition fails. |
-| Recognizer output | Same name, `.asr.json` | Word timings, diarizer labels and confidences, and which recognition path was used. |
+| Recognizer output | Same name, `.asr.json` | Word timings and confidences, and which recognition path was used. |
 | Transcript (evidence) | `raw_conversations.transcript` in `kb_<name>` | Raw recognizer text, one `[Tnn] Speaker X: text` line per turn. Never rewritten. |
 | Recording metadata | `raw_conversations.metadata` (JSONB) | See below. |
 | Extracted knowledge | `knowledge_items` in `kb_<name>` | `evidence_id` points to the conversation; always created as `draft`. |
@@ -42,17 +42,19 @@ is described in the [KB guide](../../backend/knowledge_bases/README.md#knowledge
 ### Transcript format
 
 ```text
-[T01] Speaker A: Trục Z kêu rè từ sáng.
-[T02] Speaker B: Đã kiểm tra độ rơ chưa?
-[T03] Unknown speaker: …
+[T01] Unknown speaker: trục z kêu rè từ sáng đã kiểm tra độ rơ chưa
+[T02] Unknown speaker: chưa kiểm tra
 ```
 
-Letters follow the diarizer's labels within one recording (1 → A, 2 → B, …).
-They name voices, not people; untagged speech is `Unknown speaker`, never a
-guessed letter. Consecutive finals of one speaker join into one turn until a
-pause of 2 s or more, or until the turn would span over 30 s, so a monologue
-still has turns near the words they quote. The `[Tnn]` ids let
-evidence quotes cite a turn and let quote verification check it.
+The speech service ([VieGem-ASR](../../deployments/speech/README.md)) does not
+label speakers, so every recorded turn is `Unknown speaker`; a guessed letter
+is never added. Its text is lowercase without punctuation, with numbers
+written as words. Consecutive finals join into one turn until a pause of 2 s or
+more, or until the turn would span over 30 s, so turns stay near the words they
+quote; one turn can hold several people's speech. The `[Tnn]` ids let evidence
+quotes cite a turn and let quote verification check it. Typed conversations
+keep speaker letters (see [Typed text](#typed-text)); recordings made before
+the switch keep the letters their diarizer gave them.
 
 ### `raw_conversations.metadata`
 
@@ -66,10 +68,11 @@ evidence quotes cite a turn and let quote verification check it.
   "transcript_sha256": "…",
   "audio": {"file": "….wav", "asr_file": "….asr.json", "sha256": "…",
             "duration_s": 312.4, "sample_rate": 16000, "format": "wav/pcm16/mono"},
-  "asr": {"service": "nemo-speech.cpp", "language": "vi-VN", "diarization": true,
-          "endpointing_ms": 800, "recognition": "realtime | file", "realtime_error": "…"},
-  "speakers": {"A": {"name": "Anh Minh"}, "B": {"name": null}},
-  "turns": [{"id": "T01", "speaker": "A", "start": 0.42, "end": 5.1}],
+  "asr": {"service": "viegem-asr", "model": "5CD-AI/VieGem-ASR", "language": "vi-VN",
+          "diarization": "none", "endpointing_ms": 800, "recognition": "realtime | file",
+          "realtime_error": "…"},
+  "speakers": {},
+  "turns": [{"id": "T01", "speaker": null, "start": 0.42, "end": 5.1}],
   "extraction": {"version": "general-items-v2", "model": "…", "prompt_sha256": "…"},
   "ingestion": {"status": "queued | running | done | failed", "started_at": "…",
                 "finished_at": "…", "error": "…", "stored": 3,
@@ -82,8 +85,8 @@ evidence quotes cite a turn and let quote verification check it.
 }
 ```
 
-Speaker names are display labels added by a reviewer; the transcript keeps the
-letters. `ingestion` and `cleaning` are progress records; a job saved as
+Speaker names are display labels a reviewer adds to lettered speakers (typed
+conversations and older recordings); the transcript keeps the letters. `ingestion` and `cleaning` are progress records; a job saved as
 `running` with no live task (API restarted) is reported as `interrupted` and
 can be retried from the review page.
 
@@ -93,19 +96,18 @@ can be retried from the review page.
 - One long realtime session can stop recognizing speech after a pause, so a new
   session starts in the first 0.6 s of quiet after each final (primed with that
   quiet audio). Realtime finals become the transcript.
-- On stop the whole WAV is diarized once; speech the diarizer heard but no word
-  covers is transcribed on its own and inserted (`asr.recovered_utterances`),
-  and speaker letters come from that pass, so they stay consistent. During
-  recording the live letters come from diarizing the audio so far.
 - If realtime recognition fails or times out, recording continues and the
-  finished WAV is transcribed piece by piece, cut at pauses
-  (`asr.recognition = "file"`).
+  finished WAV is transcribed piece by piece, cut at pauses into pieces of at
+  most 30 s (`asr.recognition = "file"`).
 - If the browser loses the socket, it keeps recording locally; on Stop it uploads
   the whole WAV (`POST /v1/voice/{kb}/recordings`). A failed save offers a
   resend and a WAV download.
 - A recording with no recognized speech is not stored as evidence; its audio file
   is kept and named in the error.
 - The speech service must be ready before recording starts.
+- The speech service's voice activity detection (Silero VAD) only decides how
+  often recognition runs; it never removes audio or words. Its
+  `speech_started`/`speech_stopped` events are not used by the backend.
 
 ## Typed text
 
@@ -159,7 +161,7 @@ the unauthenticated review UI.
 | POST | `/v1/voice/{kb}/knowledge/{record_id}/review` | `{"decision": "approve" \| "reject" \| "reset", "note": "…"}` |
 
 WebSocket events from the server: `ready`, `partial` (text appended to the
-utterance in progress), `final` (finished turns with speaker letters),
+utterance in progress), `turns` (finished turns; recorded turns have no speaker letter),
 `recognition_lost`, `saving`, `saved` (`conversation_id`; with `extract_mode`
 also `job` or `job_error`), `error` (`code`, `message`, `audio_file`). The WS
 `start` message and the `/recordings` form accept `extract_mode`
@@ -174,9 +176,11 @@ where that file omits `verify`/`consolidate`.
 
 ## Limitations
 
-- Accuracy of recognition and diarization on Vietnamese factory audio has not
-  been evaluated; diarization can split one person into two letters or flip a
-  short word to another letter.
+- Recordings have no speaker labels; reviewers must tell speakers apart from
+  the audio.
+- Accuracy on Vietnamese factory audio has not been evaluated. On FLEURS
+  Vietnamese (read speech) the deployed service measured 6.5% WER; see the
+  [speech service guide](../../deployments/speech/README.md).
 - The microphone needs HTTPS or localhost.
 - Legacy in-process extraction and cleaning progress is in memory; restarting
   the API interrupts them (they can be retried). Queued jobs survive restarts. There is no user authentication or per-user review identity.

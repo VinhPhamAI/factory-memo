@@ -6,7 +6,7 @@ export type JobState =
 
 export interface VoiceTurn {
   id: string;
-  /** Diarizer letter (A, B, …); null when the recognizer could not tell. */
+  /** Speaker letter (A, B, …) of a typed conversation; null for recordings and unknown speakers. */
   speaker: string | null;
   text: string;
   start: number | null;

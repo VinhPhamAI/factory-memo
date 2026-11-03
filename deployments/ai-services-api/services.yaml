@@ -1,0 +1,41 @@
+# AI services served through ai-services-api (one port, one FastAPI app).
+#
+# Each service is a worker container on the Compose network. Requests whose
+# path is one of its public `routes`, or starts with a route followed by "/",
+# are forwarded (HTTP and WebSocket) to the same path on the worker, or to the
+# worker path a route maps to (`/public/path: /worker/path`). The longest
+# matching route wins. The public endpoints are documented in
+# AI_SERVICES_API_DOCS.md.
+#
+# The gateway probes each worker's `ready` path (default /ready; 200 = ready)
+# and `models` path (default /v1/models: an OpenAI-style list, or a TEI-style
+# /info object). The gateway's /docs shows the operations under the public
+# routes from each worker's `openapi` document (default /openapi.json).
+#
+# To add a service: add its worker to deployments/ai.compose.yml (without a
+# host port) and an entry here. AI_SERVICE_<NAME>_URL overrides a `url`, and
+# AI_SERVICES=speech,ocr limits which services are enabled.
+
+services:
+  speech:
+    description: VieGem-ASR Vietnamese speech recognition with Silero VAD
+    url: http://ai-speech:8080
+    routes:
+      - /v1/audio/transcriptions   # also /v1/audio/transcriptions/realtime (WebSocket)
+
+  ocr:
+    description: PaddleOCR-VL-1.6 document OCR (layout regions, reading order, Markdown)
+    url: http://ai-ocr:8080
+    routes:
+      - /v1/ocr
+
+  embedding:
+    description: microsoft/harrier-oss-v1-0.6b text embeddings (Text Embeddings Inference)
+    url: http://ai-embedding:80
+    ready: /health
+    models: /info
+    openapi: /api-doc/openapi.json
+    routes:
+      - /v1/embeddings                       # OpenAI-compatible embeddings
+      - /v1/embeddings/tokenize: /tokenize   # TEI tokenizer
+      - /v1/embeddings/info: /info           # TEI model and limits

@@ -27,8 +27,10 @@ automatically create or approve reusable knowledge. Preserve original evidence,
 context, failed attempts, exceptions, and reported outcomes.
 
 This checkout supports text/document ingestion, retrieval, QA, evaluation and
-live microphone capture. Multimodal extraction, location/QR identification,
-PDF/image/Office OCR and transcription of uploaded media are not implemented.
+live microphone capture. A standalone PDF/image OCR service exists
+(`deployments/ocr`) but ingestion does not use it. Multimodal extraction,
+location/QR identification, Office OCR and transcription of uploaded media are
+not implemented.
 Voice accuracy on Vietnamese factory audio has not been evaluated.
 
 ## Code boundaries
@@ -173,4 +175,7 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
   [conflicts](docs/features/conflict-detection.md): jobs, extraction/review and duplicates.
 - [Voice capture](docs/features/voice-capture.md), [uploads](docs/features/document-uploads.md),
   [speech service](deployments/speech/README.md): capture, storage and deployment.
+- [AI services API](deployments/ai-services-api/README.md): the one port in front of
+  the speech, OCR and embedding workers; [OCR service](deployments/ocr/README.md),
+  [embedding service](deployments/embedding/README.md).
 - [Snapshot guide](backend/knowledge_bases/industrial_qa/SNAPSHOT.md): Hugging Face restore/export.

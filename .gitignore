@@ -182,6 +182,5 @@ data/
 *.pdf
 benchmark/logs/
 
-# NeMo-Speech.cpp source checkout and downloaded GGUF models (deployments/speech/setup.sh)
-deployments/NeMo-Speech.cpp/
+# Downloaded speech model weights (deployments/speech/setup.sh)
 models/

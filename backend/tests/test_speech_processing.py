@@ -1,8 +1,8 @@
-"""Tests for the NeMo-Speech.cpp client.
+"""Tests for the VieGem-ASR speech client.
 
-Offline tests use a fake WebSocket. Live tests run against a started
-speech-api service when SPEECH_API_URL_TEST is set (e.g. http://127.0.0.1:8080)
-and use the sample WAVs shipped in the NeMo-Speech.cpp checkout.
+Offline tests use a fake WebSocket. Live tests run against the speech service
+through ai-services-api when SPEECH_API_URL_TEST is set (e.g.
+http://127.0.0.1:8080) and SPEECH_TEST_WAV names a WAV file of Vietnamese speech.
 """
 
 from __future__ import annotations
@@ -19,13 +19,11 @@ import numpy as np
 
 from backend.src.services.speech_processing import (
     SilenceTracker,
-    SpeakerSegment,
     SpeechClient,
     SpeechServiceError,
     SpeechSettings,
     Utterance,
     Word,
-    assign_speakers,
     format_transcript,
     iter_pcm_chunks,
     parse_transcription,
@@ -34,11 +32,8 @@ from backend.src.services.speech_processing import (
     speaker_label,
     speech_pieces,
     split_by_speaker,
-    uncovered_speech,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SAMPLES = REPO_ROOT / "deployments" / "NeMo-Speech.cpp" / "test_files"
 PREFIX = "conversation.item.input_audio_transcription."
 
 
@@ -181,13 +176,13 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
         )
         return [event async for event in client.astream(chunks, **kwargs)]
 
-    async def test_session_audio_commit_and_speaker_turns(self) -> None:
+    async def test_session_audio_commit_and_unlabelled_turns(self) -> None:
         final = {
-            "type": PREFIX + "completed", "transcript": "Rung. Kiểm tra.",
+            "type": PREFIX + "completed", "transcript": "rung kiểm tra",
             "words": [
-                {"word": "Rung.", "start": 0.0, "end": 0.4, "speaker": 1},
-                {"word": "Kiểm", "start": 1.0, "end": 1.2, "speaker": 2},
-                {"word": "tra.", "start": 1.2, "end": 1.5, "speaker": 2},
+                {"word": "rung", "start": 0.0, "end": 0.04, "confidence": 0.98},
+                {"word": "kiểm", "start": 1.0, "end": 1.04, "confidence": 0.95},
+                {"word": "tra", "start": 1.2, "end": 1.24, "confidence": 0.97},
             ],
         }
         socket = FakeSocket([final])
@@ -201,14 +196,16 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update["type"], "session.update")
         self.assertEqual(update["session"]["sample_rate"], 16000)
         self.assertEqual(update["session"]["language"], "vi-VN")
-        self.assertTrue(update["session"]["speaker_diarization"])
+        self.assertNotIn("speaker_diarization", update["session"])
         self.assertTrue(update["session"]["word_timestamps"])
         self.assertEqual(update["session"]["endpointing_ms"], 800)
         self.assertIsInstance(socket.sent[1], bytes)
         self.assertEqual(json.loads(socket.sent[-1]), {"type": "input_audio_buffer.commit"})
         self.assertEqual([e.kind for e in events], ["delta", "completed"])
+        (utterance,) = events[1].utterances
+        self.assertEqual((utterance.start, utterance.end), (0.0, 1.24))
         self.assertEqual(format_transcript(events[1].utterances),
-                         "[T01] Speaker A: Rung.\n[T02] Speaker B: Kiểm tra.")
+                         "[T01] Unknown speaker: rung kiểm tra")
 
     async def test_server_error_raises(self) -> None:
         with self.assertRaisesRegex(SpeechServiceError, "bad audio"):
@@ -222,38 +219,37 @@ class StreamTest(unittest.IsolatedAsyncioTestCase):
 
 
 LIVE_URL = os.getenv("SPEECH_API_URL_TEST")
+LIVE_WAV = os.getenv("SPEECH_TEST_WAV")
 
 
-@unittest.skipUnless(LIVE_URL, "set SPEECH_API_URL_TEST to run against speech-api")
-@unittest.skipUnless(SAMPLES.is_dir(), "run deployments/speech/setup.sh for sample audio")
+@unittest.skipUnless(LIVE_URL and LIVE_WAV,
+                     "set SPEECH_API_URL_TEST and SPEECH_TEST_WAV to run against ai-services-api")
 class LiveSpeechServiceTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.client = SpeechClient(SpeechSettings(base_url=LIVE_URL or "", timeout_seconds=120))
+        self.wav = Path(LIVE_WAV or "")
 
     async def test_ready(self) -> None:
         ready = await self.client.aready()
-        self.assertTrue(ready.get("ready"), ready)
+        self.assertEqual(ready.get("status"), "ready", ready)
 
-    async def test_http_transcription(self) -> None:
-        turns = await self.client.atranscribe_file(
-            SAMPLES / "asr/wav/test/jfk.wav", language="en-US", diarization=False)
-        self.assertIn("ask not", format_transcript(turns).lower())
+    async def test_http_transcription_has_timed_words_without_speakers(self) -> None:
+        turns = await self.client.atranscribe_file(self.wav, language="vi-VN")
+        self.assertTrue(turns and turns[0].text, turns)
+        words = [w for t in turns for w in t.words]
+        self.assertTrue(words)
+        self.assertTrue(all(w.start <= w.end and w.speaker is None for w in words))
 
-    async def test_http_diarization_finds_several_speakers(self) -> None:
-        turns = await self.client.atranscribe_file(
-            SAMPLES / "diar/ami_en2002d_2132.wav", language="en-US")
-        self.assertGreaterEqual(len({t.speaker for t in turns if t.speaker}), 2)
-
-    async def test_realtime_stream_emits_finals_with_speakers(self) -> None:
-        pcm, rate = read_wav_pcm16(SAMPLES / "diar/ami_en2002d_2132.wav")
+    async def test_realtime_stream_emits_finals(self) -> None:
+        pcm, rate = read_wav_pcm16(self.wav)
         events = [
             event async for event in self.client.astream(
-                iter_pcm_chunks(pcm, rate), sample_rate=rate, language="en-US")
+                iter_pcm_chunks(pcm, rate), sample_rate=rate, language="vi-VN")
         ]
         finals = [e for e in events if e.kind == "completed"]
         self.assertTrue(finals)
-        speakers = {u.speaker for e in finals for u in e.utterances if u.speaker}
-        self.assertGreaterEqual(len(speakers), 2)
+        utterances = [u for e in finals for u in e.utterances]
+        self.assertTrue(all(u.speaker is None and u.start is not None for u in utterances))
 
 
 if __name__ == "__main__":
@@ -273,28 +269,6 @@ def _audio(*parts: tuple[str, float], rate: int = 16000) -> bytes:
 
 
 class LongAudioTest(unittest.TestCase):
-    def test_speakers_come_from_diarization_by_word_overlap(self) -> None:
-        words = (Word("chào", 0.0, 0.4), Word("anh", 0.5, 0.9), Word("dạ", 1.6, 1.9),
-                 Word("xa", 9.0, 9.2))
-        labelled = assign_speakers(
-            [Utterance("chào anh dạ xa", None, 0.0, 9.2, words)],
-            # Diarizer numbers 3 and 5; the first voice heard becomes 1 (A).
-            [SpeakerSegment(1.5, 2.5, 5), SpeakerSegment(0.0, 1.0, 3)],
-        )
-        self.assertEqual([(u.text, u.speaker) for u in labelled],
-                         [("chào anh", 1), ("dạ", 2), ("xa", None)])
-        # Without words the utterance span decides; a nearby segment counts.
-        (near,) = assign_speakers([Utterance("ừ", None, 2.9, 3.2)], [SpeakerSegment(1.5, 2.5, 5)])
-        self.assertEqual(near.speaker, 1)
-
-    def test_uncovered_speech_is_what_the_diarizer_heard_without_words(self) -> None:
-        said = [Utterance("a b", 1, 1.0, 3.0, (Word("a", 1.0, 1.4), Word("b", 2.6, 3.0)))]
-        segments = [SpeakerSegment(0.5, 3.2, 1), SpeakerSegment(5.0, 5.4, 2),
-                    SpeakerSegment(6.0, 7.0, 2), SpeakerSegment(7.3, 8.0, 2)]
-        # 1.7-2.3 between the words; 5.0-5.4 is too short; 6-7 and 7.3-8 join.
-        self.assertEqual(uncovered_speech(said, segments), [(1.7, 2.3), (6.0, 8.0)])
-        self.assertEqual(uncovered_speech(said, []), [])
-
     def test_shift_moves_utterance_and_word_times(self) -> None:
         moved = shift(Utterance("a", 1, 0.5, 1.0, (Word("a", 0.5, 1.0, 1),)), 10)
         self.assertEqual((moved.start, moved.end, moved.words[0].start), (10.5, 11.0, 10.5))

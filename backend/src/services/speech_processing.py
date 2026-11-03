@@ -1,32 +1,26 @@
-"""Client for the NeMo-Speech.cpp speech service (ASR + speaker diarization).
+"""Client for the VieGem-ASR speech service (speech recognition, no diarization).
 
-The service (`speech-api` in deployments/docker-compose.yml) runs Nemotron 3.5
-streaming ASR with Nemotron 3 diarization and server-side end-of-utterance
-detection. Two ways to send audio:
+The service (`ai-speech` in deployments/ai.compose.yml) runs the VieGem-ASR
+CTC model with model-based end-of-utterance detection. Clients reach it
+through `ai-services-api` (`SPEECH_API_URL`), which forwards the speech paths
+below unchanged. Ways to send audio:
 
 - `SpeechClient.atranscribe_file` posts one complete WAV to
-  `/v1/audio/transcriptions` and returns speaker turns.
+  `/v1/audio/transcriptions` and returns its utterance.
 - `SpeechClient.astream` sends PCM16 frames over the
   `/v1/audio/transcriptions/realtime` WebSocket and yields partial (`delta`)
-  and final (`completed`) events; finals are split into speaker turns.
-- `SpeechClient.atranscribe_segments` transcribes a long WAV in pieces cut at
-  pauses, and `SpeechClient.adiarize` labels speakers over a whole file
-  (`/v1/audio/diarizations`); `assign_speakers` joins the two.
+  and final (`completed`) events.
+- `SpeechClient.atranscribe_segments` transcribes a long WAV in pieces of at
+  most 30 s cut at pauses, the longest clip the model is trained on.
 
-The streaming model keeps its context for a whole session, and after a pause it
-can stop emitting words for speech that follows (seen on Vietnamese speech: a
-segment missed inside a 2-minute session was recognized when sent alone). So
-long audio is recognized in short sessions or pieces, and speakers come from
-one diarization pass over the whole recording, which keeps labels consistent.
-
-Speaker numbers are the diarizer's 1-based session labels, not identities;
-words the diarizer did not tag keep `speaker=None` rather than a guessed label.
+Text is lowercase without punctuation, numbers written as words. Word times
+come from the CTC alignment (about 40 ms). The service does not label
+speakers, so every utterance has `speaker=None` ("Unknown speaker").
 """
 
 from __future__ import annotations
 
 import asyncio
-import bisect
 import io
 import json
 import math
@@ -45,7 +39,8 @@ from websockets.asyncio.client import connect
 
 REALTIME_PATH = "/v1/audio/transcriptions/realtime"
 TRANSCRIPTION_PATH = "/v1/audio/transcriptions"
-DIARIZATION_PATH = "/v1/audio/diarizations"
+# The speech worker's own readiness, as reported by ai-services-api.
+READY_PATH = "/v1/services/speech/ready"
 # A frame is quiet when it is less than MARGIN above the noise floor and at
 # least BELOW_SPEECH under the loud level, or below an absolute level (digital
 # silence). The second condition keeps speech from counting as quiet when the
@@ -143,15 +138,6 @@ class Utterance:
 
 
 @dataclass(frozen=True)
-class SpeakerSegment:
-    """A stretch of audio the diarizer gives to one speaker (1-based label)."""
-
-    start: float
-    end: float
-    speaker: int
-
-
-@dataclass(frozen=True)
 class TranscriptEvent:
     kind: Literal["delta", "completed"]
     text: str
@@ -208,72 +194,6 @@ def shift(utterance: Utterance, seconds: float) -> Utterance:
         ),
         language=utterance.language,
     )
-
-
-def _speaker_at(
-    start: float, end: float, segments: Sequence[SpeakerSegment], starts: Sequence[float],
-    max_gap: float,
-) -> int | None:
-    """Speaker of the segment overlapping [start, end] most, else the nearest one."""
-
-    best, best_overlap, nearest, nearest_gap = None, 0.0, None, math.inf
-    # Segments are sorted by start and rarely overlap, so few need checking.
-    index = bisect.bisect_right(starts, end + max_gap)
-    for segment in segments[max(0, index - 50):index]:
-        overlap = min(end, segment.end) - max(start, segment.start)
-        if overlap > best_overlap:
-            best, best_overlap = segment.speaker, overlap
-        gap = max(segment.start - end, start - segment.end, 0.0)
-        if gap < nearest_gap:
-            nearest, nearest_gap = segment.speaker, gap
-    if best is not None:
-        return best
-    return nearest if nearest_gap <= max_gap else None
-
-
-def assign_speakers(
-    utterances: Sequence[Utterance], segments: Sequence[SpeakerSegment], *, max_gap: float = 1.0
-) -> list[Utterance]:
-    """Utterances relabelled from diarization segments over the same timeline.
-
-    Each word takes the speaker whose segment it overlaps most, or the nearest
-    segment within `max_gap` seconds; otherwise it stays unlabelled. Turns are
-    re-split where the speaker changes, and speakers are renumbered by first
-    appearance, so the first voice heard is 1 (A).
-    """
-
-    segments = sorted(segments, key=lambda segment: (segment.start, segment.end))
-    starts = [segment.start for segment in segments]
-    labelled: list[Utterance] = []
-    for utterance in utterances:
-        if utterance.words:
-            words = [
-                Word(word.text, word.start, word.end,
-                     _speaker_at(word.start, word.end, segments, starts, max_gap),
-                     word.confidence)
-                for word in utterance.words
-            ]
-            labelled.extend(split_by_speaker(words, utterance.text, language=utterance.language))
-        elif utterance.start is not None and utterance.end is not None:
-            speaker = _speaker_at(utterance.start, utterance.end, segments, starts, max_gap)
-            labelled.append(Utterance(utterance.text, speaker, utterance.start, utterance.end,
-                                      (), utterance.language))
-        else:
-            labelled.append(Utterance(utterance.text, None, utterance.start, utterance.end,
-                                      (), utterance.language))
-    order: dict[int, int] = {}
-    for utterance in labelled:
-        if utterance.speaker is not None and utterance.speaker not in order:
-            order[utterance.speaker] = len(order) + 1
-    renumber = lambda speaker: None if speaker is None else order[speaker]  # noqa: E731
-    return [
-        Utterance(
-            u.text, renumber(u.speaker), u.start, u.end,
-            tuple(Word(w.text, w.start, w.end, renumber(w.speaker), w.confidence) for w in u.words),
-            u.language,
-        )
-        for u in labelled
-    ]
 
 
 def _quiet(level: float, levels: Sequence[float]) -> bool:
@@ -388,45 +308,6 @@ def _quiet_next(quiet: Sequence[bool], index: int) -> bool:
     return index + 1 < len(quiet) and quiet[index + 1]
 
 
-def uncovered_speech(
-    utterances: Sequence[Utterance], segments: Sequence[SpeakerSegment], *,
-    min_s: float = 0.6, margin_s: float = 0.3, join_s: float = 0.5,
-) -> list[tuple[float, float]]:
-    """Stretches the diarizer heard as speech but no recognized word covers.
-
-    Words (or whole utterances without word times) cover their span plus
-    `margin_s`; stretches closer than `join_s` are joined, and those shorter
-    than `min_s` are ignored.
-    """
-
-    covered = sorted(
-        (word.start - margin_s, word.end + margin_s)
-        for utterance in utterances
-        for word in (utterance.words or (
-            [Word(utterance.text, utterance.start, utterance.end)]
-            if utterance.start is not None and utterance.end is not None else []
-        ))
-    )
-    gaps: list[tuple[float, float]] = []
-    for segment in sorted(segments, key=lambda item: item.start):
-        cursor = segment.start
-        for start, end in covered:
-            if end <= cursor or start >= segment.end:
-                continue
-            if start > cursor:
-                gaps.append((cursor, start))
-            cursor = max(cursor, end)
-        if cursor < segment.end:
-            gaps.append((cursor, segment.end))
-    joined: list[tuple[float, float]] = []
-    for start, end in sorted(gaps):
-        if joined and start - joined[-1][1] < join_s:
-            joined[-1] = (joined[-1][0], max(joined[-1][1], end))
-        else:
-            joined.append((start, end))
-    return [(round(a, 3), round(b, 3)) for a, b in joined if b - a >= min_s]
-
-
 def pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as writer:
@@ -478,7 +359,7 @@ def merge_turns(utterances: Iterable[Utterance]) -> list[Utterance]:
 
 
 def speaker_label(speaker: int | None) -> str | None:
-    """Letter for a diarizer label (1 -> A, 2 -> B, 27 -> AA); None when untagged.
+    """Letter for a speaker number (1 -> A, 2 -> B, 27 -> AA); None when unknown.
 
     Letters only name a voice within one recording; they say nothing about
     who the person is.
@@ -586,7 +467,13 @@ class SpeechClient:
         return self._json(response)
 
     async def aready(self) -> dict[str, Any]:
-        return await self.aget("/ready")
+        """The speech service's readiness report.
+
+        Raises:
+            SpeechServiceError: The service is loading, down or unreachable.
+        """
+
+        return await self.aget(READY_PATH)
 
     async def _post_file(
         self, path: str, name: str, content: bytes, data: dict[str, str]
@@ -600,78 +487,42 @@ class SpeechClient:
         return self._json(response)
 
     async def atranscribe_file(
-        self,
-        path: str | Path,
-        *,
-        language: str | None = None,
-        diarization: bool = True,
+        self, path: str | Path, *, language: str | None = None
     ) -> list[Utterance]:
-        """One request for the whole file; long files may lose speech after
-        pauses (see the module note), so prefer `atranscribe_segments`."""
+        """Transcribes a whole file in one request.
+
+        The service cuts files over 30 s at its own quiet points; prefer
+        `atranscribe_segments`, which cuts at pauses measured here.
+        """
 
         path = Path(path)
-        return await self._transcribe(path.name, path.read_bytes(), language, diarization)
+        return await self._transcribe(path.name, path.read_bytes(), language)
 
     async def _transcribe(
-        self, name: str, wav: bytes, language: str | None, diarization: bool
+        self, name: str, wav: bytes, language: str | None
     ) -> list[Utterance]:
         payload = await self._post_file(TRANSCRIPTION_PATH, name, wav, {
             "response_format": "verbose_json",
             "language": language or self.settings.language,
-            "diarization": "true" if diarization else "false",
         })
         return parse_transcription(payload)
 
     async def atranscribe_segments(
         self, path: str | Path, *, language: str | None = None
     ) -> list[Utterance]:
-        """The file transcribed piece by piece (cut at pauses), without speakers.
+        """The file transcribed piece by piece (cut at pauses, at most 30 s each).
 
-        Times are relative to the start of the file; label speakers with
-        `adiarize` + `assign_speakers`.
+        Times are relative to the start of the file.
         """
 
         pcm, rate = read_wav_pcm16(path)
         utterances: list[Utterance] = []
         for first, last in speech_pieces(pcm, rate):
             piece = pcm_to_wav(pcm[first * 2:last * 2], rate)
-            for utterance in await self._transcribe("piece.wav", piece, language, False):
+            for utterance in await self._transcribe("piece.wav", piece, language):
                 if utterance.text:
                     utterances.append(shift(utterance, first / rate))
         return utterances
-
-    async def arecover(
-        self, path: str | Path, stretches: Sequence[tuple[float, float]], *,
-        language: str | None = None,
-    ) -> list[Utterance]:
-        """Transcribes each (start, end) stretch of the file on its own."""
-
-        pcm, rate = read_wav_pcm16(path)
-        recovered: list[Utterance] = []
-        for start, end in stretches:
-            first, last = max(0, int(start * rate)), min(len(pcm) // 2, int(end * rate))
-            if last <= first:
-                continue
-            piece = pcm_to_wav(pcm[first * 2:last * 2], rate)
-            for utterance in await self._transcribe("gap.wav", piece, language, False):
-                if utterance.text:
-                    recovered.append(shift(utterance, first / rate))
-        return recovered
-
-    async def adiarize(
-        self, wav: str | Path | bytes, *, mode: Literal["offline", "streaming"] = "offline"
-    ) -> list[SpeakerSegment]:
-        """Speaker segments over a whole recording (a WAV path or its bytes)."""
-
-        content = wav if isinstance(wav, bytes) else Path(wav).read_bytes()
-        payload = await self._post_file(DIARIZATION_PATH, "audio.wav", content, {"mode": mode})
-        try:
-            return [
-                SpeakerSegment(float(item["start"]), float(item["end"]), int(item["speaker"]))
-                for item in payload["segments"]
-            ]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise SpeechServiceError(f"malformed diarization response: {payload!r}") from exc
 
     async def astream(
         self,
@@ -679,9 +530,8 @@ class SpeechClient:
         *,
         sample_rate: int = 16000,
         language: str | None = None,
-        diarization: bool = True,
         endpointing_ms: int | None = None,
-        word_timestamps: bool | None = None,
+        word_timestamps: bool = True,
     ) -> AsyncIterator[TranscriptEvent]:
         """Streams PCM16 mono audio and yields transcript events until commit.
 
@@ -696,9 +546,7 @@ class SpeechClient:
         session = {
             "sample_rate": sample_rate,
             "language": language,
-            "automatic_punctuation": True,
-            "word_timestamps": diarization if word_timestamps is None else word_timestamps,
-            "speaker_diarization": diarization,
+            "word_timestamps": word_timestamps,
             "endpointing_ms": endpointing_ms or self.settings.endpointing_ms,
         }
         async with self._connect(

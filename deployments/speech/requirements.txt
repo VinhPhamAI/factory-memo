@@ -1,0 +1,15 @@
+# VieGem-ASR speech server (deployments/speech/Dockerfile). torch is installed
+# separately from the PyTorch CUDA 12.6 index; see the Dockerfile.
+transformers==5.22.1
+huggingface_hub==2.4.0
+fastapi==0.162.0
+uvicorn==0.54.0
+websockets==17.4
+python-multipart==0.0.33
+soundfile==0.14.0
+scipy==1.18.1
+numpy==2.5.4
+# Silero VAD (MIT): the ONNX model ships inside the package and runs with
+# ONNX Runtime; the package's PyTorch requirement is met by the image's torch.
+silero-vad==6.2.3
+onnxruntime==1.31.1

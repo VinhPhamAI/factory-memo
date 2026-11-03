@@ -13,7 +13,7 @@ services:
     environment:
       # Host .env URLs use localhost; containers use Compose service names.
       DATABASE_URL: "${API_DATABASE_URL:-postgresql+psycopg://voice_agent:voice_agent@postgres:5432/voice_agent}"
-      SPEECH_API_URL: "${API_SPEECH_API_URL:-http://speech-api:8080}"
+      SPEECH_API_URL: "${API_SPEECH_API_URL:-http://ai-services-api:8080}"
       VOICE_AUDIO_DIR: /app/data/audio
       DOCUMENT_UPLOAD_DIR: /app/data/uploads
     ports:
@@ -77,65 +77,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
-  # NeMo-Speech.cpp: Nemotron 3.5 streaming ASR + Nemotron 3 diarization with
-  # server-side end-of-utterance detection. Fetch the source and models first
-  speech-api:
-    profiles: ["speech"]
-    build:
-      context: ./NeMo-Speech.cpp
-      dockerfile: docker/Dockerfile
-      target: runtime
-      args:
-        ENABLE_CUDA: "ON"
-        ENABLE_HTTP: "ON"
-        ENABLE_GRPC: "OFF"
-        ENABLE_FLASHLIGHT: "OFF"
-        ENABLE_NORM: "OFF"
-        ENABLE_NMT: "OFF"
-        ENABLE_S2S: "OFF"
-        # A40 = sm_86; 
-        CUDA_ARCH: "${SPEECH_CUDA_ARCH:-86}"
-    image: local/nemo-speech:cuda
-    container_name: speech-api
-    restart: unless-stopped
-    command:
-      - serve
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8080"
-      - --access-log
-      # Speech-to-text
-      - --asr.model.path
-      - /models/nemotron-3.5-asr-streaming-0.6b.q8_0.gguf
-      # Speaker diarization: adds speaker IDs to ASR words when requested
-      - --asr.diar.model_path
-      - /models/Nemotron-3-Diarization.q8_0.gguf
-      # End-of-utterance detection (trailing silence, ms); clients may
-      # override it per session with `endpointing_ms`.
-      - --asr.endpointing.enable=true
-      - --asr.endpointing.stop_history_eou_ms
-      - "${SPEECH_EOU_MS:-800}"
-    ports:
-      - "127.0.0.1:${SPEECH_API_PORT:-8080}:8080"
-    volumes:
-      - ../models/nemo-speech:/models:ro
-    shm_size: "4gb"
-    healthcheck:
-      # The runtime image is FROM scratch (no shell or curl).
-      test: ["CMD", "/opt/nemo-speech/bin/nemo-speech", "health", "--url", "http://127.0.0.1:8080/ready"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 180s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["${SPEECH_GPU_ID:-0}"]
-              capabilities: [gpu]
 
 volumes:
   pgdata:

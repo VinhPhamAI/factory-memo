@@ -143,20 +143,35 @@ To build knowledge from scratch instead, use the fresh benchmark workflow below.
 See the [snapshot guide](backend/knowledge_bases/industrial_qa/SNAPSHOT.md) for
 local imports and other restore options.
 
-### Optional: speech service
+### Optional: AI services (speech, OCR and embeddings)
 
-`speech-api` (NeMo-Speech.cpp with Nemotron 3.5 streaming ASR and Nemotron 3
-diarization) needs an NVIDIA GPU and the NVIDIA Container Toolkit:
+All self-hosted AI services are reached through one port: `ai-services-api`
+(`127.0.0.1:8080`), a FastAPI app that forwards each request to the worker
+owning its path. The workers run in the AI overlay `deployments/ai.compose.yml`
+and need an NVIDIA GPU and the NVIDIA Container Toolkit:
+
+| Service | Paths | Worker | GPU memory |
+| --- | --- | --- | --- |
+| Speech: VieGem-ASR Vietnamese speech recognition, no speaker diarization | `/v1/audio/transcriptions` (HTTP and realtime WebSocket) | `ai-speech` | about 2.4 GB |
+| OCR: PaddleOCR-VL-1.6 for PDF, PNG and JPEG to JSON regions and Markdown (not used by ingestion yet) | `/v1/ocr` | `ai-ocr`, `ai-ocr-vlm` | about 7 GB |
+| Embeddings: microsoft/harrier-oss-v1-0.6b on TEI, 1024 dimensions (also on port 8001) | `/v1/embeddings` (OpenAI-compatible), `/v1/embeddings/tokenize`, `/v1/embeddings/info` | `ai-embedding` | about 1.5 GB |
 
 ```bash
-bash deployments/speech/setup.sh && bash deployments/speech/up.sh
-bash deployments/speech/smoke_test.sh
+bash deployments/speech/setup.sh                 # speech weights, once
+bash deployments/ai-services-api/up.sh speech ocr embedding  # or only those you need
+bash deployments/speech/smoke_test.sh [speech.wav ["reference transcript"]]
+bash deployments/ocr/smoke_test.sh [document.pdf]
+bash deployments/embedding/smoke_test.sh
 ```
 
-See the [speech service guide](deployments/speech/README.md). It transcribes
-audio into speaker turns for the UI's voice capture, which saves the original
-audio to `data/audio/` and ingests the transcript into the selected knowledge
-base; see [voice capture](docs/features/voice-capture.md) for storage and schema.
+See the [AI services API guide](deployments/ai-services-api/README.md), the
+[speech](deployments/speech/README.md), [OCR](deployments/ocr/README.md) and
+[embedding](deployments/embedding/README.md) service guides. To use the local
+embeddings in the backend, set `EMBEDDING_BASE_URL=http://127.0.0.1:8080/v1`
+and the values in the embedding guide. Speech transcribes audio into
+transcript turns for the UI's voice capture, which saves the original audio to
+`data/audio/` and ingests the transcript into the selected knowledge base; see
+[voice capture](docs/features/voice-capture.md) for storage and schema.
 
 ## 3. API and QA UI
 
@@ -187,17 +202,26 @@ The `worker` service uses the API image and volumes and runs one process per
 stage slot (`WORKER_CONVERT_PROCESSES`, `WORKER_EXTRACT_PROCESSES`, default 1
 each). See [job queue and workers](docs/features/knowledge-management.md#job-queue-and-workers).
 
-Inside Compose, the API connects to `postgres:5432` and `speech-api:8080`;
+Inside Compose, the API connects to `postgres:5432` and `ai-services-api:8080`;
 `API_DATABASE_URL` and `API_SPEECH_API_URL` override these defaults. For chat or
 embedding endpoints running on the Docker host, replace `localhost` in the
 corresponding `*_BASE_URL` with `host.docker.internal`. `VOICE_AUDIO_DIR` inside
 the API container is fixed to `/app/data/audio`, backed by the host's `data/audio/`.
 
-Speech is optional: prepare it with `deployments/speech/setup.sh`, then start it
-with `deployments/speech/up.sh` as above. After setup, the full stack can also be
-started with `docker compose --env-file .env -f deployments/docker-compose.yml
---profile speech up -d --build`. Without that profile, `up -d --build` starts
-the API, the worker and PostgreSQL. Document uploads and QA do not require speech.
+AI services are optional: prepare speech with `deployments/speech/setup.sh`, then
+start them with `deployments/ai-services-api/up.sh` as above.
+`deployments/docker-compose.yml` alone starts the API, the worker and
+PostgreSQL. After setup, add the AI overlay to start the full stack (all AI
+services, about 12 GB of GPU memory) in the same Compose project and network:
+
+```bash
+docker compose --env-file .env -f deployments/docker-compose.yml \
+  -f deployments/ai.compose.yml up -d --build
+```
+
+Commands that use only the base file report the AI containers (`ai-*`) as
+orphans; ignore the warning, and do not pass `--remove-orphans` unless they
+should stop. Document uploads and QA do not require AI services.
 
 **Alternative — API on the host:**
 

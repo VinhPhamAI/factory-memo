@@ -1,0 +1,4 @@
+# Only the server code goes into the image.
+*
+!ocr_server/
+!ocr_server/**

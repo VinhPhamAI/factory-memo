@@ -1,0 +1,6 @@
+# Only the gateway code, its registry and requirements go into the image.
+*
+!requirements.txt
+!services.yaml
+!ai_services_api/
+!ai_services_api/**
