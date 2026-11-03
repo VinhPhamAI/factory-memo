@@ -7,7 +7,7 @@ Start with [product requirements](features/project-overview.md),
 | Section | Contents |
 |---|---|
 | [Architecture](architecture/architecture.html) | System structure, knowledge flow, and database design |
-| Features | Knowledge management, document uploads, conflict review, and voice capture |
+| Features | Knowledge management, document uploads, conflict review, voice capture, and authentication |
 | Development | Deployment, evaluation references, and demo instructions |
 | [Assets](assets/) | Images used by documentation |
 
@@ -17,7 +17,7 @@ Start with [product requirements](features/project-overview.md),
 - [Earlier system diagram](architecture/architecture.html)
 - [Earlier architecture](architecture/architecture-v0.html)
 - [Knowledge flow](architecture/knowledge-flow.html)
-- [Database schema proposal](architecture/database-schema.md) — target tables, relationships, permissions, and migration requirements; tables created by Alembic migrations in a separate database, not yet used by services.
+- [Database schema proposal](architecture/database-schema.md) — target tables, relationships, permissions, and migration requirements; tables created by Alembic migrations in a separate database; only `users` (with `auth_sessions`) is used, by authentication.
 
 ## Features
 
@@ -28,6 +28,7 @@ Start with [product requirements](features/project-overview.md),
 - [Industrial QA](features/industrial-qa.md)
 - [Conflict detection](features/conflict-detection.md)
 - [Voice capture](features/voice-capture.md)
+- [Authentication](features/authentication.md) — `/auth` API contract, sessions, settings, and deployment.
 
 ## Development
 

@@ -1,10 +1,12 @@
 # Backend database migrations
 
-Use Alembic to manage the fifteen application tables in the
-[schema proposal](../architecture/database-schema.md): eleven proposed tables plus
+Use Alembic to manage the sixteen application tables: the fifteen in the
+[schema proposal](../architecture/database-schema.md) (eleven proposed tables plus
 `ingestion_jobs`, `extraction_runs`, `content_signatures` and `knowledge_conflicts`
-rebuilt on shared IDs. APIs, workers and agents do not use them yet; existing data
-has not been migrated. Service code still manages `knowledge_base_registry`, its own
+rebuilt on shared IDs) and `auth_sessions` for login sessions. The API uses `users`
+and `auth_sessions` for [authentication](../features/authentication.md); workers,
+agents and other APIs do not use the remaining tables yet, and existing data has not
+been migrated. Service code still manages `knowledge_base_registry`, its own
 `ingestion_jobs` in the `DATABASE_URL` database and per-collection `kb_<name>` databases.
 
 The new tables live in a separate database, because the new and service-created
@@ -24,8 +26,8 @@ The new tables live in a separate database, because the new and service-created
 
 | Variable | Use |
 |---|---|
-| `APP_DATABASE_URL` | Target database for the application tables, separate from `DATABASE_URL` |
-| `MIGRATION_DATABASE_URL` | Optional setup-owner URL; takes precedence over `APP_DATABASE_URL` |
+| `APP_DATABASE_URL` | Target database for the application tables, separate from `DATABASE_URL`; also the only URL the running API uses |
+| `MIGRATION_DATABASE_URL` | Optional setup-owner URL for Alembic only; takes precedence over `APP_DATABASE_URL`; never read at runtime |
 | `EMBEDDING_DIM` | Required at table creation; sets `knowledge_chunks.embedding` to `vector(EMBEDDING_DIM)` |
 
 Alembic loads the repository `.env` and never falls back to `DATABASE_URL`.
@@ -33,13 +35,15 @@ Match `EMBEDDING_DIM` to the embedding model.
 Above 2000 dimensions, pgvector cannot build the HNSW index; dense search scans
 the table until another index type is added by migration.
 
-## Initial revisions
+## Revisions
 
 | Revision | Contents |
 |---|---|
 | `eda1239388ad_prepare_database` | Hand-written: stops if the database holds the service-created `ingestion_jobs` (a `kb` column); `CREATE EXTENSION IF NOT EXISTS vector`; downgrade keeps the extension |
 | `2e755e6df2ca_create_application_tables` | Unedited autogenerate output: tables, columns, defaults, constraints, generated `search_vector`, B-tree, GIN and partial indexes |
 | `3665f6870fa4_add_database_rules` | Hand-written: trigger functions, triggers and dimension-dependent HNSW index (excluded from models) |
+| `f841068e1683_add_auth_sessions` | Unedited autogenerate output: creates `auth_sessions` |
+| `01339ea5979f_add_auth_session_rules` | Hand-written: attaches the existing `maintain_record_dates` trigger to `auth_sessions` |
 
 The `env.py` render hook emits `Vector(embedding_dim_from_env())` to read the size
 when the revision runs.
@@ -70,6 +74,13 @@ Equivalent manual steps:
 
 Preview SQL without connecting: `uv run alembic upgrade head --sql`.
 `make setup` does not run these migrations yet.
+
+### Upgrade existing databases
+
+`bash deployments/migrate.sh` also upgrades a database already at `3665f6870fa4`
+and remains safe to rerun. The upgrade keeps existing user IDs, roles and password
+hashes unchanged; it does not convert hash formats (covered by
+`SessionStorageUpgradeTest` in `backend/tests/test_database_migrations.py`).
 
 ## Change the schema
 

@@ -203,10 +203,13 @@ stage slot (`WORKER_CONVERT_PROCESSES`, `WORKER_EXTRACT_PROCESSES`, default 1
 each). See [job queue and workers](docs/features/knowledge-management.md#job-queue-and-workers).
 
 Inside Compose, the API connects to `postgres:5432` and `ai-services-api:8080`;
-`API_DATABASE_URL` and `API_SPEECH_API_URL` override these defaults. For chat or
-embedding endpoints running on the Docker host, replace `localhost` in the
-corresponding `*_BASE_URL` with `host.docker.internal`. `VOICE_AUDIO_DIR` inside
-the API container is fixed to `/app/data/audio`, backed by the host's `data/audio/`.
+`API_DATABASE_URL` and `API_SPEECH_API_URL` override these defaults. Sign-in
+uses the migrated application database (`APP_DATABASE_URL`; in Compose,
+`API_APP_DATABASE_URL`) and `AUTH_ALLOWED_ORIGINS`; see
+[authentication](docs/features/authentication.md). For chat or embedding
+endpoints running on the Docker host, replace `localhost` in the corresponding
+`*_BASE_URL` with `host.docker.internal`. `VOICE_AUDIO_DIR` inside the API
+container is fixed to `/app/data/audio`, backed by the host's `data/audio/`.
 
 AI services are optional: prepare speech with `deployments/speech/setup.sh`, then
 start them with `deployments/ai-services-api/up.sh` as above.
