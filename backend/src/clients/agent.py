@@ -41,11 +41,30 @@ class AgentRejected(RuntimeError):
         self.message = message
 
 
+class Citation(BaseModel):
+    """Evidence that a marker such as [S1] in a saved answer refers to."""
+
+    marker: str
+    evidence_id: str
+    title: str
+    excerpt: str
+    location: str | None = None
+
+
+class AttachmentRef(BaseModel):
+    """Reference to a photo saved with a user message (never its bytes)."""
+
+    file_id: str
+    media_type: str
+
+
 class HistoryMessage(BaseModel):
-    """One saved user input or completed assistant answer."""
+    """One saved user input or completed assistant answer with its citations."""
 
     role: Literal["user", "assistant"]
     text: str
+    citations: list[Citation] = []
+    attachment: AttachmentRef | None = None
 
 
 class AgentHistory(BaseModel):

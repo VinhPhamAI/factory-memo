@@ -40,6 +40,16 @@ from backend.tests.test_database_migrations import (
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+CITATION = {
+    "marker": "S1",
+    "evidence_id": "chunk-71",
+    "title": "MR-JE manual",
+    "excerpt": "Kiểm tra cảm biến.",
+    "location": "trang 71",
+}
+
+PHOTO = {"file_id": "file-1", "media_type": "image/png"}
+
 SSE_FRAMES = [
     b'event: status\ndata: {"sequence":1}\n\n',
     b'event: text\ndata: {"sequence":2,"delta":"Ki\xe1\xbb\x83m"}\n\n',
@@ -272,14 +282,20 @@ class ConversationAgentProxyTest(ConversationTestCase):
         conversation = UUID(self.create(owner)["id"])
         self.agent.history = AgentHistory(
             conversation_id=conversation,
-            messages=[{"role": "user", "text": "Lỗi E12"}, {"role": "assistant", "text": "Kiểm tra"}],
+            messages=[
+                {"role": "user", "text": "Lỗi E12", "attachment": PHOTO},
+                {"role": "assistant", "text": "Kiểm tra [S1]", "citations": [CITATION]},
+            ],
             truncated=True,
         )
         response = self.client.get(f"/v1/conversations/{conversation}/history", headers=owner)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), {
             "conversation_id": str(conversation),
-            "messages": [{"role": "user", "text": "Lỗi E12"}, {"role": "assistant", "text": "Kiểm tra"}],
+            "messages": [
+                {"role": "user", "text": "Lỗi E12", "citations": [], "attachment": PHOTO},
+                {"role": "assistant", "text": "Kiểm tra [S1]", "citations": [CITATION], "attachment": None},
+            ],
             "truncated": True,
         })
         self.assertEqual(self.agent.calls, [("history", conversation, None)])

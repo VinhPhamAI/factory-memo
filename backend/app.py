@@ -19,6 +19,7 @@ from backend.api.auth import (
 )
 from backend.api.auth import router as auth_router
 from backend.api.conversations import router as conversations_router
+from backend.api.speech import router as speech_router
 from backend.api.document_uploads import router as document_uploads_router
 from backend.api.knowledge_agent import KnowledgeAgentPool
 from backend.api.knowledge_agent import router as knowledge_agent_router
@@ -53,6 +54,7 @@ def create_app(
     auth_settings: AuthHttpSettings | None = None,
     conversation_store: ConversationStore | None = None,
     agent_client: Any | None = None,
+    chat_speech: Any | None = None,
 ) -> FastAPI:
     """Build the API; injected agents and services keep HTTP tests dependency-free.
 
@@ -77,6 +79,7 @@ def create_app(
             app.state.auth_settings = auth_settings
             app.state.conversation_store = conversation_store
             app.state.agent_client = agent_client
+            app.state.chat_speech = chat_speech
             try:
                 yield
             finally:
@@ -101,6 +104,7 @@ def create_app(
             )
         owned_agent_client = None
         app.state.agent_client = agent_client
+        app.state.chat_speech = chat_speech
         if agent_client is None:
             agent_settings = AgentSettings.from_env()
             if agent_settings is not None:
@@ -154,6 +158,7 @@ def create_app(
     api.add_exception_handler(RequestValidationError, auth_validation_error)
     api.include_router(auth_router)
     api.include_router(conversations_router)
+    api.include_router(speech_router)
     api.include_router(knowledge_agent_router)
     api.include_router(knowledge_bases_router)
     api.include_router(voice_capture_router)
