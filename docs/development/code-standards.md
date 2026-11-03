@@ -7,6 +7,25 @@ code touched by a task; do not rewrite unrelated services to match a template.
 Read [project guidance](../../AGENTS.md), the relevant service guide, and the
 [product requirements](../features/project-overview.md) before implementation.
 
+## Feature delivery workflow
+
+1. Inspect the existing code, schema, tests, and overlapping work.
+2. Agree on observable requirements, including failure cases and existing-data behavior.
+   Use short, direct bullet points. List open decisions separately from agreed behavior.
+   Specify contract details such as formats, required fields, exact limits and
+   lifetimes, lifecycle transitions, and error behavior where relevant. For auth,
+   cover token format and issuance, refresh, expiry, revocation, and client handling.
+   Label examples and proposed defaults explicitly. Get agreement on unresolved
+   behavior and values before using them as requirements in the plan.
+3. Plan small changes in dependency order. Identify files, reuse, contracts, and
+   the first failing tests. Use short code sketches where they clarify the design.
+4. Implement one slice at a time. Observe the expected test failure, make the
+   smallest change that passes, refactor, and run relevant regression checks.
+5. Update documentation and verify the full path, including fresh setup and
+   representative existing data when storage changes.
+6. Review the scoped diff and actual verification results before committing and
+   pushing the agreed branch with the task's authorization.
+
 ## 1. Keep responsibilities clear
 
 - Name files, functions, and classes after their purpose. Avoid vague names such
