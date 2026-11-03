@@ -213,9 +213,24 @@ async def test_history_endpoint_reads_saved_turns_after_restart(database):
             )
     assert saved.status_code == 200
     assert saved.json()["messages"] == [
-        {"role": "user", "text": "Máy số 3 báo lỗi", "citations": [], "attachment": None},
-        {"role": "assistant", "text": "complete answer", "citations": [], "attachment": None},
-        {"role": "user", "text": "Kết quả thế nào?", "citations": [], "attachment": None},
+        {
+            "role": "user",
+            "text": "Máy số 3 báo lỗi",
+            "citations": [],
+            "attachment": None,
+        },
+        {
+            "role": "assistant",
+            "text": "complete answer",
+            "citations": [],
+            "attachment": None,
+        },
+        {
+            "role": "user",
+            "text": "Kết quả thế nào?",
+            "citations": [],
+            "attachment": None,
+        },
     ]
     assert saved.json()["truncated"] is False
     assert empty.json()["messages"] == []
@@ -247,7 +262,11 @@ async def test_cited_answer_is_saved_and_reopened_without_search_output(database
         async def search(self, query, scope):
             """Record the scope and return evidence."""
             self.scopes.append(scope)
-            return [Evidence("chunk-71", "MR-JE manual", "Kiểm tra cảm biến áp suất.", "trang 71")]
+            return [
+                Evidence(
+                    "chunk-71", "MR-JE manual", "Kiểm tra cảm biến áp suất.", "trang 71"
+                )
+            ]
 
     await setup_database(SetupSettings(**database))
     settings = runtime_settings(database)
@@ -296,14 +315,18 @@ async def test_photo_bytes_never_reach_checkpoint_storage(database):
 
     marker = b"PHOTO-BYTES-" + uuid4().hex.encode()
     encoded = base64.b64encode(marker * 20).decode()
-    attachment = ImageAttachment(file_id="file-9", media_type="image/jpeg", data=encoded)
+    attachment = ImageAttachment(
+        file_id="file-9", media_type="image/jpeg", data=encoded
+    )
     await setup_database(SetupSettings(**database))
     settings = runtime_settings(database)
     provider = ControlledProvider()
     conversation = uuid4()
     async with checkpoint_store(database["database_url"]) as saver:
         runtime = AgentRuntime(
-            build_graph(provider, saver, settings), lambda: check_readiness(saver), settings
+            build_graph(provider, saver, settings),
+            lambda: check_readiness(saver),
+            settings,
         )
         runtime.admission.acquire(str(conversation))
         frames = "".join(
@@ -328,11 +351,14 @@ async def test_photo_bytes_never_reach_checkpoint_storage(database):
                 "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
             )
         ]
+
         def rows_containing(*needles):
             """Count matching rows per table; bytea columns show as hex text."""
             counts = {}
             for table in tables:
-                condition = " OR ".join(["position(%s IN lower(t::text)) > 0"] * len(needles))
+                condition = " OR ".join(
+                    ["position(%s IN lower(t::text)) > 0"] * len(needles)
+                )
                 counts[table] = connection.execute(
                     f'SELECT count(*) FROM "{table}" t WHERE {condition}',
                     [needle.lower() for needle in needles],

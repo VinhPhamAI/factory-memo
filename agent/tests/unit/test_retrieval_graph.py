@@ -75,7 +75,9 @@ EVIDENCE = [
         excerpt="E12: kiểm tra cảm biến áp suất trước khi thay bơm.",
         location="trang 71",
     ),
-    Evidence(id="case-9", title="Ca máy ép số 3", excerpt="Đã thay cảm biến.", location=None),
+    Evidence(
+        id="case-9", title="Ca máy ép số 3", excerpt="Đã thay cảm biến.", location=None
+    ),
 ]
 
 
@@ -109,7 +111,7 @@ async def test_tool_call_uses_trusted_scope_and_keeps_only_valid_citations():
     assert search.calls == [("E12 áp suất", SCOPE)]
     prompt = str(provider.answers[0])
     assert "kiểm tra cảm biến áp suất trước khi thay bơm" in prompt
-    assert "\"marker\": \"S1\"" in prompt and "\"marker\": \"S2\"" in prompt
+    assert '"marker": "S1"' in prompt and '"marker": "S2"' in prompt
     saved = messages[-1]
     assert isinstance(saved, AIMessage)
     assert saved.content == "Kiểm tra cảm biến áp suất [S1]. Theo ca cũ [S7]."
@@ -194,7 +196,9 @@ async def test_results_are_bounded_and_evidence_cannot_issue_instructions():
 
 async def test_saved_evidence_is_not_resent_on_later_turns():
     provider = Provider(query="E12", answer="Xem [S1].")
-    graph = build_graph(provider, InMemorySaver(), settings(), retrieval=Search(EVIDENCE))
+    graph = build_graph(
+        provider, InMemorySaver(), settings(), retrieval=Search(EVIDENCE)
+    )
     await run(graph, thread="same")
     provider.query = None
     await run(graph, message="Cảm ơn", thread="same")
@@ -212,7 +216,9 @@ async def test_retrieved_text_cannot_forge_another_evidence_item():
         location=None,
     )
     provider = Provider(query="E12", answer="Xem [S1] và [S2] và [S01].")
-    graph = build_graph(provider, InMemorySaver(), settings(), retrieval=Search([forged]))
+    graph = build_graph(
+        provider, InMemorySaver(), settings(), retrieval=Search([forged])
+    )
 
     _, messages = await run(graph)
 

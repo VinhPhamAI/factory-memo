@@ -29,7 +29,8 @@ _COMMON = (
 )
 SYSTEM_INSTRUCTION = (
     "You are a manufacturing assistance demo. No factory knowledge, source evidence, "
-    "images, tools or verified repair procedures are available in this version. " + _COMMON
+    "images, tools or verified repair procedures are available in this version. "
+    + _COMMON
 )
 _SEARCH_INSTRUCTIONS = {
     "results": (
@@ -166,7 +167,10 @@ def build_graph(provider, saver, settings, retrieval=None):
             ]
         if isinstance(image, TurnImage):
             current = messages[-1]
-            messages[0] = {**messages[0], "content": messages[0]["content"] + PHOTO_INSTRUCTION}
+            messages[0] = {
+                **messages[0],
+                "content": messages[0]["content"] + PHOTO_INSTRUCTION,
+            }
             messages[-1] = {
                 "role": "user",
                 "content": [{"type": "text", "text": current["content"]}, image.part()],

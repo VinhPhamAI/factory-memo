@@ -513,8 +513,18 @@ async def test_history_returns_ordered_public_messages_only(client, runtime):
     assert response.status_code == 200
     assert reads == [{"configurable": {"thread_id": str(conversation)}}]
     assert response.json()["messages"] == [
-        {"role": "user", "text": "Máy ép báo lỗi E12", "citations": [], "attachment": None},
-        {"role": "assistant", "text": "Kiểm tra cảm biến áp suất.", "citations": [], "attachment": None},
+        {
+            "role": "user",
+            "text": "Máy ép báo lỗi E12",
+            "citations": [],
+            "attachment": None,
+        },
+        {
+            "role": "assistant",
+            "text": "Kiểm tra cảm biến áp suất.",
+            "citations": [],
+            "attachment": None,
+        },
         {"role": "user", "text": "Đã kiểm tra", "citations": [], "attachment": None},
     ]
     assert "private" not in response.text
@@ -596,7 +606,9 @@ async def test_complete_and_history_carry_the_saved_citations(client, runtime):
     """Completion and history project citations from the same saved message."""
     runtime.graph.final_updates = [{"answer": {"messages": [cited_answer()]}}]
     response = await client.post("/v1/agent/stream", json=payload(), headers=AUTH)
-    complete = [data for name, data in parse_events(response.text) if name == "complete"]
+    complete = [
+        data for name, data in parse_events(response.text) if name == "complete"
+    ]
     assert complete[0]["citations"] == [CITATION]
     assert complete[0]["search"] == "results"
 
@@ -606,7 +618,12 @@ async def test_complete_and_history_carry_the_saved_citations(client, runtime):
     history = (await client.get(history_path(), headers=AUTH)).json()["messages"]
     assert history == [
         {"role": "user", "text": "E12?", "citations": [], "attachment": None},
-        {"role": "assistant", "text": "Kiểm tra [S1].", "citations": [CITATION], "attachment": None},
+        {
+            "role": "assistant",
+            "text": "Kiểm tra [S1].",
+            "citations": [CITATION],
+            "attachment": None,
+        },
         {"role": "assistant", "text": "plain", "citations": [], "attachment": None},
     ]
 
@@ -616,7 +633,9 @@ async def test_answer_without_saved_metadata_completes_without_citations(
 ):
     """Answers saved before citations existed still complete and reopen."""
     response = await client.post("/v1/agent/stream", json=payload(), headers=AUTH)
-    complete = [data for name, data in parse_events(response.text) if name == "complete"]
+    complete = [
+        data for name, data in parse_events(response.text) if name == "complete"
+    ]
     assert complete[0]["citations"] == []
     assert complete[0]["search"] == "not_used"
 

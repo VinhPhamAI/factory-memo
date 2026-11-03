@@ -32,7 +32,7 @@ async def test_photo_reaches_the_graph_as_context_and_a_saved_reference(
         "/v1/agent/stream", json={**payload(), "attachment": ATTACHMENT}, headers=AUTH
     )
     assert response.status_code == 200
-    graph_input, = runtime.graph.args
+    (graph_input,) = runtime.graph.args
     message = graph_input["messages"][0]
     assert message.additional_kwargs == {
         "attachment": {"file_id": "file-123", "media_type": "image/png"}
@@ -56,7 +56,9 @@ async def test_photo_reaches_the_graph_as_context_and_a_saved_reference(
         {"file_id": "x", "media_type": "image/png"},
     ],
 )
-async def test_invalid_photos_are_rejected_before_generation(client, runtime, attachment):
+async def test_invalid_photos_are_rejected_before_generation(
+    client, runtime, attachment
+):
     response = await client.post(
         "/v1/agent/stream", json={**payload(), "attachment": attachment}, headers=AUTH
     )
@@ -111,7 +113,10 @@ async def run(graph, message, image=None, thread="t"):
         ),
     )
     async for _ in graph.astream(
-        {"messages": [message]}, config, stream_mode="custom", version="v2",
+        {"messages": [message]},
+        config,
+        stream_mode="custom",
+        version="v2",
         durability="sync",
     ):
         pass

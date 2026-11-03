@@ -13,7 +13,12 @@ from denso_agent.api.sse import encode_event
 from denso_agent.config import RuntimeSettings
 from denso_agent.runtime.errors import AgentError
 from denso_agent.runtime.graph import TurnImage
-from denso_agent.schemas.chat import AttachmentRef, ChatHistory, HistoryMessage, ImageAttachment
+from denso_agent.schemas.chat import (
+    AttachmentRef,
+    ChatHistory,
+    HistoryMessage,
+    ImageAttachment,
+)
 from denso_agent.schemas.citations import Citation, SearchScope
 from denso_agent.schemas.events import (
     CompleteEvent,
@@ -169,7 +174,9 @@ class AgentRuntime:
                 text=message.content,
                 citations=_citations(message) if isinstance(message, AIMessage) else [],
                 attachment=(
-                    AttachmentRef.model_validate(message.additional_kwargs["attachment"])
+                    AttachmentRef.model_validate(
+                        message.additional_kwargs["attachment"]
+                    )
                     if isinstance(message, HumanMessage)
                     and "attachment" in message.additional_kwargs
                     else None
@@ -282,7 +289,9 @@ class AgentRuntime:
                                 yield event("text", TextEvent, delta=delta)
                             reasoning = part["data"].get("reasoning")
                             if reasoning:
-                                yield event("reasoning", ReasoningEvent, delta=reasoning)
+                                yield event(
+                                    "reasoning", ReasoningEvent, delta=reasoning
+                                )
                         elif part["type"] == "updates":
                             if final_answer is not None:
                                 raise ValueError(

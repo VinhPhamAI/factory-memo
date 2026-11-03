@@ -32,9 +32,13 @@ def _provider_errors() -> Iterator[None]:
             raise AgentError(
                 "context_limit", "The model input exceeded its context limit."
             ) from exc
-        raise AgentError("provider_error", "The provider rejected the request.") from exc
+        raise AgentError(
+            "provider_error", "The provider rejected the request."
+        ) from exc
     except (APIError, HTTPError, ValueError) as exc:
-        raise AgentError("provider_error", "The provider request failed.", True) from exc
+        raise AgentError(
+            "provider_error", "The provider request failed.", True
+        ) from exc
 
 
 class ModelArk:
@@ -161,7 +165,9 @@ class ModelArk:
                     reasoning = getattr(choice.delta, "reasoning_content", None)
                     if reasoning and reasoning_size < MAX_REASONING_CHARACTERS:
                         # Shown in the chat as "thinking"; never part of the answer.
-                        reasoning = reasoning[: MAX_REASONING_CHARACTERS - reasoning_size]
+                        reasoning = reasoning[
+                            : MAX_REASONING_CHARACTERS - reasoning_size
+                        ]
                         reasoning_size += len(reasoning)
                         writer({"reasoning": reasoning})
                     content = choice.delta.content
