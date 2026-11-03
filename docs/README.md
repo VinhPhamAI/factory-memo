@@ -7,7 +7,7 @@ Start with [product requirements](features/project-overview.md),
 | Section | Contents |
 |---|---|
 | [Architecture](architecture/architecture.html) | System structure, knowledge flow, and database design |
-| Features | Knowledge management, document uploads, conflict review, voice capture, and authentication |
+| Features | Knowledge management, document uploads, conflict review, voice capture, authentication, and agent conversations |
 | Development | Deployment, evaluation references, and demo instructions |
 | [Assets](assets/) | Images used by documentation |
 
@@ -17,7 +17,7 @@ Start with [product requirements](features/project-overview.md),
 - [Earlier system diagram](architecture/architecture.html)
 - [Earlier architecture](architecture/architecture-v0.html)
 - [Knowledge flow](architecture/knowledge-flow.html)
-- [Database schema proposal](architecture/database-schema.md) — target tables, relationships, permissions, and migration requirements; tables created by Alembic migrations in a separate database; only `users` (with `auth_sessions`) is used, by authentication.
+- [Database schema proposal](architecture/database-schema.md) — target tables, relationships, permissions, and migration requirements; tables created by Alembic migrations in a separate database; only `users` (with `auth_sessions`) and `conversations` are used, by authentication and agent chat.
 
 ## Features
 
@@ -29,6 +29,7 @@ Start with [product requirements](features/project-overview.md),
 - [Conflict detection](features/conflict-detection.md)
 - [Voice capture](features/voice-capture.md)
 - [Authentication](features/authentication.md) — `/auth` API contract, sessions, settings, and deployment.
+- [Agent conversations](features/conversations.md) — `/v1/conversations` API, agent history and streaming, settings.
 
 ## Development
 

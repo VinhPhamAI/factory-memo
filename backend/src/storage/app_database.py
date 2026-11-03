@@ -8,8 +8,39 @@ belongs to the knowledge services. Tables are created by migrations, not here.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+
+class AppDatabaseUnavailable(RuntimeError):
+    """The application database could not be reached or timed out."""
+
+
+@asynccontextmanager
+async def app_transaction(
+    sessions: async_sessionmaker[AsyncSession],
+    unavailable: type[AppDatabaseUnavailable] = AppDatabaseUnavailable,
+) -> AsyncIterator[AsyncSession]:
+    """Open one short transaction that commits on success.
+
+    Args:
+        sessions: Session factory of the application database.
+        unavailable: Error class raised for connection failures.
+
+    Raises:
+        AppDatabaseUnavailable: Connection, lock or statement timeout, or
+            pool exhaustion. Other database errors propagate unchanged.
+    """
+
+    try:
+        async with sessions() as session, session.begin():
+            yield session
+    except (OperationalError, InterfaceError, PoolTimeoutError, OSError) as exc:
+        raise unavailable("The application database is unavailable") from exc
 
 
 def app_database_url_from_env() -> str | None:

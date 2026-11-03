@@ -1,10 +1,11 @@
 # Database schema proposal
 
-**Status: tables created; only `users` and `auth_sessions` are used.** This document defines
+**Status: tables created; only `users`, `auth_sessions` and `conversations` are used.** This document defines
 the target tables, relationships, and the work handled by each service. The models in
 `backend/src/storage/orm/` and the Alembic revisions create these tables, the updated processing
 tables and the database rules in a separate database (`APP_DATABASE_URL`). Authentication
-reads and writes `users` and `auth_sessions`; no other API, worker or agent uses these tables
+reads and writes `users` and `auth_sessions`; agent chat reads and writes `conversations`
+([agent conversations](../features/conversations.md)); no other API, worker or agent uses these tables
 yet, and existing data has not been moved. See
 [database migrations](../development/database-migrations.md) for commands and enforced rules,
 and [authentication](../features/authentication.md) for login behavior.

@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from denso_agent.schemas.citations import Citation, SearchStatus
+
 
 class Event(BaseModel):
     """Identify an event's request, conversation and stream position."""
@@ -20,6 +22,15 @@ class StatusEvent(Event):
     state: Literal["generating"] = "generating"
 
 
+class ReasoningEvent(Event):
+    """Deliver the model's reasoning text, shown as unverified "thinking".
+
+    It is never part of the answer and is not saved.
+    """
+
+    delta: str
+
+
 class TextEvent(Event):
     """Deliver provisional answer text until completion is acknowledged."""
 
@@ -31,6 +42,8 @@ class CompleteEvent(Event):
 
     finish_reason: Literal["stop"] = "stop"
     answer: str
+    citations: list[Citation] = []
+    search: SearchStatus = "not_used"
 
 
 class ErrorEvent(Event):

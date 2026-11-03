@@ -2,6 +2,15 @@
 
 **Outcome.** Employees can send an editable transcript or attach an authorized photo.
 
+Verify speech independently of photos. Follow `deployments/speech/README.md` to
+start the merged VieGem-ASR worker and AI gateway. Run the speech smoke script
+with a Vietnamese WAV and reference text, and verify an unavailable upstream
+produces a caller-visible failure. Use the gateway's documented speech protocol.
+The worker-only multipart endpoint is outside the gateway contract. Inspect the
+existing capture client for protocol compatibility before reusing it. If an
+adapter is needed, keep it on the authenticated backend path and test the
+gateway failure and successful transcript delivery before wiring the composer.
+
 - Reuse the microphone capture and speech client in `frontend/src/hooks/voice-recording.ts` and `frontend/src/services/voice-api.ts` where their contracts fit. Populate the existing composer with an editable transcript. Send the final text through phase 1. Surface permission, recording, and transcription failures.
 - Extend the backend chat request with an optional photo file ID. Use the file service’s authorization and content reader. Check access on every send and validate actual media type and size before forwarding. Keep browser file paths and arbitrary remote URLs out of the model request.
 - Extend `agent/src/denso_agent/schemas/chat.py`, `runtime/conversation.py`, `runtime/graph.py`, and `clients/modelark.py` for bounded image input. Confirm the selected deployment accepts the intended image message format. Set image limits and compatible HTTP body limits across hops. Preserve old text requests. Keep stable attachment references in public history and decide explicitly how subsequent turns resolve prior photos. Keep raw image bytes out of public history and logs.

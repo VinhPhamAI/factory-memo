@@ -16,10 +16,10 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import and_, func, select, update
-from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
-from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.src.storage.app_database import AppDatabaseUnavailable, app_transaction
 from backend.src.storage.orm import AuthSession, User, UserRole
 
 
@@ -29,8 +29,8 @@ USERNAME_UNIQUE_CONSTRAINT = "uq_users_username"
 ACCOUNT_ELIGIBLE = and_(User.is_active.is_(True), User.deleted_at.is_(None))
 
 
-class AuthStorageUnavailable(RuntimeError):
-    """The application database could not be reached."""
+class AuthStorageUnavailable(AppDatabaseUnavailable):
+    """The application database could not be reached during an auth request."""
 
 
 class UsernameTakenError(ValueError):
@@ -87,12 +87,8 @@ class AuthStore:
     async def _transaction(self) -> AsyncIterator[AsyncSession]:
         """Open one transaction; connection failures become AuthStorageUnavailable."""
 
-        try:
-            async with self._sessions() as session, session.begin():
-                yield session
-        # Includes lock and statement timeouts (OperationalError) and pool exhaustion.
-        except (OperationalError, InterfaceError, PoolTimeoutError, OSError) as exc:
-            raise AuthStorageUnavailable("The application database is unavailable") from exc
+        async with app_transaction(self._sessions, AuthStorageUnavailable) as session:
+            yield session
 
     async def create_employee(self, username: str, display_name: str, password_hash: str) -> Account:
         """Insert an active employee account.

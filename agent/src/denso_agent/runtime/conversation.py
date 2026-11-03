@@ -1,6 +1,7 @@
 """Bound active requests and translate graph progress into public events."""
 
 import asyncio
+import base64
 from contextlib import aclosing
 from typing import Awaitable, Callable
 from uuid import UUID
@@ -11,17 +12,31 @@ from langchain_core.messages import AIMessage, HumanMessage
 from denso_agent.api.sse import encode_event
 from denso_agent.config import RuntimeSettings
 from denso_agent.runtime.errors import AgentError
-from denso_agent.schemas.events import CompleteEvent, ErrorEvent, StatusEvent, TextEvent
+from denso_agent.runtime.graph import TurnImage
+from denso_agent.schemas.chat import (
+    AttachmentRef,
+    ChatHistory,
+    HistoryMessage,
+    ImageAttachment,
+)
+from denso_agent.schemas.citations import Citation, SearchScope
+from denso_agent.schemas.events import (
+    CompleteEvent,
+    ErrorEvent,
+    ReasoningEvent,
+    StatusEvent,
+    TextEvent,
+)
 
 
-def _answer_from_update(update: object) -> str:
+def _answer_from_update(update: object) -> AIMessage:
     """Extract the single completed assistant answer from a graph update.
 
     Args:
         update: LangGraph update containing the current answer node's result.
 
     Returns:
-        The original answer text, preserving whitespace and Unicode characters.
+        The saved assistant message; its text keeps whitespace and Unicode.
 
     Raises:
         ValueError: The update lacks one unambiguous, nonempty assistant string.
@@ -38,7 +53,15 @@ def _answer_from_update(update: object) -> str:
         or not messages[0].content.strip()
     ):
         raise ValueError("Expected one completed assistant text message.")
-    return messages[0].content
+    return messages[0]
+
+
+def _citations(message: AIMessage) -> list[Citation]:
+    """Validate the citations saved on an answer; older answers have none."""
+    return [
+        Citation.model_validate(item)
+        for item in message.additional_kwargs.get("citations", [])
+    ]
 
 
 class Admission:
@@ -126,18 +149,82 @@ class AgentRuntime:
         self.settings = settings
         self.admission = Admission(settings.max_concurrent_requests)
 
-    async def stream(self, conversation_id: UUID, message: str, request_id: UUID):
+    async def load_history(self, conversation_id: UUID) -> ChatHistory:
+        """Read the saved public messages of one conversation checkpoint.
+
+        Only human inputs and assistant answers with text content are public;
+        tool, system and other internal messages are left out. When the
+        history exceeds the configured message or character limit, the newest
+        messages that fit are returned in chronological order.
+
+        Args:
+            conversation_id: Checkpoint thread identifier.
+        Returns:
+            Ordered messages and whether older messages were omitted. A
+            conversation without a checkpoint has no messages.
+        Raises:
+            Exception: The checkpoint store could not be read.
+        """
+        state = await self.graph.aget_state(
+            {"configurable": {"thread_id": str(conversation_id)}}
+        )
+        public = [
+            HistoryMessage(
+                role="user" if isinstance(message, HumanMessage) else "assistant",
+                text=message.content,
+                citations=_citations(message) if isinstance(message, AIMessage) else [],
+                attachment=(
+                    AttachmentRef.model_validate(
+                        message.additional_kwargs["attachment"]
+                    )
+                    if isinstance(message, HumanMessage)
+                    and "attachment" in message.additional_kwargs
+                    else None
+                ),
+            )
+            for message in state.values.get("messages", [])
+            if isinstance(message, (HumanMessage, AIMessage))
+            and isinstance(message.content, str)
+        ]
+        selected: list[HistoryMessage] = []
+        characters = 0
+        for message in reversed(public):
+            characters += len(message.text)
+            if (
+                len(selected) >= self.settings.history_max_messages
+                or characters > self.settings.history_max_characters
+            ):
+                break
+            selected.append(message)
+        selected.reverse()
+        return ChatHistory(
+            conversation_id=conversation_id,
+            messages=selected,
+            truncated=len(selected) < len(public),
+        )
+
+    async def stream(
+        self,
+        conversation_id: UUID,
+        message: str,
+        request_id: UUID,
+        search_scope: SearchScope | None = None,
+        attachment: ImageAttachment | None = None,
+    ):
         """Stream provisional text, then return the full answer after persistence.
 
         Args:
             conversation_id: Caller-owned checkpoint thread identifier.
             message: Validated current human input.
             request_id: Server-generated tracing identifier.
+            search_scope: Knowledge bases the caller authorized; None disables search.
+            attachment: Optional photo; its reference is saved with the message
+                and its bytes reach only this turn's model call.
         Yields:
             Typed SSE frames; at most one connected terminal event.
         """
         sequence = 0
-        final_answer: str | None = None
+        final_answer: AIMessage | None = None
 
         def event(name, event_type, **fields):
             """Number and encode the next public event in this request."""
@@ -157,8 +244,39 @@ class AgentRuntime:
             yield event("status", StatusEvent)
             async with asyncio.timeout(self.settings.request_timeout):
                 iterator = self.graph.astream(
-                    {"messages": [HumanMessage(content=message)]},
-                    config={"configurable": {"thread_id": str(conversation_id)}},
+                    {
+                        "messages": [
+                            HumanMessage(
+                                content=message,
+                                additional_kwargs=(
+                                    {
+                                        "attachment": AttachmentRef(
+                                            file_id=attachment.file_id,
+                                            media_type=attachment.media_type,
+                                        ).model_dump()
+                                    }
+                                    if attachment
+                                    else {}
+                                ),
+                            )
+                        ]
+                    },
+                    config={
+                        "configurable": {
+                            "thread_id": str(conversation_id),
+                            "search_scope": search_scope,
+                            # Bytes, not text: configuration strings can be
+                            # copied into checkpoint metadata.
+                            "image": (
+                                TurnImage(
+                                    attachment.media_type,
+                                    base64.b64decode(attachment.data),
+                                )
+                                if attachment
+                                else None
+                            ),
+                        }
+                    },
                     stream_mode=["custom", "updates"],
                     version="v2",
                     durability="sync",
@@ -169,6 +287,11 @@ class AgentRuntime:
                             delta = part["data"].get("delta")
                             if delta:
                                 yield event("text", TextEvent, delta=delta)
+                            reasoning = part["data"].get("reasoning")
+                            if reasoning:
+                                yield event(
+                                    "reasoning", ReasoningEvent, delta=reasoning
+                                )
                         elif part["type"] == "updates":
                             if final_answer is not None:
                                 raise ValueError(
@@ -177,7 +300,13 @@ class AgentRuntime:
                             final_answer = _answer_from_update(part["data"])
                 if final_answer is None:
                     raise ValueError("No completed answer-node result was received.")
-            yield event("complete", CompleteEvent, answer=final_answer)
+            yield event(
+                "complete",
+                CompleteEvent,
+                answer=final_answer.content,
+                citations=_citations(final_answer),
+                search=final_answer.additional_kwargs.get("search", "not_used"),
+            )
         except TimeoutError:
             yield event(
                 "error",

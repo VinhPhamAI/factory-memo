@@ -4,9 +4,11 @@ import asyncio
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage
+import httpx
 import psycopg
 import pytest
 
+from denso_agent.app import create_app
 from denso_agent.clients.checkpoints import checkpoint_store, check_readiness
 from denso_agent.config import RuntimeSettings, SetupSettings
 from denso_agent.runtime.conversation import AgentRuntime
@@ -177,3 +179,195 @@ async def test_final_checkpoint_failure_never_acknowledges_completion(
         )
         assert "event: complete" in frames
         assert "Fresh after failed save" in str(provider.inputs[-1])
+
+
+async def test_history_endpoint_reads_saved_turns_after_restart(database):
+    """A new pool returns saved turns in order; failed answers stay unsaved."""
+    await setup_database(SetupSettings(**database))
+    settings = runtime_settings(database)
+    provider = ControlledProvider()
+    conversation = uuid4()
+    async with checkpoint_store(database["database_url"]) as saver:
+        graph = build_graph(provider, saver, settings)
+        await run_turn(graph, saver, settings, conversation, "Máy số 3 báo lỗi")
+        provider.mode = "failure"
+        await run_turn(graph, saver, settings, conversation, "Kết quả thế nào?")
+    async with checkpoint_store(database["database_url"]) as saver:
+        runtime = AgentRuntime(
+            build_graph(provider, saver, settings),
+            lambda: check_readiness(saver),
+            settings,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=create_app(settings=settings, runtime=runtime)
+            ),
+            base_url="http://agent.test",
+        ) as client:
+            headers = {"Authorization": "Bearer test-token"}
+            saved = await client.get(
+                f"/v1/agent/conversations/{conversation}/history", headers=headers
+            )
+            empty = await client.get(
+                f"/v1/agent/conversations/{uuid4()}/history", headers=headers
+            )
+    assert saved.status_code == 200
+    assert saved.json()["messages"] == [
+        {
+            "role": "user",
+            "text": "Máy số 3 báo lỗi",
+            "citations": [],
+            "attachment": None,
+        },
+        {
+            "role": "assistant",
+            "text": "complete answer",
+            "citations": [],
+            "attachment": None,
+        },
+        {
+            "role": "user",
+            "text": "Kết quả thế nào?",
+            "citations": [],
+            "attachment": None,
+        },
+    ]
+    assert saved.json()["truncated"] is False
+    assert empty.json()["messages"] == []
+
+
+async def test_cited_answer_is_saved_and_reopened_without_search_output(database):
+    """Citations persist in the checkpoint; retrieved excerpts are not messages."""
+    from denso_agent.runtime.retrieval import Evidence
+    from denso_agent.schemas.citations import SearchScope
+
+    class SearchingProvider(ControlledProvider):
+        """Request one search, then answer citing real and invented markers."""
+
+        async def route(self, messages):
+            """Ask for a search with a model-chosen query."""
+            return "E12"
+
+        async def answer(self, messages, writer):
+            """Record the prompt and answer with one valid and one invented marker."""
+            self.inputs.append(messages)
+            writer({"delta": "Xem [S1] và [S4]."})
+            return "Xem [S1] và [S4]."
+
+    class Search:
+        """Return one fixed evidence item for the trusted scope."""
+
+        scopes = []
+
+        async def search(self, query, scope):
+            """Record the scope and return evidence."""
+            self.scopes.append(scope)
+            return [
+                Evidence(
+                    "chunk-71", "MR-JE manual", "Kiểm tra cảm biến áp suất.", "trang 71"
+                )
+            ]
+
+    await setup_database(SetupSettings(**database))
+    settings = runtime_settings(database)
+    conversation = uuid4()
+    scope = SearchScope(knowledge_bases=["industrial_qa"])
+    search = Search()
+    async with checkpoint_store(database["database_url"]) as saver:
+        graph = build_graph(SearchingProvider(), saver, settings, retrieval=search)
+        runtime = AgentRuntime(graph, lambda: check_readiness(saver), settings)
+        runtime.admission.acquire(str(conversation))
+        frames = "".join(
+            [
+                frame
+                async for frame in runtime.stream(
+                    conversation, "E12?", uuid4(), search_scope=scope
+                )
+            ]
+        )
+    complete = [data for name, data in parse_events(frames) if name == "complete"]
+    assert complete[0]["search"] == "results"
+    assert [item["marker"] for item in complete[0]["citations"]] == ["S1"]
+    assert search.scopes == [scope]
+    async with checkpoint_store(database["database_url"]) as saver:
+        runtime = AgentRuntime(
+            build_graph(ControlledProvider(), saver, settings),
+            lambda: check_readiness(saver),
+            settings,
+        )
+        history = await runtime.load_history(conversation)
+        state = await runtime.graph.aget_state(
+            {"configurable": {"thread_id": str(conversation)}}
+        )
+    assert [message.role for message in history.messages] == ["user", "assistant"]
+    assert history.messages[1].citations[0].evidence_id == "chunk-71"
+    assert history.messages[1].citations == [
+        type(history.messages[1].citations[0])(**complete[0]["citations"][0])
+    ]
+    assert len(state.values["messages"]) == 2
+
+
+async def test_photo_bytes_never_reach_checkpoint_storage(database):
+    """Only the photo reference is saved; its bytes appear in no checkpoint table."""
+    import base64
+
+    from denso_agent.schemas.chat import ImageAttachment
+
+    marker = b"PHOTO-BYTES-" + uuid4().hex.encode()
+    encoded = base64.b64encode(marker * 20).decode()
+    attachment = ImageAttachment(
+        file_id="file-9", media_type="image/jpeg", data=encoded
+    )
+    await setup_database(SetupSettings(**database))
+    settings = runtime_settings(database)
+    provider = ControlledProvider()
+    conversation = uuid4()
+    async with checkpoint_store(database["database_url"]) as saver:
+        runtime = AgentRuntime(
+            build_graph(provider, saver, settings),
+            lambda: check_readiness(saver),
+            settings,
+        )
+        runtime.admission.acquire(str(conversation))
+        frames = "".join(
+            [
+                frame
+                async for frame in runtime.stream(
+                    conversation, "Ảnh máy", uuid4(), attachment=attachment
+                )
+            ]
+        )
+        history = await runtime.load_history(conversation)
+    assert "event: complete" in frames
+    assert encoded in str(provider.inputs[-1])
+    assert history.messages[0].attachment.model_dump() == {
+        "file_id": "file-9",
+        "media_type": "image/jpeg",
+    }
+    with psycopg.connect(database["database_url"]) as connection:
+        tables = [
+            row[0]
+            for row in connection.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+            )
+        ]
+
+        def rows_containing(*needles):
+            """Count matching rows per table; bytea columns show as hex text."""
+            counts = {}
+            for table in tables:
+                condition = " OR ".join(
+                    ["position(%s IN lower(t::text)) > 0"] * len(needles)
+                )
+                counts[table] = connection.execute(
+                    f'SELECT count(*) FROM "{table}" t WHERE {condition}',
+                    [needle.lower() for needle in needles],
+                ).fetchone()[0]
+            return counts
+
+        # Control: the saved message text is found inside the stored blobs.
+        assert sum(rows_containing("Ảnh máy".encode().hex()).values()) > 0
+        leaked = rows_containing(
+            encoded[:40], marker.decode(), marker.hex(), encoded[:40].encode().hex()
+        )
+        assert sum(leaked.values()) == 0, leaked

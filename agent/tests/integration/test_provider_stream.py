@@ -51,11 +51,13 @@ def provider_server(*, reason="stop", fragments=("first", "second")):
             self.end_headers()
             try:
                 for index, fragment in enumerate(fragments):
-                    self.send_chunk(fragment, None)
                     if index == 0:
+                        # Set before sending: a fast client can otherwise read
+                        # the chunk before this thread marks it as sent.
                         first.set()
-                        if not release.wait(15):
-                            return
+                    self.send_chunk(fragment, None)
+                    if index == 0 and not release.wait(15):
+                        return
                 self.send_chunk(None, reason)
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
@@ -72,7 +74,7 @@ def provider_server(*, reason="stop", fragments=("first", "second")):
                 "choices": [
                     {
                         "index": 0,
-                        "delta": {"content": content, "reasoning_content": "PRIVATE"},
+                        "delta": {"content": content, "reasoning_content": "THINKING"},
                         "finish_reason": finish,
                     }
                 ],
@@ -113,9 +115,10 @@ async def test_actual_sdk_wire_and_incremental_content():
         chunks = []
 
         def writer(part):
-            """Record visible content and acknowledge the first incremental delta."""
+            """Record parts and acknowledge the first visible delta."""
             chunks.append(part)
-            received.set()
+            if "delta" in part:
+                received.set()
 
         async with ModelArk(settings) as model:
             task = asyncio.create_task(
@@ -125,7 +128,7 @@ async def test_actual_sdk_wire_and_incremental_content():
                 await asyncio.wait_for(received.wait(), timeout=10)
                 assert first.is_set()
                 assert not release.is_set()
-                assert chunks == [{"delta": "first"}]
+                assert chunks == [{"reasoning": "THINKING"}, {"delta": "first"}]
                 release.set()
                 assert await asyncio.wait_for(task, 10) == "firstsecond"
             finally:
@@ -142,4 +145,8 @@ async def test_actual_sdk_wire_and_incremental_content():
             "stream": True,
             "max_tokens": 71,
         }
-        assert "PRIVATE" not in str(chunks)
+        # Reasoning is streamed separately and never becomes answer text.
+        assert [part for part in chunks if "delta" in part] == [
+            {"delta": "first"},
+            {"delta": "second"},
+        ]

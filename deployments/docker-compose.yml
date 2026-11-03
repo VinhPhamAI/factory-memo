@@ -16,6 +16,8 @@ services:
       # Runtime account for accounts and sessions; migrations run separately.
       APP_DATABASE_URL: "${API_APP_DATABASE_URL:-postgresql+psycopg://voice_agent:voice_agent@postgres:5432/voice_agent_app}"
       SPEECH_API_URL: "${API_SPEECH_API_URL:-http://ai-services-api:8080}"
+      # Native agent on the host by default; http://agent:8010 with agent.compose.yml. Token from .env.
+      AGENT_BASE_URL: "${API_AGENT_BASE_URL:-http://host.docker.internal:8010}"
       VOICE_AUDIO_DIR: /app/data/audio
       DOCUMENT_UPLOAD_DIR: /app/data/uploads
     ports:

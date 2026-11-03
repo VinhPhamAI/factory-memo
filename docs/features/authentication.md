@@ -3,7 +3,8 @@
 Scope: the implemented `/auth` API for employee signup, password login and
 device sessions. Accounts and sessions live in the application database
 (`users`, `auth_sessions`; see [database migrations](../development/database-migrations.md)).
-Other API routes (`/v1/...`) do not require a credential yet; the frontend
+[Agent conversations](conversations.md) (`/v1/conversations`) require a bearer access
+token through `require_current_user`; other `/v1/...` routes do not yet. The frontend
 requires sign-in before showing API-mode screens ([frontend guide](../../frontend/README.md)).
 
 Owners: routes in `backend/api/auth.py`, bodies in `backend/api/auth_schemas.py`,

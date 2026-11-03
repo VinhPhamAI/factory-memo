@@ -5,7 +5,7 @@
 ## Proposed changes
 
 - Extend `agent/src/denso_agent/api/routes.py`, `schemas/chat.py`, and `runtime/conversation.py` with service-authenticated `GET /v1/agent/conversations/{id}/history`. Use the canonical conversation UUID as LangGraph thread ID and read `aget_state` asynchronously. Return ordered public user/assistant records and an explicit truncation indicator if the response limit is reached. A new thread with no checkpoint returns an empty list. Surface storage errors as errors. A saved user message can survive a failed turn. Partial assistant text stays provisional.
-- Add `backend/api/conversations.py` and register it in `backend/app.py`. Use `GET/POST /v1/conversations`, `PATCH/DELETE /v1/conversations/{id}`, and `GET .../{id}/history` plus `POST .../{id}/stream`. Define request, response, limits and errors in the API docs before wiring callers. Use the login dependency once available. Use a controlled identity in tests.
+- Add `backend/api/conversations.py` and register it in `backend/app.py`. Use `GET/POST /v1/conversations`, `PATCH/DELETE /v1/conversations/{id}`, and `GET .../{id}/history` plus `POST .../{id}/stream`. Define request, response, limits and errors in the API docs before wiring callers. Use `require_current_user` from `backend/api/auth.py` on every route and derive owner ID from its returned account. Reuse the app database session wiring. Use injected dependencies for isolated tests and real bearer credentials in the integration smoke test.
 - Add focused queries in `backend/src/storage/conversations.py` against the existing ORM model in `orm/inquiries.py`. Scope every query by authenticated owner and active record. Return 404 for an inaccessible chat ID. Soft-delete the row so submitted inquiry references remain valid. Keep database sessions short and release them before awaiting the agent.
 - Add the backend HTTP client at `backend/src/clients/agent.py`. Reuse a lifespan-managed async client. Forward agent SSE events without buffering and close the upstream stream on downstream disconnect. Preserve upstream 409/429 before streaming starts. Never send the agent token to the browser.
 - Wire a new `frontend/src/services/conversations-api.ts` to `frontend/src/hooks/workspace.tsx`. Use backend chat IDs, abort stale streams when switching chats, and replace provisional text with `complete.answer`. An EOF without a terminal event leaves completion unconfirmed. Reopen history to see saved messages. Keep resending an explicit user action.
@@ -23,6 +23,10 @@
 | Create / edit | `frontend/src/services/conversations-api.ts`, `frontend/src/hooks/workspace.tsx` | Typed CRUD/history calls, SSE decoding, and selection/send state keyed by conversation ID |
 
 Call sequence: browser → backend authentication → active-owner query → agent HTTP API → LangGraph checkpoint. A stream follows the same authorization sequence. It then sends the current user input to the graph and forwards events to the browser.
+
+Use the existing `useAuthClient` and in-memory access token for browser requests.
+Handle auth expiry before opening the stream and surface a rejected stream
+without automatically sending the chat message again.
 
 Show a truncation notice above the returned messages. A trailing saved user message is displayed as a user turn with no saved answer. Show an interrupted status in the sending UI when the stream ends without completion, and reconcile displayed messages from history on reopen.
 

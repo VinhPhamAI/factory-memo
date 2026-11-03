@@ -12,7 +12,8 @@
 | `api/` | Authentication, validation, request limits, public events. |
 | `schemas/` | Define request, error, and event fields. |
 | `runtime/` | One-node graph, recent context, request limits. |
-| `clients/modelark.py` | Call ModelArk through `AsyncOpenAI`; close streams. |
+| `clients/modelark.py` | Call ModelArk through `AsyncOpenAI`; close streams; private tool routing. |
+| `runtime/retrieval.py` | Search tool schema, trusted scope, bounded evidence, citation validation. |
 | `clients/checkpoints.py` | Own the runtime PostgreSQL pool and saver. |
 | `setup_database.py` | Create database/roles, update tables, assign permissions. |
 
@@ -49,6 +50,11 @@ Both files are ignored; examples contain placeholders.
 | `AGENT_MAX_CONCURRENT_REQUESTS` | Global active requests: 4. |
 | `AGENT_CONTEXT_MAX_MESSAGES` | Recent input messages: 40. |
 | `AGENT_CONTEXT_MAX_CHARACTERS` | Recent input characters: 60000. |
+| `AGENT_SEARCH_TIMEOUT_SECONDS` | Knowledge search deadline: 10 seconds. |
+| `AGENT_SEARCH_MAX_RESULTS` | Evidence items given to the model: 5. |
+| `AGENT_SEARCH_MAX_EXCERPT_CHARACTERS` | Characters per evidence excerpt: 1500. |
+| `AGENT_HISTORY_MAX_MESSAGES` | Newest messages returned by history: 200. |
+| `AGENT_HISTORY_MAX_CHARACTERS` | Characters returned by history: 400000. |
 
 ### Setup and container URLs
 
@@ -72,8 +78,14 @@ A checkpoint saves conversation and graph execution state.
 The runtime reads custom text and node updates from one graph stream:
 
 1. Select recent context; preserve saved history.
-2. Add the system instruction to input only: no factory evidence or tools are available.
-3. Stream standard content. Create an assistant message only after nonempty `stop`.
+2. Add the system instruction to input only. With a retrieval client and a request
+   `search_scope`, a private routing call may request one `search_knowledge` query;
+   the evidence and a matching instruction go to the answer call only
+   (`runtime/retrieval.py`). A request photo is added to the current user message
+   only (`TurnImage` in per-run configuration, bytes not text, so it is never saved).
+3. Stream standard content as `text` and the provider's `reasoning_content` as
+   `reasoning` events (never saved, never part of the answer). Create an assistant
+   message only after nonempty `stop`.
 4. Read the full message from the graph's answer-node update.
 5. Finish the graph stream and synchronous checkpoint saving.
 6. Send `complete.answer`. The client replaces provisional text with this value.
@@ -95,7 +107,7 @@ The runtime reads custom text and node updates from one graph stream:
 - Database failure may leave a saved full answer without acknowledgement; no rollback guarantee.
 - Use fresh human input after failure, never `None` resume. Manual resend can duplicate context.
 - No automatic retry or replay. Manual requests may repeat effects; recovery after a crash is not guaranteed.
-- Lost final event → unconfirmed completion; no retrieval endpoint. Provider cancellation is best effort.
+- Lost final event → unconfirmed completion; read the history endpoint to see what was saved. Provider cancellation is best effort.
 
 ## Run and reload safely
 

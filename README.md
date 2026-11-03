@@ -205,7 +205,9 @@ each). See [job queue and workers](docs/features/knowledge-management.md#job-que
 Inside Compose, the API connects to `postgres:5432` and `ai-services-api:8080`;
 `API_DATABASE_URL` and `API_SPEECH_API_URL` override these defaults. Sign-in
 uses the migrated application database (`APP_DATABASE_URL`; in Compose,
-`API_APP_DATABASE_URL`) and `AUTH_ALLOWED_ORIGINS`; see
+`API_APP_DATABASE_URL`) and `AUTH_ALLOWED_ORIGINS`; agent chat needs `AGENT_API_TOKEN`
+and reaches the agent at `host.docker.internal:8010` (`API_AGENT_BASE_URL` overrides;
+see [agent conversations](docs/features/conversations.md)). Authentication: see
 [authentication](docs/features/authentication.md). For chat or embedding
 endpoints running on the Docker host, replace `localhost` in the corresponding
 `*_BASE_URL` with `host.docker.internal`. `VOICE_AUDIO_DIR` inside the API

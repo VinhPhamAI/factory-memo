@@ -32,8 +32,11 @@ const router = createBrowserRouter([
       },
       {
         path: "/ask/:threadId?",
+        // Live mode chats with the standalone agent; the mock demo keeps its fixture QA.
         lazy: async () => ({
-          Component: (await import("@/pages/ask")).AskPage,
+          Component: isLive
+            ? (await import("@/pages/conversations")).ConversationsPage
+            : (await import("@/pages/ask")).AskPage,
         }),
       },
       ...(isLive
