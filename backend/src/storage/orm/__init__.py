@@ -12,6 +12,7 @@ from backend.src.storage.orm.base import (
     RecordDates,
     new_id,
 )
+from backend.src.storage.orm.auth_sessions import AuthSession
 from backend.src.storage.orm.files import File
 from backend.src.storage.orm.inquiries import (
     EVENT_KINDS_REQUIRING_CONTENT,
@@ -49,6 +50,7 @@ __all__ = [
     "EVENT_KINDS_REQUIRING_CONTENT",
     "NAMING_CONVENTION",
     "TEXT_SEARCH_CONFIG",
+    "AuthSession",
     "Base",
     "ChangeDates",
     "ChunkStatus",

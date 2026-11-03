@@ -6,6 +6,7 @@ import {
   RouterProvider,
 } from "react-router-dom";
 import { WorkspaceProvider } from "@/hooks/workspace";
+import { AuthProvider, RequireAuth } from "@/hooks/auth";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Shell } from "@/components/shell";
 import { QaShell } from "@/components/qa-shell";
@@ -14,7 +15,14 @@ import "./index.css";
 
 const router = createBrowserRouter([
   {
-    element: isLive ? <QaShell /> : <Shell />,
+    // Live mode needs a signed-in account; the mock demo has no backend.
+    element: isLive ? (
+      <RequireAuth>
+        <QaShell />
+      </RequireAuth>
+    ) : (
+      <Shell />
+    ),
     // Lazy child routes load after the first render; nothing to show meanwhile.
     hydrateFallbackElement: <div aria-busy="true" />,
     children: [
@@ -99,7 +107,13 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <WorkspaceProvider>
       <TooltipProvider delayDuration={250}>
-        <RouterProvider router={router} />
+        {isLive ? (
+          <AuthProvider>
+            <RouterProvider router={router} />
+          </AuthProvider>
+        ) : (
+          <RouterProvider router={router} />
+        )}
       </TooltipProvider>
     </WorkspaceProvider>
   </React.StrictMode>,

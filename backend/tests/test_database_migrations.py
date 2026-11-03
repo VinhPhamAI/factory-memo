@@ -15,6 +15,7 @@ import io
 import os
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 from uuid import UUID, uuid4
@@ -31,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.src.storage.orm import (
+    AuthSession,
     Base,
     Conversation,
     ExtractionMode,
@@ -59,6 +61,8 @@ from backend.src.storage.orm import (
 
 DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 EMBEDDING_DIM = 3
+# Last revision before session storage; existing deployments upgrade from it.
+REVISION_BEFORE_SESSIONS = "3665f6870fa4"
 
 
 class ModelUnitTest(unittest.TestCase):
@@ -81,6 +85,7 @@ class ModelUnitTest(unittest.TestCase):
             set(Base.metadata.tables),
             {
                 "users",
+                "auth_sessions",
                 "machines",
                 "files",
                 "knowledge_bases",
@@ -230,6 +235,66 @@ class MigrationRevisionTest(MigratedDatabaseTest):
 
 
 @unittest.skipUnless(DATABASE_URL, "TEST_DATABASE_URL is not set")
+class SessionStorageUpgradeTest(unittest.TestCase):
+    """Upgrading a database that already holds accounts keeps them unchanged."""
+
+    def test_upgrade_preserves_existing_users(self) -> None:
+        database = DisposableDatabase(DATABASE_URL or "")
+        database.create()
+        try:
+            config = alembic_config(database.url)
+            engine = create_engine(database.url)
+            try:
+                with mock.patch.dict(os.environ, {"EMBEDDING_DIM": str(EMBEDDING_DIM)}):
+                    command.upgrade(config, REVISION_BEFORE_SESSIONS)
+                    # Stored hashes are opaque to the migration; formats vary on purpose.
+                    accounts = [
+                        (new_id(), f"{role.value}-user", role.value, password_hash)
+                        for role, password_hash in (
+                            (UserRole.EMPLOYEE, "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA"),
+                            (UserRole.EXPERT, "$2b$12$legacyBcryptHashValueKeptAsIs"),
+                            (UserRole.ADMIN, "pbkdf2_sha256$600000$salt$hash"),
+                        )
+                    ]
+                    with engine.begin() as conn:
+                        for user_id, username, role, password_hash in accounts:
+                            conn.execute(
+                                text(
+                                    "INSERT INTO users (id, username, display_name, password_hash, role) "
+                                    "VALUES (:id, :username, :username, :password_hash, :role)"
+                                ),
+                                {"id": user_id, "username": username, "password_hash": password_hash, "role": role},
+                            )
+
+                    command.upgrade(config, "head")
+                    command.check(config)
+                    # Rerunning the upgrade is a no-op.
+                    command.upgrade(config, "head")
+
+                    with engine.connect() as conn:
+                        rows = conn.execute(
+                            text("SELECT id, username, role, password_hash FROM users ORDER BY username")
+                        ).all()
+                    self.assertEqual(
+                        [tuple(row) for row in rows],
+                        sorted(accounts, key=lambda account: account[1]),
+                    )
+                    self.assertIn("auth_sessions", inspect(engine).get_table_names())
+
+                    command.downgrade(config, "-1")
+                    command.downgrade(config, "-1")
+                    self.assertNotIn("auth_sessions", inspect(engine).get_table_names())
+                    command.upgrade(config, "head")
+                    command.check(config)
+                    with engine.connect() as conn:
+                        self.assertEqual(conn.scalar(text("SELECT count(*) FROM users")), len(accounts))
+            finally:
+                engine.dispose()
+        finally:
+            database.drop()
+
+
+@unittest.skipUnless(DATABASE_URL, "TEST_DATABASE_URL is not set")
 class DatabaseRuleTest(MigratedDatabaseTest):
     def setUp(self) -> None:
         self.session = Session(self.engine)
@@ -341,6 +406,43 @@ class DatabaseRuleTest(MigratedDatabaseTest):
             self.session.execute(statement)
             self.session.flush()
         self.session.rollback()
+
+    def add_session(self, user: User, **values) -> AuthSession:
+        now = datetime.now(timezone.utc)
+        auth_session = AuthSession(
+            user_id=user.id,
+            access_token_digest=values.pop("access_token_digest", uuid4().hex * 2),
+            refresh_token_digest=values.pop("refresh_token_digest", uuid4().hex * 2),
+            access_expires_at=now + timedelta(minutes=15),
+            expires_at=now + timedelta(hours=72),
+            **values,
+        )
+        self.session.add(auth_session)
+        self.session.commit()
+        return auth_session
+
+    def test_session_token_digests_are_unique_sha256_values(self) -> None:
+        user = self.add_user()
+        first = self.add_session(user)
+
+        for values in (
+            {"access_token_digest": first.access_token_digest},
+            {"refresh_token_digest": first.refresh_token_digest},
+            {"access_token_digest": "raw-token"},
+        ):
+            with self.subTest(values=list(values)):
+                with self.assertRaises(IntegrityError):
+                    self.add_session(user, **values)
+                self.session.rollback()
+
+    def test_session_updates_set_updated_at(self) -> None:
+        auth_session = self.add_session(self.add_user())
+        before = auth_session.updated_at
+
+        auth_session.revoked_at = datetime.now(timezone.utc)
+        self.session.commit()
+
+        self.assertGreater(auth_session.updated_at, before)
 
     def test_usernames_must_be_stored_normalized(self) -> None:
         self.session.add(

@@ -116,6 +116,10 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
 
 ## Documentation style
 
+- Write implementation plans in actionable phases. Identify affected files,
+  dependencies, and completion checks. Include short illustrative code sketches
+  where they clarify the approach, and follow the engineering standards in them.
+
 - Write concise, impersonal, professional English. Lead with the reader's task or answer.
 - Prefer numbered steps for procedures, bullets for parallel points and tables for reference.
 - Keep paragraphs short. Remove repeated explanations and lengthy presentation-style prose.

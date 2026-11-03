@@ -2,7 +2,7 @@
 
 A Vietnamese-language QA UI for the backend knowledge agent, with a knowledge-base
 selector, streaming answers and a sources panel. React, TypeScript, Vite, Tailwind
-CSS and shadcn/ui. No account is needed.
+CSS and shadcn/ui. API mode requires sign-in; mock mode needs no account.
 
 `api` is the default mode. It offers QA (`/ask`) and live voice capture
 (`/capture`): microphone recording with live speaker-lettered transcript. The
@@ -19,7 +19,11 @@ without extraction. See [voice capture](../docs/features/voice-capture.md) and
 ## Run
 
 Prepare the database, restore/ingest the desired KB and configure model/embedding
-providers using the repository README. Start FastAPI from the repository root:
+providers using the repository README. For sign-in, apply the application database
+migrations ([database migrations](../docs/development/database-migrations.md)) and
+set `AUTH_ALLOWED_ORIGINS=http://127.0.0.1:5180` in the root `.env`. Start FastAPI
+from the repository root (on native Windows, add
+`--loop asyncio:SelectorEventLoop`; see [authentication](../docs/features/authentication.md#limitations)):
 
 ```sh
 uv run uvicorn backend.app:app --host 127.0.0.1 --port 8005
@@ -38,13 +42,25 @@ Open `http://127.0.0.1:5180`. If an existing `.env.local` sets
 mode. Port 5180 is used because 5173 is often taken by other local projects
 (`npm run dev` still uses 5173). Unsupported data modes fail explicitly.
 
-Keep `VITE_API_BASE_URL` empty for the same-origin setup. Vite proxies `/v1` to
-`BACKEND_URL` (default `http://127.0.0.1:8005`), avoiding cross-origin requests during
-development. Production hosting must reverse-proxy `/v1` to FastAPI and disable
-SSE response buffering. `VITE_API_BASE_URL` can instead select an API origin that
+Keep `VITE_API_BASE_URL` empty for the same-origin setup. Vite proxies `/v1` and
+`/auth` to `BACKEND_URL` (default `http://127.0.0.1:8005`), avoiding cross-origin
+requests during development. Production hosting must reverse-proxy `/v1` and `/auth`
+to FastAPI on the same origin as the frontend and disable SSE response buffering. `VITE_API_BASE_URL` can instead select an API origin that
 already permits the frontend origin via CORS; FastAPI does not enable CORS by
 default. `VITE_*` values are visible in the browser; never put API keys in them.
 Model credentials belong on the backend. Live questions may incur model costs.
+
+## Sign-in
+
+API mode shows the sign-in/signup screen until an account is signed in; see the
+[authentication API](../docs/features/authentication.md). `src/services/auth-api.ts`
+owns the client:
+
+- The access token is kept in memory only. After a reload, the session is restored
+  from the HttpOnly refresh cookie through `/auth/refresh`.
+- Refreshes are coalesced per tab and coordinated across tabs with the Web Locks
+  API and a `BroadcastChannel`. A tab that loses a refresh race may need to sign
+  in again.
 
 ## Live QA
 
@@ -133,6 +149,11 @@ npm run test:e2e
 # Regression coverage for the optional five-step mock demo:
 PLAYWRIGHT_DATA_MODE=mock npm run test:e2e
 ```
+
+Auth smoke test against a real backend: start the API with a migrated
+`APP_DATABASE_URL` and `AUTH_ALLOWED_ORIGINS` including the test origin, then run
+`PLAYWRIGHT_SUITE=auth npx playwright test` (optionally with `PLAYWRIGHT_CHANNEL=msedge`).
+It creates a new account on each run.
 
 `playwright.config.ts` uses port 5180 (override with `PLAYWRIGHT_PORT`) and starts the
 dev server if needed. Use a free `PLAYWRIGHT_PORT` when another Vite mode is already

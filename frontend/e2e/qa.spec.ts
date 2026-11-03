@@ -7,6 +7,25 @@ const bases = [
 const sse = (type: string, data = {}) =>
   `event: ${type}\ndata: ${JSON.stringify({ version: 1, type, data })}\n\n`;
 
+// Live screens need a signed-in session; these specs mock the backend.
+test.beforeEach(async ({ page }) => {
+  await page.route("**/auth/refresh", (route) =>
+    route.fulfill({
+      json: { access_token: "e2e", token_type: "bearer", expires_in: 900 },
+    }),
+  );
+  await page.route("**/auth/me", (route) =>
+    route.fulfill({
+      json: {
+        id: "e2e",
+        username: "e2e",
+        display_name: "E2E",
+        role: "employee",
+      },
+    }),
+  );
+});
+
 async function mockBases(page: Page) {
   await page.route("**/v1/knowledge-agent/knowledge-bases", (route) =>
     route.fulfill({ json: { knowledge_bases: bases } }),

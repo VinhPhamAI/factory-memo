@@ -1,11 +1,13 @@
 # Database schema proposal
 
-**Status: tables created; not used by services.** This document defines the target tables,
-relationships, and the work handled by each service. The models in `backend/src/storage/orm/`
-and the initial Alembic revisions create these tables, the updated processing tables and the
-database rules in a separate database (`APP_DATABASE_URL`); no API, worker or agent
-reads or writes them yet, and existing data has not been moved. See
-[database migrations](../development/database-migrations.md) for commands and enforced rules.
+**Status: tables created; only `users` and `auth_sessions` are used.** This document defines
+the target tables, relationships, and the work handled by each service. The models in
+`backend/src/storage/orm/` and the Alembic revisions create these tables, the updated processing
+tables and the database rules in a separate database (`APP_DATABASE_URL`). Authentication
+reads and writes `users` and `auth_sessions`; no other API, worker or agent uses these tables
+yet, and existing data has not been moved. See
+[database migrations](../development/database-migrations.md) for commands and enforced rules,
+and [authentication](../features/authentication.md) for login behavior.
 
 ## Purpose and scope
 
@@ -83,6 +85,8 @@ One account per employee, expert, or administrator.
 
 Do not reuse deleted accounts' usernames. This design assumes password login.
 Login through Google or another provider would need its own account-linking design.
+Disabling or deleting an account must revoke its sessions in `auth_sessions` in the
+same transaction; re-enabling it does not restore them.
 
 ### 2. `machines`
 
@@ -283,9 +287,34 @@ The pair `(inquiry_id, file_id)` must be unique. The event must belong to the sa
 Each file is attached once per inquiry; later responses can refer to it.
 Original attachments remain unchanged after submission.
 
+### 12. `auth_sessions`
+
+One signed-in device: the current access and refresh credentials of a login.
+
+| Column | Type | Rules and purpose |
+|---|---|---|
+| `id` | `uuid` | Primary key; stays the same when the credentials are replaced |
+| `user_id` | `uuid` | References `users.id` |
+| `access_token_digest` | `text` | Unique SHA-256 value of the current access credential; never the credential itself |
+| `refresh_token_digest` | `text` | Unique SHA-256 value of the current refresh credential |
+| `access_expires_at` | `timestamptz` | End of the current access credential: at most 15 minutes, never after `expires_at` |
+| `expires_at` | `timestamptz` | Fixed session end, 72 hours after login; refresh never extends it |
+| `revoked_at` | `timestamptz`, optional | Set at logout; a revoked session stays revoked |
+| `created_at`, `updated_at` | `timestamptz` | See conventions; no `deleted_at`, because revocation replaces hiding |
+
+- Each login creates a session, so one account can be signed in on several devices.
+- Refresh replaces both digests in one database transaction. An earlier refresh
+  credential then matches no row and is rejected.
+- A credential is usable only while its session is not revoked or expired and its
+  account is active and not deleted. The role is read from `users` on each request.
+- Change an account's sessions only after locking its `users` row, so login, refresh,
+  logout and disablement for one account happen one at a time.
+- Expired and revoked sessions are not removed yet; a cleanup rule is left for later.
+
 ## Relationships
 
 - A user can own many conversations, upload many files, and submit many sources.
+- A user can have many auth sessions. Each auth session belongs to one user.
 - A user can create many inquiries; experts can create their own inquiries too.
 - An expert can receive many inquiries. Each inquiry has one assigned expert.
 - A knowledge base can contain many sources and many chunks.
@@ -374,6 +403,7 @@ An index accelerates database lookups. Initial indexes should cover:
 | Active conversations | `(owner_id, updated_at, id)` |
 | Requested/assigned inquiries | Separate `(requested_by, updated_at, id)` and `(assigned_to, updated_at, id)` |
 | Inquiry history | `(inquiry_id, created_at, id)` |
+| Credential lookup and an account's sessions | Unique `access_token_digest` and `refresh_token_digest`; `auth_sessions.user_id` |
 | Find chunks/attachments from a source/file | `knowledge_chunk_sources.source_id`, `inquiry_files.file_id` |
 
 Also add indexes for frequently followed table references. Use database rules to
