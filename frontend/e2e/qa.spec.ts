@@ -124,13 +124,18 @@ test("agent chat creates a conversation, replaces provisional text and reopens s
   await expect(page.getByTestId("chat-answer")).toHaveText(
     /Kiểm tra cảm biến áp suất trước\./,
   );
-  await expect(page.getByTestId("conversation-select")).toHaveValue("chat-1");
+  await expect(page.getByTestId("chat-title")).toHaveText(
+    "Máy ép số 3 báo lỗi E12",
+  );
+  await expect(
+    page.getByRole("link", { name: "Máy ép số 3 báo lỗi E12" }),
+  ).toHaveAttribute("aria-current", "page");
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByTestId("conversation-delete").click();
   await expect(page).toHaveURL(/\/ask$/);
   await expect(
-    page.getByRole("option", { name: "Máy ép số 3 báo lỗi E12" }),
+    page.getByRole("link", { name: "Máy ép số 3 báo lỗi E12" }),
   ).toHaveCount(0);
 });
 

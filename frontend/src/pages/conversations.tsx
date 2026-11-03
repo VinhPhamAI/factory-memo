@@ -1,26 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowUp,
   ImageIcon,
   Loader2,
   Mic,
-  Pencil,
   RotateCw,
   Square,
-  Trash2,
 } from "lucide-react";
-import { useAuthClient } from "@/hooks/auth";
+import { useConversations } from "@/hooks/conversations";
 import { useDictation } from "@/hooks/dictation";
 import { BrandMark } from "@/components/brand";
 import { CitedAnswer } from "@/components/cited-answer";
+import { ThinkingBlock } from "@/components/thinking-block";
 import { Button } from "@/components/ui/button";
 import {
   ConversationError,
-  ConversationsApi,
   parseCitations,
   type Citation,
-  type Conversation,
   type SearchStatus,
 } from "@/services/conversations-api";
 
@@ -38,6 +35,9 @@ type Turn = {
   citations: Citation[];
   search?: SearchStatus;
   hasPhoto?: boolean;
+  /** Streamed model reasoning; shown collapsed and never saved. */
+  reasoning?: string;
+  thinkingSeconds?: number;
 };
 
 const TITLE_LENGTH = 80;
@@ -49,10 +49,7 @@ const errorMessage = (cause: unknown, fallback: string) =>
 export function ConversationsPage() {
   const { threadId: conversationId } = useParams();
   const navigate = useNavigate();
-  const auth = useAuthClient();
-  const api = useMemo(() => new ConversationsApi(auth), [auth]);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [listError, setListError] = useState("");
+  const { api, list, remember } = useConversations();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [historyState, setHistoryState] = useState<
@@ -73,7 +70,7 @@ export function ConversationsPage() {
   const shown = useRef<string | undefined>(conversationId);
   const scroll = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
-  const current = conversations.find((item) => item.id === conversationId);
+  const current = list.find((item) => item.id === conversationId);
   // The transcript goes into the composer for editing; it is never sent here.
   const dictation = useDictation(
     (wav, signal) => api.transcribe(wav, signal),
@@ -84,23 +81,6 @@ export function ConversationsPage() {
     },
   );
   const cancelDictation = dictation.cancel;
-
-  useEffect(() => {
-    const abort = new AbortController();
-    api
-      .list(abort.signal)
-      .then((items) => {
-        setConversations(items);
-        setListError("");
-      })
-      .catch((cause: unknown) => {
-        if (!abort.signal.aborted)
-          setListError(
-            errorMessage(cause, "Không tải được danh sách trò chuyện."),
-          );
-      });
-    return () => abort.abort();
-  }, [api]);
 
   useEffect(() => {
     // Switching conversations stops the old answer; it never updates this one.
@@ -156,13 +136,6 @@ export function ConversationsPage() {
   useEffect(() => {
     if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
   }, [turns]);
-
-  function remember(conversation: Conversation) {
-    setConversations((items) => [
-      conversation,
-      ...items.filter((item) => item.id !== conversation.id),
-    ]);
-  }
 
   async function send() {
     const message = query.trim();
@@ -232,9 +205,21 @@ export function ConversationsPage() {
       },
     ]);
     let text = "";
+    let reasoning = "";
+    let thinkingStarted: number | undefined;
+    // Thinking ends when the first answer text arrives.
+    const thinkingSeconds = () =>
+      thinkingStarted === undefined
+        ? undefined
+        : Math.round((Date.now() - thinkingStarted) / 1000);
     try {
       for await (const event of api.stream(id, message, abort.signal)) {
-        if (event.type === "text") {
+        if (event.type === "reasoning") {
+          thinkingStarted ??= Date.now();
+          reasoning += event.delta;
+          update({ reasoning });
+        } else if (event.type === "text") {
+          if (!text) update({ thinkingSeconds: thinkingSeconds() });
           text += event.delta;
           update({ text });
         } else if (event.type === "complete") {
@@ -263,92 +248,14 @@ export function ConversationsPage() {
     }
   }
 
-  async function rename() {
-    if (!current) return;
-    const title = window.prompt("Tên cuộc trò chuyện", current.title)?.trim();
-    if (!title || title === current.title) return;
-    try {
-      remember(await api.rename(current.id, title));
-    } catch (cause) {
-      setError(errorMessage(cause, "Không đổi tên được."));
-    }
-  }
-
-  async function remove() {
-    if (!current || !window.confirm(`Xoá cuộc trò chuyện "${current.title}"?`))
-      return;
-    try {
-      await api.remove(current.id);
-      setConversations((items) =>
-        items.filter((item) => item.id !== current.id),
-      );
-      void navigate("/ask");
-    } catch (cause) {
-      setError(errorMessage(cause, "Không xoá được cuộc trò chuyện."));
-    }
-  }
-
   return (
     <div className="ask-layout agent-chat-layout">
       <main className="chat-area">
-        <div className="qa-toolbar">
-          <label>
-            Cuộc trò chuyện
-            <select
-              aria-label="Cuộc trò chuyện"
-              data-testid="conversation-select"
-              value={conversationId ?? ""}
-              disabled={sending}
-              onChange={(event) =>
-                void navigate(
-                  event.target.value ? `/ask/${event.target.value}` : "/ask",
-                )
-              }
-            >
-              <option value="">Cuộc trò chuyện mới</option>
-              {conversationId && !current && (
-                <option value={conversationId}>Đang tải…</option>
-              )}
-              {conversations.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.title}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={sending || !conversationId}
-            onClick={() => void navigate("/ask")}
-          >
-            Trò chuyện mới
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Đổi tên cuộc trò chuyện"
-            disabled={sending || !current}
-            onClick={() => void rename()}
-          >
-            <Pencil size={15} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Xoá cuộc trò chuyện"
-            data-testid="conversation-delete"
-            disabled={sending || !current}
-            onClick={() => void remove()}
-          >
-            <Trash2 size={15} />
-          </Button>
-          {listError && (
-            <p role="alert" className="inline-error">
-              {listError}
-            </p>
-          )}
-        </div>
+        <header className="chat-header">
+          <h1 data-testid="chat-title">
+            {current?.title ?? (conversationId ? "" : "Trò chuyện mới")}
+          </h1>
+        </header>
         <div className="chat-scroll" ref={scroll}>
           {historyState === "loading" ? (
             <div className="chat-empty" aria-busy="true">
@@ -397,7 +304,14 @@ export function ConversationsPage() {
                       <BrandMark small />
                       <span>Factory memo</span>
                     </div>
-                    <div className="answer-prose">
+                    {turn.reasoning && (
+                      <ThinkingBlock
+                        reasoning={turn.reasoning}
+                        thinking={turn.status === "streaming" && !turn.text}
+                        seconds={turn.thinkingSeconds}
+                      />
+                    )}
+                    <div className="answer-prose" data-testid="answer-text">
                       {turn.text ? (
                         <CitedAnswer
                           text={turn.text}
@@ -505,52 +419,56 @@ export function ConversationsPage() {
                     ? "Đang nhận dạng giọng nói…"
                     : "Trợ lý chưa tra cứu kho tri thức"}
               </span>
-              <Button
-                type="button"
-                variant={dictation.state === "recording" ? "default" : "ghost"}
-                size="icon"
-                aria-label={
-                  dictation.state === "recording"
-                    ? "Dừng ghi âm"
-                    : "Ghi âm câu hỏi"
-                }
-                data-testid="dictation"
-                disabled={sending || dictation.state === "transcribing"}
-                onClick={() =>
-                  void (dictation.state === "recording"
-                    ? dictation.stop()
-                    : dictation.start(conversationId))
-                }
-              >
-                {dictation.state === "transcribing" ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : dictation.state === "recording" ? (
-                  <Square size={14} fill="currentColor" />
-                ) : (
-                  <Mic size={16} />
-                )}
-              </Button>
-              {sending ? (
+              <span className="composer-actions">
                 <Button
                   type="button"
+                  variant={
+                    dictation.state === "recording" ? "default" : "ghost"
+                  }
                   size="icon"
-                  aria-label="Dừng câu trả lời"
-                  data-testid="chat-stop"
-                  onClick={() => controller.current?.abort()}
+                  aria-label={
+                    dictation.state === "recording"
+                      ? "Dừng ghi âm"
+                      : "Ghi âm câu hỏi"
+                  }
+                  data-testid="dictation"
+                  disabled={sending || dictation.state === "transcribing"}
+                  onClick={() =>
+                    void (dictation.state === "recording"
+                      ? dictation.stop()
+                      : dictation.start(conversationId))
+                  }
                 >
-                  <Square size={15} fill="currentColor" />
+                  {dictation.state === "transcribing" ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : dictation.state === "recording" ? (
+                    <Square size={14} fill="currentColor" />
+                  ) : (
+                    <Mic size={16} />
+                  )}
                 </Button>
-              ) : (
-                <Button
-                  type="submit"
-                  size="icon"
-                  aria-label="Gửi câu hỏi"
-                  data-testid="chat-send"
-                  disabled={!query.trim() || historyState !== "idle"}
-                >
-                  <ArrowUp size={19} />
-                </Button>
-              )}
+                {sending ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    aria-label="Dừng câu trả lời"
+                    data-testid="chat-stop"
+                    onClick={() => controller.current?.abort()}
+                  >
+                    <Square size={15} fill="currentColor" />
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    size="icon"
+                    aria-label="Gửi câu hỏi"
+                    data-testid="chat-send"
+                    disabled={!query.trim() || historyState !== "idle"}
+                  >
+                    <ArrowUp size={19} />
+                  </Button>
+                )}
+              </span>
             </div>
           </form>
           <p className="composer-note">

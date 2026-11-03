@@ -25,7 +25,7 @@ test("signup, login, me, refresh and logout; the last access token then fails", 
 
   await page.getByLabel("Mật khẩu").fill(password);
   await page.getByRole("button", { name: "Đăng nhập", exact: true }).click();
-  await expect(page.getByTestId("sign-out")).toContainText("E2E User");
+  await expect(page.getByTestId("signed-in-user")).toContainText("E2E User");
   const cookie = (await page.context().cookies()).find(
     (item) => item.name === "refresh_token",
   );
@@ -37,7 +37,7 @@ test("signup, login, me, refresh and logout; the last access token then fails", 
 
   // A reload keeps no token in storage; the refresh cookie restores identity.
   await page.reload();
-  await expect(page.getByTestId("sign-out")).toContainText("E2E User");
+  await expect(page.getByTestId("signed-in-user")).toContainText("E2E User");
   const storage = await page.evaluate(
     () => localStorage.length + sessionStorage.length,
   );
@@ -75,13 +75,13 @@ test("two tabs share one session; a stale refresh leaves the winning cookie", as
   await first.getByLabel("Tên đăng nhập").fill(username);
   await first.getByLabel("Mật khẩu").fill(password);
   await first.getByRole("button", { name: "Đăng nhập", exact: true }).click();
-  await expect(first.getByTestId("sign-out")).toContainText("Tab User");
+  await expect(first.getByTestId("signed-in-user")).toContainText("Tab User");
   const stale = await refreshCookie();
 
   // Opening a second tab restores the session by rotating the shared cookie.
   const second = await context.newPage();
   await second.goto("/ask");
-  await expect(second.getByTestId("sign-out")).toContainText("Tab User");
+  await expect(second.getByTestId("signed-in-user")).toContainText("Tab User");
   const winner = await refreshCookie();
   expect(winner).not.toBe(stale);
 

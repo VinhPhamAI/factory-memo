@@ -43,6 +43,7 @@ export type ConversationHistory = {
  */
 export type StreamEvent =
   | { type: "status" }
+  | { type: "reasoning"; delta: string }
   | { type: "text"; delta: string }
   | {
       type: "complete";
@@ -124,6 +125,8 @@ function parseEvent(name: string, data: string): StreamEvent | null {
   if (name === "status") return { type: "status" };
   if (name === "text" && typeof value.delta === "string")
     return { type: "text", delta: value.delta };
+  if (name === "reasoning" && typeof value.delta === "string")
+    return { type: "reasoning", delta: value.delta };
   if (name === "complete" && typeof value.answer === "string")
     return {
       type: "complete",

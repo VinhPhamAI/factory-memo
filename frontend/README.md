@@ -68,9 +68,12 @@ owns the client:
 [conversations API](../docs/features/conversations.md); `src/services/conversations-api.ts`
 owns the client and `src/pages/conversations.tsx` the screen.
 
-- Conversations are saved on the server per account. The selector lists them,
-  newest activity first; rename and delete act on the open one. The first message
-  of a new chat creates it, titled with the message's first 80 characters.
+- API mode uses a left sidebar (a drawer below 860 px): brand, the three sections,
+  and on `/ask` a new-chat button and the conversation list, with the account and
+  sign-out at the bottom (`src/components/qa-shell.tsx`, `conversation-list.tsx`).
+- Conversations are saved on the server per account and listed newest activity
+  first; each item has rename and delete. The first message of a new chat creates
+  it, titled with the message's first 80 characters.
 - Provisional `text` deltas are replaced by `complete.answer` once the agent saved
   it. An `error` event marks the answer failed with its message. A stream that ends
   without a final event is marked unconfirmed with a link that reloads the saved
@@ -78,6 +81,8 @@ owns the client and `src/pages/conversations.tsx` the screen.
 - Switching conversations stops the open answer, and its late text never reaches
   the newly opened chat. Stop aborts the request; the agent stops generating.
 - A `401` refreshes the access token once and repeats the request.
+- Model reasoning (`reasoning` events) appears in a collapsed thinking block
+  above the answer; it is never saved, copied or cited.
 - The microphone button records up to 2 minutes; the transcript from
   `/v1/speech/transcriptions` is appended to the composer for editing and is sent
   only when the user sends. Switching chats drops a pending transcript and the draft.

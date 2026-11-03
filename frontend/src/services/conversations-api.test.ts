@@ -229,3 +229,24 @@ describe("ConversationsApi", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("reasoning events", () => {
+  it("passes reasoning through separately from answer text", async () => {
+    const { auth } = fakeAuth(() =>
+      sse(
+        'event: reasoning\ndata: {"delta":"Mã E12 thường là"}\n\n',
+        'event: reasoning\ndata: {"delta":" áp suất."}\n\n',
+        'event: text\ndata: {"delta":"Kiểm tra"}\n\n',
+        'event: complete\ndata: {"answer":"Kiểm tra"}\n\n',
+      ),
+    );
+    const events = await collect(
+      new ConversationsApi(auth, "").stream("0190-chat", "x"),
+    );
+    expect(events.slice(0, 3)).toEqual([
+      { type: "reasoning", delta: "Mã E12 thường là" },
+      { type: "reasoning", delta: " áp suất." },
+      { type: "text", delta: "Kiểm tra" },
+    ]);
+  });
+});

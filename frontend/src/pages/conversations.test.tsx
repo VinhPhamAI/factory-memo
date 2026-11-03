@@ -1,9 +1,17 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "@/hooks/auth";
 import { AuthClient } from "@/services/auth-api";
 import { MicRecorder } from "@/services/mic-recorder";
+import { ConversationList } from "@/components/conversation-list";
+import { ConversationsProvider } from "@/hooks/conversations";
 import { ConversationsPage } from "./conversations";
 
 vi.mock("@/services/mic-recorder", async (actual) => ({
@@ -71,6 +79,12 @@ function serve(
       await createGate;
       return Response.json(chat("chat-new", body.title), { status: 201 });
     }
+    const item = url.match(/^\/v1\/conversations\/([^/]+)$/);
+    if (item && method === "PATCH")
+      return Response.json(
+        chat(item[1], JSON.parse(init!.body as string).title),
+      );
+    if (item && method === "DELETE") return new Response(null, { status: 204 });
     const history = url.match(/^\/v1\/conversations\/([^/]+)\/history$/);
     if (history)
       return Response.json({
@@ -95,7 +109,17 @@ function serve(
 
 function show(path: string) {
   const router = createMemoryRouter(
-    [{ path: "/ask/:threadId?", element: <ConversationsPage /> }],
+    [
+      {
+        path: "/ask/:threadId?",
+        element: (
+          <ConversationsProvider>
+            <ConversationList />
+            <ConversationsPage />
+          </ConversationsProvider>
+        ),
+      },
+    ],
     { initialEntries: [path] },
   );
   render(
@@ -138,7 +162,7 @@ describe("ConversationsPage", () => {
   it("creates a conversation on first send and replaces provisional text with the saved answer", async () => {
     const { streams, created } = serve({});
     const router = show("/ask");
-    await screen.findByRole("option", { name: "Máy A" });
+    await screen.findByRole("link", { name: "Máy A" });
     ask("Máy ép số 3 báo lỗi E12");
 
     await waitFor(() => expect(streams).toHaveLength(1));
@@ -248,7 +272,7 @@ describe("ConversationsPage", () => {
     await waitFor(() => expect(respond).toBeDefined());
     await router.navigate("/ask/chat-b");
     await waitFor(() =>
-      expect(screen.getByTestId("conversation-select")).toHaveValue("chat-b"),
+      expect(screen.getByTestId("chat-title")).toHaveTextContent("Máy B"),
     );
     respond(Response.json({ text: "câu cũ" }));
     await waitFor(() =>
@@ -280,10 +304,27 @@ describe("ConversationsPage", () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
+  it("renames and deletes a conversation from the sidebar", async () => {
+    serve({ "chat-a": [] });
+    const router = show("/ask/chat-a");
+    await screen.findByRole("link", { name: "Máy A" });
+    vi.spyOn(window, "prompt").mockReturnValue("Máy ép E12");
+    fireEvent.click(screen.getByRole("button", { name: "Đổi tên Máy A" }));
+    expect(await screen.findByTestId("chat-title")).toHaveTextContent(
+      "Máy ép E12",
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Xoá Máy ép E12" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/ask"));
+    expect(
+      screen.queryByRole("link", { name: "Máy ép E12" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("titles a new chat from a multi-line first message without line breaks", async () => {
     const { streams, created } = serve({});
     show("/ask");
-    await screen.findByRole("option", { name: "Máy A" });
+    await screen.findByRole("link", { name: "Máy A" });
     ask("  Máy ép số 3\nlog:\tE12  ");
     await waitFor(() => expect(streams).toHaveLength(1));
     expect(created).toEqual([{ title: "Máy ép số 3 log: E12" }]);
@@ -296,13 +337,13 @@ describe("ConversationsPage", () => {
       new Promise<void>((resolve) => (finishCreate = resolve)),
     );
     const router = show("/ask");
-    await screen.findByRole("option", { name: "Máy A" });
+    await screen.findByRole("link", { name: "Máy A" });
     ask("Câu hỏi mới");
     await router.navigate("/ask/chat-b");
     await screen.findByText("Câu hỏi của máy B");
     finishCreate();
 
-    await screen.findByRole("option", { name: "Câu hỏi mới" });
+    await screen.findByRole("link", { name: "Câu hỏi mới" });
     expect(router.state.location.pathname).toBe("/ask/chat-b");
     expect(streams).toHaveLength(0);
     expect(screen.queryByText("Câu hỏi mới", { selector: "p" })).toBeNull();
@@ -344,6 +385,40 @@ describe("ConversationsPage", () => {
       String(url).endsWith("/stream"),
     );
     expect(streamCalls).toHaveLength(1);
+  });
+
+  it("shows reasoning in a collapsed thinking block that opens on click", async () => {
+    const { streams } = serve({});
+    show("/ask/chat-a");
+    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    ask("Lỗi E12");
+    await waitFor(() => expect(streams).toHaveLength(1));
+    streams[0].push(
+      'event: reasoning\ndata: {"delta":"Mã E12 thường liên quan áp suất."}\n\n',
+    );
+
+    const toggle = await screen.findByRole("button", { name: /Đang suy nghĩ/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByText("Mã E12 thường liên quan áp suất."),
+    ).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(
+      screen.getByText("Mã E12 thường liên quan áp suất."),
+    ).toBeInTheDocument();
+
+    streams[0].push('event: text\ndata: {"delta":"Kiểm tra"}\n\n');
+    streams[0].push(
+      'event: complete\ndata: {"answer":"Kiểm tra cảm biến."}\n\n',
+    );
+    const answer = screen.getByTestId("chat-answer");
+    await waitFor(() => expect(answer).toHaveAttribute("data-status", "saved"));
+    expect(
+      screen.getByRole("button", { name: /Đã suy nghĩ trong \d+ giây/ }),
+    ).toBeInTheDocument();
+    expect(within(answer).getByTestId("answer-text")).not.toHaveTextContent(
+      "Mã E12 thường liên quan áp suất.",
+    );
   });
 
   it("stops the old answer when switching conversations and ignores its late text", async () => {
