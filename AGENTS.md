@@ -15,7 +15,8 @@ Code and configuration take precedence over older documentation.
   identifies current entry points; service guides define actual setup commands.
 - The [database schema](docs/architecture/database-schema.md) tables, including the
   processing tables, exist as models and Alembic revisions in a separate database
-  (`APP_DATABASE_URL`), but services do not use them yet. A merged design document
+  (`APP_DATABASE_URL`). Only authentication (`users`, `auth_sessions`) and agent
+  chat (`conversations`) use them so far. A merged design document
   or migration is not proof of working service code.
 
 ## Purpose and scope
@@ -177,6 +178,8 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
   [Industrial QA](docs/features/industrial-qa.md): domain implementation/configuration.
 - [Knowledge management](docs/features/knowledge-management.md),
   [conflicts](docs/features/conflict-detection.md): jobs, extraction/review and duplicates.
+- [Agent conversations](docs/features/conversations.md): signed-in chat with the standalone
+  agent; conversation list in the app database, messages in agent checkpoints.
 - [Voice capture](docs/features/voice-capture.md), [uploads](docs/features/document-uploads.md),
   [speech service](deployments/speech/README.md): capture, storage and deployment.
 - [AI services API](deployments/ai-services-api/README.md): the one port in front of
