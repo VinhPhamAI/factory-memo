@@ -83,7 +83,9 @@ The runtime reads custom text and node updates from one graph stream:
    the evidence and a matching instruction go to the answer call only
    (`runtime/retrieval.py`). A request photo is added to the current user message
    only (`TurnImage` in per-run configuration, bytes not text, so it is never saved).
-3. Stream standard content. Create an assistant message only after nonempty `stop`.
+3. Stream standard content as `text` and the provider's `reasoning_content` as
+   `reasoning` events (never saved, never part of the answer). Create an assistant
+   message only after nonempty `stop`.
 4. Read the full message from the graph's answer-node update.
 5. Finish the graph stream and synchronous checkpoint saving.
 6. Send `complete.answer`. The client replaces provisional text with this value.

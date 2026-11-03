@@ -15,7 +15,13 @@ from denso_agent.runtime.errors import AgentError
 from denso_agent.runtime.graph import TurnImage
 from denso_agent.schemas.chat import AttachmentRef, ChatHistory, HistoryMessage, ImageAttachment
 from denso_agent.schemas.citations import Citation, SearchScope
-from denso_agent.schemas.events import CompleteEvent, ErrorEvent, StatusEvent, TextEvent
+from denso_agent.schemas.events import (
+    CompleteEvent,
+    ErrorEvent,
+    ReasoningEvent,
+    StatusEvent,
+    TextEvent,
+)
 
 
 def _answer_from_update(update: object) -> AIMessage:
@@ -274,6 +280,9 @@ class AgentRuntime:
                             delta = part["data"].get("delta")
                             if delta:
                                 yield event("text", TextEvent, delta=delta)
+                            reasoning = part["data"].get("reasoning")
+                            if reasoning:
+                                yield event("reasoning", ReasoningEvent, delta=reasoning)
                         elif part["type"] == "updates":
                             if final_answer is not None:
                                 raise ValueError(

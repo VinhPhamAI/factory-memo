@@ -92,7 +92,9 @@ separate package from the older backend agent.
   preserve the legacy endpoint and KB-list endpoint. Validate `[K:<id>]`/`[D:<id>]`
   citations against retrieved evidence. Thread history is in memory per KB.
 - Preserve public stream events and allowlist trace inputs/summaries. Never expose
-  raw transcripts, secrets, embeddings or model reasoning in public traces.
+  raw transcripts, secrets or embeddings in public traces. Model reasoning may be
+  streamed only to the agent chat as a separate, labelled "thinking" event; never
+  save it or put it in answers, citations, history or traces.
 
 ## Benchmark rules
 

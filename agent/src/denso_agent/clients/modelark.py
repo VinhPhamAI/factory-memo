@@ -12,6 +12,8 @@ from denso_agent.runtime.errors import AgentError
 from denso_agent.runtime.retrieval import SEARCH_TOOL
 
 MAX_ANSWER_CHARACTERS = 32_000
+# Reasoning beyond this is not forwarded; the answer still completes.
+MAX_REASONING_CHARACTERS = 64_000
 # Enough for one tool call with a short query.
 ROUTING_MAX_TOKENS = 256
 
@@ -136,15 +138,19 @@ class ModelArk:
 
         Args:
             stream: Open SDK stream yielding Chat Completion chunks.
-            writer: Receives each accepted fragment before the next is consumed.
+            writer: Receives each accepted answer fragment as `{"delta": text}`
+                and reasoning as `{"reasoning": text}`, before the next chunk.
 
         Returns:
-            Completed visible answer, excluding private reasoning fields.
+            Completed visible answer. Reasoning text is sent to `writer` as
+            `{"reasoning": text}` parts (at most MAX_REASONING_CHARACTERS) and is
+            never part of the answer.
 
         Raises:
             AgentError: Empty, oversized, filtered or unfinished output.
         """
         fragments: list[str] = []
+        reasoning_size = 0
         size = 0
         reason = None
         try:
@@ -152,6 +158,12 @@ class ModelArk:
                 for choice in chunk.choices:
                     if getattr(choice, "index", 0) != 0:
                         continue
+                    reasoning = getattr(choice.delta, "reasoning_content", None)
+                    if reasoning and reasoning_size < MAX_REASONING_CHARACTERS:
+                        # Shown in the chat as "thinking"; never part of the answer.
+                        reasoning = reasoning[: MAX_REASONING_CHARACTERS - reasoning_size]
+                        reasoning_size += len(reasoning)
+                        writer({"reasoning": reasoning})
                     content = choice.delta.content
                     if content:
                         if reason is not None:

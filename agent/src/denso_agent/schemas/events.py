@@ -22,6 +22,15 @@ class StatusEvent(Event):
     state: Literal["generating"] = "generating"
 
 
+class ReasoningEvent(Event):
+    """Deliver the model's reasoning text, shown as unverified "thinking".
+
+    It is never part of the answer and is not saved.
+    """
+
+    delta: str
+
+
 class TextEvent(Event):
     """Deliver provisional answer text until completion is acknowledged."""
 

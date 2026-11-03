@@ -50,11 +50,16 @@ renaming moves `updated_at`.
 ## Stream and history
 
 - The stream forwards the agent's SSE events unchanged and unbuffered: `status`,
-  `text` (provisional `delta`), then one final `complete` (`answer`) or `error`
+  `reasoning` (model thinking, when the model reasons), `text` (provisional
+  `delta`), then one final `complete` (`answer`) or `error`
   (`code`, `message`, `retryable`). See the [agent API](../../agent/docs/api.md#handle-the-stream).
 - Replace provisional text with `complete.answer`; `complete` is sent only after
   the agent saved the answer. A stream that ends without a final event leaves the
   answer unconfirmed: reopen history to see what was saved.
+- The UI shows reasoning in a collapsed "Đang suy nghĩ…" block that becomes
+  "Đã suy nghĩ trong N giây" once the answer starts; clicking it shows the text.
+  Reasoning is not saved, so reopened history shows only answers. Reasoning
+  models can think for 10 seconds or more before the first answer word.
 - Closing the browser request closes the agent stream, which stops generation and
   frees the conversation for a new message. Nothing is resent automatically.
 - History comes from the agent checkpoint: `{role, text, citations, attachment}`

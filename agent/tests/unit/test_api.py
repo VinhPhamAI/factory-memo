@@ -619,3 +619,22 @@ async def test_answer_without_saved_metadata_completes_without_citations(
     complete = [data for name, data in parse_events(response.text) if name == "complete"]
     assert complete[0]["citations"] == []
     assert complete[0]["search"] == "not_used"
+
+
+async def test_reasoning_is_streamed_as_its_own_event_and_not_saved(client, runtime):
+    """Reasoning parts become `reasoning` events; text and the answer exclude them."""
+
+    original = runtime.graph.astream
+
+    async def astream(*args, **kwargs):
+        yield {"type": "custom", "data": {"reasoning": "Kiểm tra mã E12"}}
+        async for part in original(*args, **kwargs):
+            yield part
+
+    runtime.graph.astream = astream
+    response = await client.post("/v1/agent/stream", json=payload(), headers=AUTH)
+    events = parse_events(response.text)
+    assert [name for name, _ in events] == ["status", "reasoning", "text", "complete"]
+    assert events[1][1]["delta"] == "Kiểm tra mã E12"
+    assert [data["sequence"] for _, data in events] == [1, 2, 3, 4]
+    assert "Kiểm tra mã E12" not in events[-1][1]["answer"]

@@ -236,3 +236,67 @@ async def test_route_failure_is_a_sanitized_provider_error():
         await model.route([])
     assert caught.value.code == "provider_error"
     assert "private" not in caught.value.message
+
+
+def reasoning_chunk(reasoning=None, content=None, finish=None):
+    """One SDK chunk carrying reasoning text, answer text or a finish marker."""
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content=content, reasoning_content=reasoning),
+                finish_reason=finish,
+            )
+        ]
+    )
+
+
+class ReasoningStream(Stream):
+    """Yield prepared chunks in order."""
+
+    def __init__(self, chunks):
+        super().__init__([], None)
+        self.chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_reasoning_is_streamed_separately_and_excluded_from_the_answer():
+    """Reasoning parts reach the writer before the answer but never join it."""
+    stream = ReasoningStream(
+        [
+            reasoning_chunk(reasoning="Kiểm tra mã lỗi"),
+            reasoning_chunk(reasoning=" E12."),
+            reasoning_chunk(content="Kiểm tra cảm biến."),
+            reasoning_chunk(finish="stop"),
+        ]
+    )
+    parts = []
+    answer = await ModelArk.consume(stream, parts.append)
+    assert answer == "Kiểm tra cảm biến."
+    assert parts == [
+        {"reasoning": "Kiểm tra mã lỗi"},
+        {"reasoning": " E12."},
+        {"delta": "Kiểm tra cảm biến."},
+    ]
+    assert stream.closed
+
+
+@pytest.mark.asyncio
+async def test_reasoning_beyond_its_limit_is_dropped_without_failing():
+    """Very long reasoning stops being forwarded; the answer still completes."""
+    from denso_agent.clients.modelark import MAX_REASONING_CHARACTERS
+
+    stream = ReasoningStream(
+        [
+            reasoning_chunk(reasoning="x" * MAX_REASONING_CHARACTERS),
+            reasoning_chunk(reasoning="overflow"),
+            reasoning_chunk(content="ok", finish="stop"),
+        ]
+    )
+    parts = []
+    assert await ModelArk.consume(stream, parts.append) == "ok"
+    assert {"reasoning": "overflow"} not in parts
+    assert parts[-1] == {"delta": "ok"}

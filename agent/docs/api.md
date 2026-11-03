@@ -43,6 +43,7 @@ within the request).
 | Event | Additional fields | Client action |
 |---|---|---|
 | `status` | `state: "generating"` | Show that the request was accepted. |
+| `reasoning` | `delta: string` | Append to a separate, collapsed "thinking" view. The provider's reasoning: unverified, never part of the answer, not saved, at most 64000 characters per answer. Sent only by models that reason. |
 | `text` | `delta: string` | Append provisional text. |
 | `complete` | `finish_reason: "stop"`, required `answer: string`, `citations`, `search` | Replace provisional text with the whole saved answer; link its citations. |
 | `error` | `code`, `message`, `retryable` | Mark the answer as unfinished. |
@@ -92,7 +93,7 @@ Codes: `timeout`, `provider_error`, `context_limit`, `output_limit`,
 - `retryable` permits a fresh manual attempt; duplicate-free execution is not guaranteed.
 - No automatic retry or replay occurs.
 - Length-limited, filtered, empty, and unfinished answers never complete successfully.
-- Raw exceptions, provider error bodies, credentials, and private reasoning are excluded.
+- Raw exceptions, provider error bodies and credentials are excluded. Model reasoning is sent only as `reasoning` events.
 
 ## Knowledge search and citations
 
