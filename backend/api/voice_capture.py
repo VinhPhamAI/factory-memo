@@ -254,8 +254,6 @@ class VoiceCaptureService:
             "recognition": outcome.path,
             "realtime_error": outcome.realtime_error,
             "realtime_sessions": outcome.sessions,
-            "diarization_error": outcome.diarization_error,
-            "recovered_utterances": outcome.recovered,
             "utterances": [utterance.to_json() for utterance in outcome.utterances],
         }, ensure_ascii=False, indent=1), encoding="utf-8")
         metadata = {
@@ -274,18 +272,15 @@ class VoiceCaptureService:
                 "format": "wav/pcm16/mono",
             },
             "asr": {
-                "service": "nemo-speech.cpp",
+                "service": "viegem-asr",
+                "model": "5CD-AI/VieGem-ASR",
                 "language": language,
-                # Speakers come from one diarization pass over the whole file.
-                "diarization": "file" if outcome.diarization_error is None else "failed",
+                # The speech service does not label speakers.
+                "diarization": "none",
                 "endpointing_ms": endpointing_ms,
                 "recognition": outcome.path,
                 **({"realtime_sessions": outcome.sessions} if outcome.sessions else {}),
-                # Speech the diarizer heard that recognition missed, transcribed alone.
-                **({"recovered_utterances": outcome.recovered} if outcome.recovered else {}),
                 **({"realtime_error": outcome.realtime_error} if outcome.realtime_error else {}),
-                **({"diarization_error": outcome.diarization_error}
-                   if outcome.diarization_error else {}),
             },
             # Letters name voices in this recording; reviewers may add names.
             "speakers": {letter: {"name": None} for letter in speaker_letters(turns)},
@@ -753,11 +748,10 @@ async def upload_recording(
         raise HTTPException(422, str(exc))
     client = service.speech_client()
     try:
-        utterances, diarization_error, recovered = await recognize_file(client, path)
+        utterances = await recognize_file(client, path)
         conversation_id = await service.save_recording(
             kb, name=name, recorded_at=started, recorder=recorder,
-            outcome=RecognitionOutcome(utterances, "file", diarization_error=diarization_error,
-                                       recovered=recovered),
+            outcome=RecognitionOutcome(utterances, "file"),
             clean=clean,
             capture_mode="upload", language=client.settings.language,
             endpointing_ms=client.settings.endpointing_ms,

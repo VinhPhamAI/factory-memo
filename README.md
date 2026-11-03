@@ -145,16 +145,17 @@ local imports and other restore options.
 
 ### Optional: speech service
 
-`speech-api` (NeMo-Speech.cpp with Nemotron 3.5 streaming ASR and Nemotron 3
-diarization) needs an NVIDIA GPU and the NVIDIA Container Toolkit:
+`speech-api` (VieGem-ASR Vietnamese speech recognition, no speaker
+diarization) is defined in the AI overlay `deployments/ai.compose.yml` and needs
+an NVIDIA GPU (about 2 GB of memory) and the NVIDIA Container Toolkit:
 
 ```bash
 bash deployments/speech/setup.sh && bash deployments/speech/up.sh
-bash deployments/speech/smoke_test.sh
+bash deployments/speech/smoke_test.sh [speech.wav ["reference transcript"]]
 ```
 
 See the [speech service guide](deployments/speech/README.md). It transcribes
-audio into speaker turns for the UI's voice capture, which saves the original
+audio into transcript turns for the UI's voice capture, which saves the original
 audio to `data/audio/` and ingests the transcript into the selected knowledge
 base; see [voice capture](docs/features/voice-capture.md) for storage and schema.
 
@@ -194,10 +195,18 @@ corresponding `*_BASE_URL` with `host.docker.internal`. `VOICE_AUDIO_DIR` inside
 the API container is fixed to `/app/data/audio`, backed by the host's `data/audio/`.
 
 Speech is optional: prepare it with `deployments/speech/setup.sh`, then start it
-with `deployments/speech/up.sh` as above. After setup, the full stack can also be
-started with `docker compose --env-file .env -f deployments/docker-compose.yml
---profile speech up -d --build`. Without that profile, `up -d --build` starts
-the API, the worker and PostgreSQL. Document uploads and QA do not require speech.
+with `deployments/speech/up.sh` as above. `deployments/docker-compose.yml` alone
+starts the API, the worker and PostgreSQL. After setup, add the AI overlay to
+start the full stack in the same Compose project and network:
+
+```bash
+docker compose --env-file .env -f deployments/docker-compose.yml \
+  -f deployments/ai.compose.yml up -d --build
+```
+
+Commands that use only the base file report `speech-api` as an orphan
+container; ignore the warning, and do not pass `--remove-orphans` unless speech
+should stop. Document uploads and QA do not require speech.
 
 **Alternative — API on the host:**
 

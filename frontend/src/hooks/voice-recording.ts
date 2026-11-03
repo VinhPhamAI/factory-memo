@@ -13,7 +13,7 @@ import {
 export interface LiveTurn {
   /** Same T01, T02 … numbering the server gives the saved transcript. */
   id: string;
-  /** Null until diarization has labelled this stretch of audio. */
+  /** Null for recorded audio: the speech service does not label speakers. */
   speaker: string | null;
   text: string;
   start: number | null;
@@ -29,7 +29,7 @@ export interface LiveTranscript {
 export type ServerEvent =
   | { type: "ready"; audio_file: string }
   | { type: "partial"; text: string }
-  /** Every turn so far; speakers may be relabelled as more audio is diarized. */
+  /** Every turn so far, numbered as the stored transcript will be. */
   | { type: "turns"; turns: LiveTurn[] }
   | { type: "recognition_lost" }
   | { type: "saving" }

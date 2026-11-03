@@ -3,15 +3,14 @@
 # Usage: bash deployments/speech/up.sh [--no-build]
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-[ -f "$SOURCE_DIR/docker/Dockerfile" ] || die "missing $SOURCE_DIR; run deployments/speech/setup.sh"
-for file in "$ASR_FILE" "$DIAR_FILE"; do
-    [ -s "$MODEL_DIR/$file" ] || die "missing $MODEL_DIR/$file; run deployments/speech/setup.sh"
+for file in "$ASR_DIR/viegem_asr.pt" "$ASR_DIR/asr/model.py" "$ENCODER_DIR/model.safetensors"; do
+    [ -s "$file" ] || die "missing $file; run deployments/speech/setup.sh"
 done
 
 build_flag="--build"
 [ "${1:-}" = "--no-build" ] && build_flag=""
 
-log "starting speech-api (first build compiles CUDA kernels and can take a while)"
+log "starting speech-api (the first build downloads PyTorch and can take a while)"
 compose up -d $build_flag speech-api
 
 timeout_s="${SPEECH_READY_TIMEOUT:-300}"

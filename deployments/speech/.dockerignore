@@ -1,0 +1,4 @@
+*
+!requirements.txt
+!viegem_server/**
+**/__pycache__

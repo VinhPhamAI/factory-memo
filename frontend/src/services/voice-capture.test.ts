@@ -58,7 +58,7 @@ describe("live transcript", () => {
     expect(state).toEqual({ turns: [first], partial: "" });
 
     state = applyTranscriptEvent(state, { type: "partial", text: "Từ" });
-    // Diarization relabels the same text: the partial stays.
+    // A list that adds no text (only changed labels) keeps the partial.
     const labelled = { ...first, speaker: "A" };
     state = applyTranscriptEvent(state, { type: "turns", turns: [labelled] });
     expect(state).toEqual({ turns: [labelled], partial: "Từ" });

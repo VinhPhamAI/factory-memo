@@ -1,0 +1,48 @@
+# Self-hosted AI services. Overlay on the backend stack so the API reaches them
+# by service name (same Compose project and network):
+#   docker compose --env-file .env -f deployments/docker-compose.yml \
+#     -f deployments/ai.compose.yml up -d --build speech-api
+
+services:
+  # VieGem-ASR (5CD-AI/VieGem-ASR): Vietnamese / Vietnamese-English CTC speech
+  # recognition on the EmbeddingGemma 2 audio encoder, with Silero voice
+  # activity detection and model-based end-of-utterance detection. No speaker
+  # diarization. Download the weights first with deployments/speech/setup.sh.
+  speech-api:
+    build:
+      context: ./speech
+    image: local/viegem-asr:cuda
+    container_name: speech-api
+    restart: unless-stopped
+    environment:
+      VIEGEM_MODEL_DIR: /models/VieGem-ASR
+      VIEGEM_ENCODER_DIR: /models/embeddinggemma-2
+      SPEECH_LANGUAGE: "${SPEECH_LANGUAGE:-vi-VN}"
+      # Silence (ms) after the last recognized word that ends an utterance;
+      # clients may override it per session with `endpointing_ms`.
+      SPEECH_EOU_MS: "${SPEECH_EOU_MS:-800}"
+      SPEECH_MAX_BATCH: "${SPEECH_MAX_BATCH:-8}"
+      # Silero VAD: 0 disables it; the threshold is the speech probability
+      # (0.1-0.9) a 32 ms chunk needs to start speech.
+      SPEECH_VAD: "${SPEECH_VAD:-1}"
+      SPEECH_VAD_THRESHOLD: "${SPEECH_VAD_THRESHOLD:-0.5}"
+      SPEECH_COMPILE: "${SPEECH_COMPILE:-0}"
+    ports:
+      - "127.0.0.1:${SPEECH_API_PORT:-8080}:8080"
+    volumes:
+      - ../models/VieGem-ASR:/models/VieGem-ASR:ro
+      - ../models/embeddinggemma-2:/models/embeddinggemma-2:ro
+    shm_size: "2gb"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=5).read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${SPEECH_GPU_ID:-0}"]
+              capabilities: [gpu]
