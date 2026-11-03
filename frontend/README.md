@@ -78,7 +78,14 @@ owns the client and `src/pages/conversations.tsx` the screen.
 - Switching conversations stops the open answer, and its late text never reaches
   the newly opened chat. Stop aborts the request; the agent stops generating.
 - A `401` refreshes the access token once and repeats the request.
-- The agent has no knowledge search yet, so answers carry no sources. The legacy
+- The microphone button records up to 2 minutes; the transcript from
+  `/v1/speech/transcriptions` is appended to the composer for editing and is sent
+  only when the user sends. Switching chats drops a pending transcript and the draft.
+- Saved `[Sn]` citations become buttons that show the cited excerpt; other markers
+  stay text. Empty and failed searches show a note. User turns saved with a photo
+  show a photo label (no preview until an authorized file route exists).
+- Knowledge search and photo sending are not connected yet, so live answers carry
+  no sources. The legacy
   knowledge-base QA (`/v1/knowledge-agent/{kb}/stream`, the KB selector and the
   citation panel in `src/pages/ask.tsx`) is no longer shown in API mode; mock mode
   still uses that page with fixture data.

@@ -32,13 +32,13 @@ const sse = (...chunks: string[]) =>
   );
 
 function fakeAuth(...responses: (() => Response)[]) {
-  const fetch = vi.fn<
-    (url: string, init?: RequestInit) => Promise<Response>
-  >(async () => {
-    const next = responses.shift();
-    if (!next) throw new Error("Unexpected request");
-    return next();
-  });
+  const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+    async () => {
+      const next = responses.shift();
+      if (!next) throw new Error("Unexpected request");
+      return next();
+    },
+  );
   const refresh = vi.fn(async () => true);
   return { auth: { authorizedFetch: fetch, refresh }, fetch, refresh };
 }
@@ -91,9 +91,9 @@ describe("ConversationsApi", () => {
       truncated: true,
     };
     const { auth } = fakeAuth(() => json(history));
-    expect(await new ConversationsApi(auth, "").history(conversation.id)).toEqual(
-      history,
-    );
+    expect(
+      await new ConversationsApi(auth, "").history(conversation.id),
+    ).toEqual(history);
   });
 
   it("decodes provisional text and the saved answer across split chunks", async () => {
@@ -113,11 +113,46 @@ describe("ConversationsApi", () => {
       { type: "status" },
       { type: "text", delta: "Kiểm" },
       { type: "text", delta: " tra" },
-      { type: "complete", answer: "Kiểm tra cảm biến." },
+      {
+        type: "complete",
+        answer: "Kiểm tra cảm biến.",
+        citations: [],
+        search: "not_used",
+      },
     ]);
     const [url, init] = fetch.mock.calls[0];
     expect(url).toBe("/v1/conversations/0190-chat/stream");
     expect(JSON.parse(init!.body as string)).toEqual({ message: "Lỗi E12" });
+  });
+
+  it("keeps the saved citations and search outcome of a completed answer", async () => {
+    const citation = {
+      marker: "S1",
+      evidence_id: "chunk-71",
+      title: "MR-JE manual",
+      excerpt: "Kiểm tra cảm biến.",
+      location: "trang 71",
+    };
+    const { auth } = fakeAuth(() =>
+      sse(
+        `event: complete\ndata: ${JSON.stringify({
+          answer: "Xem [S1].",
+          citations: [citation, { marker: "S2" }],
+          search: "results",
+        })}\n\n`,
+      ),
+    );
+    const events = await collect(
+      new ConversationsApi(auth, "").stream(conversation.id, "x"),
+    );
+    expect(events).toEqual([
+      {
+        type: "complete",
+        answer: "Xem [S1].",
+        citations: [citation],
+        search: "results",
+      },
+    ]);
   });
 
   it("reports an agent error event", async () => {
@@ -140,7 +175,9 @@ describe("ConversationsApi", () => {
 
   it("marks a stream that ends without a final event as interrupted", async () => {
     const { auth } = fakeAuth(() =>
-      sse('event: text\ndata: {"delta":"partial"}\n\nevent: complete\ndata: {"ans'),
+      sse(
+        'event: text\ndata: {"delta":"partial"}\n\nevent: complete\ndata: {"ans',
+      ),
     );
     const events = await collect(
       new ConversationsApi(auth, "").stream(conversation.id, "x"),
@@ -161,7 +198,9 @@ describe("ConversationsApi", () => {
     );
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(events).toEqual([{ type: "complete", answer: "ok" }]);
+    expect(events).toEqual([
+      { type: "complete", answer: "ok", citations: [], search: "not_used" },
+    ]);
   });
 
   it("turns rejected requests into typed errors without retrying", async () => {

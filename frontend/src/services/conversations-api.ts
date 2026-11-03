@@ -8,7 +8,25 @@ export type Conversation = {
   updated_at: string;
 };
 
-export type HistoryMessage = { role: "user" | "assistant"; text: string };
+/** Evidence that a marker such as [S1] in a saved answer refers to. */
+export type Citation = {
+  marker: string;
+  evidence_id: string;
+  title: string;
+  excerpt: string;
+  location: string | null;
+};
+
+/** not_used: no search; empty: nothing matched; unavailable: search failed. */
+export type SearchStatus = "not_used" | "results" | "empty" | "unavailable";
+
+export type HistoryMessage = {
+  role: "user" | "assistant";
+  text: string;
+  citations?: Citation[];
+  /** A photo saved with a user message; open it through the file service. */
+  attachment?: { file_id: string; media_type: string } | null;
+};
 
 /** Saved messages, oldest first; `truncated` means older ones were left out. */
 export type ConversationHistory = {
@@ -26,7 +44,12 @@ export type ConversationHistory = {
 export type StreamEvent =
   | { type: "status" }
   | { type: "text"; delta: string }
-  | { type: "complete"; answer: string }
+  | {
+      type: "complete";
+      answer: string;
+      citations: Citation[];
+      search: SearchStatus;
+    }
   | { type: "error"; code: string; message: string; retryable: boolean }
   | { type: "interrupted" };
 
@@ -56,8 +79,39 @@ const MESSAGES: Record<number, string> = {
   503: "Trợ lý tạm thời không khả dụng. Hãy thử lại sau.",
 };
 
+const SPEECH_MESSAGES: Record<number, string> = {
+  413: "Bản ghi quá dài. Hãy ghi tối đa 2 phút.",
+  422: "Bản ghi âm không hợp lệ. Hãy ghi lại.",
+  503: "Không nhận dạng được giọng nói lúc này. Hãy thử lại hoặc gõ câu hỏi.",
+};
+
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const SEARCH_STATUSES: SearchStatus[] = [
+  "not_used",
+  "results",
+  "empty",
+  "unavailable",
+];
+
+/** Keep only well-formed citations; anything else is dropped, never guessed. */
+export function parseCitations(value: unknown): Citation[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (item): item is Citation =>
+        object(item) &&
+        typeof item.marker === "string" &&
+        typeof item.evidence_id === "string" &&
+        typeof item.title === "string" &&
+        typeof item.excerpt === "string" &&
+        (item.location === null ||
+          item.location === undefined ||
+          typeof item.location === "string"),
+    )
+    .map((item) => ({ ...item, location: item.location ?? null }));
+}
 
 function parseEvent(name: string, data: string): StreamEvent | null {
   let value: unknown;
@@ -71,7 +125,14 @@ function parseEvent(name: string, data: string): StreamEvent | null {
   if (name === "text" && typeof value.delta === "string")
     return { type: "text", delta: value.delta };
   if (name === "complete" && typeof value.answer === "string")
-    return { type: "complete", answer: value.answer };
+    return {
+      type: "complete",
+      answer: value.answer,
+      citations: parseCitations(value.citations),
+      search: SEARCH_STATUSES.includes(value.search as SearchStatus)
+        ? (value.search as SearchStatus)
+        : "not_used",
+    };
   if (name === "error")
     return {
       type: "error",
@@ -162,6 +223,30 @@ export class ConversationsApi {
     });
   }
 
+  /**
+   * Transcribe a recorded WAV clip (at most 2 minutes) to text the user can
+   * edit. Speech failures get their own messages, not the agent ones.
+   */
+  async transcribe(wav: Blob, signal?: AbortSignal): Promise<string> {
+    const form = new FormData();
+    form.append("file", wav, "recording.wav");
+    try {
+      const body = (await this.json("/v1/speech/transcriptions", {
+        method: "POST",
+        body: form,
+        signal,
+      })) as { text?: unknown };
+      return typeof body.text === "string" ? body.text : "";
+    } catch (cause) {
+      if (cause instanceof ConversationError && SPEECH_MESSAGES[cause.status])
+        throw new ConversationError(
+          SPEECH_MESSAGES[cause.status],
+          cause.status,
+        );
+      throw cause;
+    }
+  }
+
   history(id: string, signal?: AbortSignal): Promise<ConversationHistory> {
     return this.json(`/v1/conversations/${encodeURIComponent(id)}/history`, {
       signal,
@@ -193,7 +278,10 @@ export class ConversationsApi {
     const send = () =>
       this.auth.authorizedFetch(`${this.baseUrl}${path}`, {
         ...init,
-        headers: init.body ? { "Content-Type": "application/json" } : undefined,
+        headers:
+          typeof init.body === "string"
+            ? { "Content-Type": "application/json" }
+            : undefined,
       });
     let response: Response;
     try {

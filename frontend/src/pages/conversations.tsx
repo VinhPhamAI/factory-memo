@@ -1,14 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, Pencil, RotateCw, Square, Trash2 } from "lucide-react";
-import Markdown from "react-markdown";
+import {
+  ArrowUp,
+  ImageIcon,
+  Loader2,
+  Mic,
+  Pencil,
+  RotateCw,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { useAuthClient } from "@/hooks/auth";
+import { useDictation } from "@/hooks/dictation";
 import { BrandMark } from "@/components/brand";
+import { CitedAnswer } from "@/components/cited-answer";
 import { Button } from "@/components/ui/button";
 import {
   ConversationError,
   ConversationsApi,
+  parseCitations,
+  type Citation,
   type Conversation,
+  type SearchStatus,
 } from "@/services/conversations-api";
 
 /**
@@ -22,6 +35,9 @@ type Turn = {
   text: string;
   status: "saved" | "streaming" | "failed" | "stopped" | "unconfirmed";
   error?: string;
+  citations: Citation[];
+  search?: SearchStatus;
+  hasPhoto?: boolean;
 };
 
 const TITLE_LENGTH = 80;
@@ -58,6 +74,16 @@ export function ConversationsPage() {
   const scroll = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const current = conversations.find((item) => item.id === conversationId);
+  // The transcript goes into the composer for editing; it is never sent here.
+  const dictation = useDictation(
+    (wav, signal) => api.transcribe(wav, signal),
+    (text, target) => {
+      if (target !== shown.current) return;
+      setQuery((value) => (value.trim() ? `${value.trimEnd()} ${text}` : text));
+      composer.current?.focus();
+    },
+  );
+  const cancelDictation = dictation.cancel;
 
   useEffect(() => {
     const abort = new AbortController();
@@ -83,7 +109,12 @@ export function ConversationsPage() {
       controller.current = null;
       setSending(false);
     }
-    if (shown.current !== conversationId) createdHere.current = undefined;
+    if (shown.current !== conversationId) {
+      // The draft and any pending transcript belong to the chat being left.
+      createdHere.current = undefined;
+      cancelDictation();
+      setQuery("");
+    }
     shown.current = conversationId;
     setError("");
     setTruncated(false);
@@ -105,6 +136,8 @@ export function ConversationsPage() {
             role: message.role,
             text: message.text,
             status: "saved",
+            citations: parseCitations(message.citations),
+            hasPhoto: Boolean(message.attachment),
           })),
         );
         setTruncated(history.truncated);
@@ -117,7 +150,7 @@ export function ConversationsPage() {
         setError(errorMessage(cause, "Không tải được cuộc trò chuyện."));
       });
     return () => abort.abort();
-  }, [api, conversationId, historyReload]);
+  }, [api, cancelDictation, conversationId, historyReload]);
 
   useEffect(() => () => controller.current?.abort(), []);
   useEffect(() => {
@@ -188,8 +221,15 @@ export function ConversationsPage() {
         role: "user",
         text: message,
         status: "saved",
+        citations: [],
       },
-      { key: answerKey, role: "assistant", text: "", status: "streaming" },
+      {
+        key: answerKey,
+        role: "assistant",
+        text: "",
+        status: "streaming",
+        citations: [],
+      },
     ]);
     let text = "";
     try {
@@ -198,7 +238,12 @@ export function ConversationsPage() {
           text += event.delta;
           update({ text });
         } else if (event.type === "complete") {
-          update({ text: event.answer, status: "saved" });
+          update({
+            text: event.answer,
+            status: "saved",
+            citations: event.citations,
+            search: event.search,
+          });
         } else if (event.type === "error") {
           update({ status: "failed", error: event.message });
         } else if (event.type === "interrupted") {
@@ -332,6 +377,14 @@ export function ConversationsPage() {
                     data-testid="chat-question"
                   >
                     <p>{turn.text}</p>
+                    {turn.hasPhoto && (
+                      <span
+                        className="field-note"
+                        data-testid="photo-reference"
+                      >
+                        <ImageIcon size={13} /> Có ảnh đính kèm
+                      </span>
+                    )}
                   </div>
                 ) : (
                   <article
@@ -346,7 +399,11 @@ export function ConversationsPage() {
                     </div>
                     <div className="answer-prose">
                       {turn.text ? (
-                        <Markdown>{turn.text}</Markdown>
+                        <CitedAnswer
+                          text={turn.text}
+                          citations={turn.citations}
+                          search={turn.search}
+                        />
                       ) : turn.status === "streaming" ? (
                         <p role="status" className="field-note">
                           Đang tạo câu trả lời…
@@ -394,6 +451,15 @@ export function ConversationsPage() {
           )}
         </div>
         <div className="composer-wrap">
+          {dictation.error && (
+            <p
+              role="alert"
+              className="inline-error"
+              data-testid="dictation-error"
+            >
+              {dictation.error}
+            </p>
+          )}
           {error && (
             <p role="alert" className="inline-error">
               {error}{" "}
@@ -432,7 +498,38 @@ export function ConversationsPage() {
               }}
             />
             <div className="composer-bottom">
-              <span>Trợ lý chưa tra cứu kho tri thức</span>
+              <span>
+                {dictation.state === "recording"
+                  ? "Đang ghi âm… bấm lại để dừng (tối đa 2 phút)"
+                  : dictation.state === "transcribing"
+                    ? "Đang nhận dạng giọng nói…"
+                    : "Trợ lý chưa tra cứu kho tri thức"}
+              </span>
+              <Button
+                type="button"
+                variant={dictation.state === "recording" ? "default" : "ghost"}
+                size="icon"
+                aria-label={
+                  dictation.state === "recording"
+                    ? "Dừng ghi âm"
+                    : "Ghi âm câu hỏi"
+                }
+                data-testid="dictation"
+                disabled={sending || dictation.state === "transcribing"}
+                onClick={() =>
+                  void (dictation.state === "recording"
+                    ? dictation.stop()
+                    : dictation.start(conversationId))
+                }
+              >
+                {dictation.state === "transcribing" ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : dictation.state === "recording" ? (
+                  <Square size={14} fill="currentColor" />
+                ) : (
+                  <Mic size={16} />
+                )}
+              </Button>
               {sending ? (
                 <Button
                   type="button"

