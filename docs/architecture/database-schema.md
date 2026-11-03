@@ -138,6 +138,7 @@ Descriptions of knowledge collections. Their actual content lives in sources and
 | `name` | `text` | Unique stable name; retained after deletion |
 | `title` | `text` | Display name |
 | `description` | `text`, optional | Collection purpose |
+| `template` | `text` | Built-in knowledge base whose extraction and retrieval policy the collection copies, such as `general` |
 | `created_by` | `uuid` | References `users.id` |
 | Record dates | See conventions | Includes optional `deleted_at` |
 

@@ -281,8 +281,8 @@ class SessionStorageUpgradeTest(unittest.TestCase):
                     )
                     self.assertIn("auth_sessions", inspect(engine).get_table_names())
 
-                    command.downgrade(config, "-1")
-                    command.downgrade(config, "-1")
+                    # The revision before auth sessions were added.
+                    command.downgrade(config, "3665f6870fa4")
                     self.assertNotIn("auth_sessions", inspect(engine).get_table_names())
                     command.upgrade(config, "head")
                     command.check(config)
@@ -314,7 +314,10 @@ class DatabaseRuleTest(MigratedDatabaseTest):
 
     def add_collection(self, owner: User) -> KnowledgeBase:
         collection = KnowledgeBase(
-            name=f"kb_{uuid4().hex[:8]}", title="Collection", created_by=owner.id
+            name=f"kb_{uuid4().hex[:8]}",
+            title="Collection",
+            template="general",
+            created_by=owner.id,
         )
         self.session.add(collection)
         self.session.commit()
