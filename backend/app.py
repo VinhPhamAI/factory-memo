@@ -9,7 +9,10 @@ from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
+from backend.api.auth import AuthHttpSettings, auth_storage_unavailable, auth_validation_error
+from backend.api.auth import router as auth_router
 from backend.api.document_uploads import router as document_uploads_router
 from backend.api.knowledge_agent import KnowledgeAgentPool
 from backend.api.knowledge_agent import router as knowledge_agent_router
@@ -19,7 +22,14 @@ from backend.api.knowledge_management import router as knowledge_management_rout
 from backend.api.voice_capture import VoiceCaptureService
 from backend.api.voice_capture import router as voice_capture_router
 from backend.knowledge_bases import KNOWLEDGE_BASES
+from backend.src.storage.app_database import (
+    app_database_url_from_env,
+    create_app_engine,
+    create_session_factory,
+)
+from backend.src.storage.auth import AuthStorageUnavailable, AuthStore
 from backend.src.storage.document_uploads import DocumentUploadStore
+from backend.src.services.auth import AuthService
 from backend.src.services.knowledge_management import KnowledgeManagementService
 
 
@@ -30,8 +40,15 @@ def create_app(
     kb_catalog: KnowledgeBaseCatalog | None = None,
     document_uploads: DocumentUploadStore | None = None,
     knowledge_management: KnowledgeManagementService | None = None,
+    auth_service: AuthService | None = None,
+    auth_settings: AuthHttpSettings | None = None,
 ) -> FastAPI:
-    """Build the API; injected agents and services keep HTTP tests dependency-free."""
+    """Build the API; injected agents and services keep HTTP tests dependency-free.
+
+    With injected knowledge services, auth uses only the injected
+    `auth_service` (routes return 503 without one) and never opens the
+    application database. Otherwise it connects to APP_DATABASE_URL.
+    """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -44,6 +61,8 @@ def create_app(
                 KNOWLEDGE_BASES, app.state.document_uploads, app.state.voice_capture,
             )
             app.state.knowledge_management = manager
+            app.state.auth_service = auth_service
+            app.state.auth_settings = auth_settings
             try:
                 yield
             finally:
@@ -51,6 +70,19 @@ def create_app(
             return
 
         load_dotenv()
+        app.state.auth_settings = auth_settings or AuthHttpSettings.from_env()
+        app_engine = None
+        app.state.auth_service = auth_service
+        if auth_service is None:
+            url = app_database_url_from_env()
+            if url:
+                # Connects lazily; an unreachable database fails auth requests with 503.
+                app_engine = create_app_engine(url)
+                app.state.auth_service = AuthService(AuthStore(create_session_factory(app_engine)))
+            else:
+                logging.getLogger(__name__).warning(
+                    "APP_DATABASE_URL is not set; authentication is unavailable"
+                )
         app.state.document_uploads = document_uploads or DocumentUploadStore()
         # Each knowledge base's store and agent open on its first request.
         pool = KnowledgeAgentPool(KNOWLEDGE_BASES)
@@ -80,12 +112,17 @@ def create_app(
             await capture.aclose()
             await pool.aclose()
             await catalog.aclose()
+            if app_engine is not None:
+                await app_engine.dispose()
 
     api = FastAPI(
         title="Knowledge Agent Service",
         version="1.0.0",
         lifespan=lifespan,
     )
+    api.add_exception_handler(AuthStorageUnavailable, auth_storage_unavailable)
+    api.add_exception_handler(RequestValidationError, auth_validation_error)
+    api.include_router(auth_router)
     api.include_router(knowledge_agent_router)
     api.include_router(knowledge_bases_router)
     api.include_router(voice_capture_router)
