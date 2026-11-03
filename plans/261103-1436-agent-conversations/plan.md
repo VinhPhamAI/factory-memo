@@ -1,6 +1,10 @@
 # Agent and conversations implementation plan
 
-Status: proposed. Scope: Section 5 of the product checklist.
+Status: phase 1 (text chat and history) implemented and verified with a controlled model provider; speech, photos and retrieval not started. Scope: Section 4 of the current product checklist. Review: [phase 1 code review](../reports/code-reviewer-261103-1906-agent-conversations-phase-1.md).
+
+Start from a branch containing auth merge `a5ef5f5`. Apply the application
+migrations, start the standalone agent with its own database, and verify real
+signup/login and `GET /auth/me` before the browser smoke test.
 
 The browser uses the backend for user authentication and conversation access. The backend stores conversation metadata in the application database and forwards authorized requests to the standalone agent. The agent reads and writes messages through LangGraph in agent_memory. The existing asynchronous worker can serve several conversations, with at most one active generation per conversation and a configurable process-wide limit.
 
@@ -9,10 +13,29 @@ The browser uses the backend for user authentication and conversation access. Th
 1. [Text chat and history](phase-01-text-chat.md) — CRUD, authorization, checkpoint history, and streaming.
 2. [Microphone and photo input](phase-02-inputs.md) — editable transcripts and authorized photo attachments.
 3. [Retrieval tool](phase-03-retrieval-tool.md) — controlled integration first, then real search and citations.
-4. [Inquiry draft](phase-04-inquiry-draft.md) — editable draft from saved chat and evidence.
-5. [Integration and verification](phase-05-verification.md) — native and container checks and product smoke tests.
+4. [Integration and verification](phase-05-verification.md) — native and container checks and the knowledge smoke test.
 
-Phase 1 provides the base for phases 2–4. Phase 2 needs the speech and files contracts for live use. Phase 3 needs the teammate’s search and evidence contracts for live use. Phase 4 can generate a text-only draft after phase 1, then include citations once phase 3 is integrated. Submission is owned by the inquiry API. Phase 5 verifies the combined behavior once the live dependencies are available.
+Phase 1 provides the chat path. Speech service verification can run in parallel
+using the merged AI gateway. Photos need the authorized files API and verified
+image support. Build the retrieval tool with controlled results, then connect
+the live search and evidence APIs when available. The [inquiry draft plan](phase-04-inquiry-draft.md)
+belongs to the Inquiries section.
+
+## Checklist closeout
+
+| Item | Evidence needed to check it off |
+|---|---|
+| Conversation CRUD | Phase 1 real login smoke test covers create, list, reopen, rename, delete, and cross-user denial before agent calls |
+| Agent history API | Phase 1 restarts the agent and verifies ordered messages from the same checkpoint |
+| Speech-to-text service | Phase 2 real Vietnamese fixture returns usable text through the gateway and a failure reaches the caller |
+| Chat inputs and speech-to-text UI | Phase 2 verifies text, editable transcript and failure display, and live owned-photo send plus foreign-photo rejection |
+| Streaming | Phase 1 real HTTP test shows early deltas, authoritative replacement after save, and visible errors |
+| Retrieval tool | Phase 3 live search verifies trusted scope, clickable evidence for a known fault, and missing-evidence behavior |
+| Knowledge smoke test | Final pass uploads and ingests a real fixture, opens the citation, removes the file from the library, then reopens the citation as an authorized reader |
+
+Record each item as passed, failed, or blocked. Controlled tests can prove local
+behavior while a dependency is pending. Keep the full item open until its
+listed evidence is available.
 
 ## Implementation rules
 

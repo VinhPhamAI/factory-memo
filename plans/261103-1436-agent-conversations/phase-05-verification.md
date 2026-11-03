@@ -11,7 +11,6 @@ tool behavior. The live known-fault fixture establishes evidence link behavior.
 - [ ] Run frontend targeted tests, `npm run lint`, and `npm run build` from `frontend/`.
 - [ ] Verify the native CLI and container paths affected by changes. Use real HTTP to check SSE buffering, terminal events, disconnect cleanup, and independent conversations.
 - [ ] With real login and file APIs, verify create → text or transcript → stream → restart → reopen. Verify the owner can send a photo and a second user cannot use its ID.
-- [ ] With the real knowledge API, ingest a known fixture and open the correct citation from both the answer and reopened history. Verify empty and unavailable retrieval have distinct outcomes.
-- [ ] With the real inquiry API, draft → edit → submit → clarify → reply → accept. Verify the expert can read the snapshot with the agent offline and acceptance creates zero knowledge chunks.
+- [ ] With the real files, ingestion, and knowledge APIs, upload and ingest a known fixture. Ask about the fault and open the correct citation from the answer and reopened history. Remove the file from the library and confirm an authorized reader can still open the cited evidence. Verify an unauthorized reader is denied and empty and unavailable retrieval have distinct outcomes.
 - [ ] Update agent API docs, frontend/backend setup instructions, and relevant architecture docs with actual limits and prerequisites. Run `git diff --check` and verify `AGENTS.md` and `CLAUDE.md` match.
 - [ ] Report actual checks and remaining integration gaps. Use explicit opt-in for paid provider checks.
