@@ -143,6 +143,13 @@ def auth_storage_unavailable(_request: Request, _exc: Exception) -> JSONResponse
     return JSONResponse({"detail": "Authentication is temporarily unavailable"}, status_code=503)
 
 
+def app_database_unavailable(_request: Request, _exc: Exception) -> JSONResponse:
+    """Report an unreachable application database outside auth requests."""
+
+    logger.warning("Application database is unavailable: %s", type(_exc.__cause__ or _exc).__name__)
+    return JSONResponse({"detail": "The service is temporarily unavailable"}, status_code=503)
+
+
 async def auth_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Report invalid /auth input without echoing submitted values such as passwords.
 

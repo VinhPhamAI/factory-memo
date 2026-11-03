@@ -11,8 +11,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
-from backend.api.auth import AuthHttpSettings, auth_storage_unavailable, auth_validation_error
+from backend.api.auth import (
+    AuthHttpSettings,
+    app_database_unavailable,
+    auth_storage_unavailable,
+    auth_validation_error,
+)
 from backend.api.auth import router as auth_router
+from backend.api.conversations import router as conversations_router
 from backend.api.document_uploads import router as document_uploads_router
 from backend.api.knowledge_agent import KnowledgeAgentPool
 from backend.api.knowledge_agent import router as knowledge_agent_router
@@ -22,12 +28,15 @@ from backend.api.knowledge_management import router as knowledge_management_rout
 from backend.api.voice_capture import VoiceCaptureService
 from backend.api.voice_capture import router as voice_capture_router
 from backend.knowledge_bases import KNOWLEDGE_BASES
+from backend.src.clients.agent import AgentClient, AgentSettings
 from backend.src.storage.app_database import (
+    AppDatabaseUnavailable,
     app_database_url_from_env,
     create_app_engine,
     create_session_factory,
 )
 from backend.src.storage.auth import AuthStorageUnavailable, AuthStore
+from backend.src.storage.conversations import ConversationStore
 from backend.src.storage.document_uploads import DocumentUploadStore
 from backend.src.services.auth import AuthService
 from backend.src.services.knowledge_management import KnowledgeManagementService
@@ -42,12 +51,15 @@ def create_app(
     knowledge_management: KnowledgeManagementService | None = None,
     auth_service: AuthService | None = None,
     auth_settings: AuthHttpSettings | None = None,
+    conversation_store: ConversationStore | None = None,
+    agent_client: Any | None = None,
 ) -> FastAPI:
     """Build the API; injected agents and services keep HTTP tests dependency-free.
 
-    With injected knowledge services, auth uses only the injected
-    `auth_service` (routes return 503 without one) and never opens the
-    application database. Otherwise it connects to APP_DATABASE_URL.
+    With injected knowledge services, auth and conversations use only the
+    injected `auth_service`, `conversation_store` and `agent_client` (routes
+    return 503 without them) and never open the application database or the
+    agent. Otherwise they use APP_DATABASE_URL, AGENT_BASE_URL and AGENT_API_TOKEN.
     """
 
     @asynccontextmanager
@@ -63,6 +75,8 @@ def create_app(
             app.state.knowledge_management = manager
             app.state.auth_service = auth_service
             app.state.auth_settings = auth_settings
+            app.state.conversation_store = conversation_store
+            app.state.agent_client = agent_client
             try:
                 yield
             finally:
@@ -73,15 +87,28 @@ def create_app(
         app.state.auth_settings = auth_settings or AuthHttpSettings.from_env()
         app_engine = None
         app.state.auth_service = auth_service
-        if auth_service is None:
-            url = app_database_url_from_env()
-            if url:
-                # Connects lazily; an unreachable database fails auth requests with 503.
-                app_engine = create_app_engine(url)
-                app.state.auth_service = AuthService(AuthStore(create_session_factory(app_engine)))
+        app.state.conversation_store = conversation_store
+        url = app_database_url_from_env()
+        if url and (auth_service is None or conversation_store is None):
+            # Connects lazily; an unreachable database fails requests with 503.
+            app_engine = create_app_engine(url)
+            sessions = create_session_factory(app_engine)
+            app.state.auth_service = auth_service or AuthService(AuthStore(sessions))
+            app.state.conversation_store = conversation_store or ConversationStore(sessions)
+        elif not url and (auth_service is None or conversation_store is None):
+            logging.getLogger(__name__).warning(
+                "APP_DATABASE_URL is not set; authentication or conversations are unavailable"
+            )
+        owned_agent_client = None
+        app.state.agent_client = agent_client
+        if agent_client is None:
+            agent_settings = AgentSettings.from_env()
+            if agent_settings is not None:
+                owned_agent_client = AgentClient(agent_settings)
+                app.state.agent_client = owned_agent_client
             else:
                 logging.getLogger(__name__).warning(
-                    "APP_DATABASE_URL is not set; authentication is unavailable"
+                    "AGENT_BASE_URL or AGENT_API_TOKEN is not set; agent chat is unavailable"
                 )
         app.state.document_uploads = document_uploads or DocumentUploadStore()
         # Each knowledge base's store and agent open on its first request.
@@ -112,6 +139,8 @@ def create_app(
             await capture.aclose()
             await pool.aclose()
             await catalog.aclose()
+            if owned_agent_client is not None:
+                await owned_agent_client.aclose()
             if app_engine is not None:
                 await app_engine.dispose()
 
@@ -121,8 +150,10 @@ def create_app(
         lifespan=lifespan,
     )
     api.add_exception_handler(AuthStorageUnavailable, auth_storage_unavailable)
+    api.add_exception_handler(AppDatabaseUnavailable, app_database_unavailable)
     api.add_exception_handler(RequestValidationError, auth_validation_error)
     api.include_router(auth_router)
+    api.include_router(conversations_router)
     api.include_router(knowledge_agent_router)
     api.include_router(knowledge_bases_router)
     api.include_router(voice_capture_router)
