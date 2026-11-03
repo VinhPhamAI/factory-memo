@@ -46,7 +46,19 @@ when the revision runs.
 
 ## Apply migrations
 
-Run from the repository root after configuring `.env`:
+Set `APP_DATABASE_URL` and `EMBEDDING_DIM` in `.env`, then run from the repository root:
+
+```bash
+bash deployments/migrate.sh
+```
+
+The script starts Compose PostgreSQL, creates the target database if missing,
+runs `alembic upgrade head` and `alembic check`, and prints the current revision.
+It is safe to rerun and refuses the `DATABASE_URL` database. Options:
+`--skip-postgres` for another server, `--skip-check` to skip the comparison,
+`--help`. Creating the database needs an account with `CREATEDB`.
+
+Equivalent manual steps:
 
 1. Start the database: `docker compose -f deployments/docker-compose.yml up -d postgres`.
 2. Create the application database once, for example:
