@@ -2,6 +2,12 @@
 
 Depends on phases 1–3 and decision D3.
 
+Status: implemented. Code: `storage/embeddings.py` (checks),
+`storage/chunk_retrieval.py` (agent store), `ChunkRepository.search_*`,
+`knowledge_bases/stores.py:open_application_store` and `KnowledgeAgentPool`. Tests:
+`backend/tests/test_chunk_retrieval.py`. The API serves catalog KBs from
+`knowledge_chunks`; Industrial QA keeps its legacy stores.
+
 ## Embeddings
 
 - At API and worker startup, read the size of `knowledge_chunks.embedding`

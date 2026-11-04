@@ -52,6 +52,7 @@ async def _serve(stage: str) -> None:
         create_session_factory,
     )
     from backend.src.storage.document_uploads import DocumentUploadStore
+    from backend.src.storage.embeddings import verify_embedding_dimension
     from backend.src.storage.repositories.chunks import ChunkRepository
     from backend.src.storage.repositories.ingestion_jobs import IngestionJobRepository
     from backend.src.storage.repositories.knowledge_bases import KnowledgeBaseRepository
@@ -62,6 +63,11 @@ async def _serve(stage: str) -> None:
         raise RuntimeError("APP_DATABASE_URL is required to start a worker")
     engine = create_app_engine(url)
     sessions = create_session_factory(engine)
+    try:
+        await verify_embedding_dimension(sessions)
+    except Exception:
+        await engine.dispose()
+        raise
     catalog = KnowledgeBaseCatalog(KnowledgeBaseRepository(sessions))
     await catalog.ensure_loaded()
     sources = SourceRepository(sessions)

@@ -1,11 +1,16 @@
-"""Embedding model construction for the knowledge base."""
+"""Build embedding clients and validate stored vectors against configuration."""
 
 from __future__ import annotations
 
 import os
+from collections.abc import Collection
 
 from langchain_core.embeddings import Embeddings
 from langchain_openai import OpenAIEmbeddings
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from backend.src.storage.knowledge_store import StorageError
 
 
 # Local OpenAI-compatible servers (e.g. text-embeddings-inference) ignore the key,
@@ -53,6 +58,12 @@ def embedding_dim_from_env() -> int:
     if dim <= 0:
         raise ValueError("EMBEDDING_DIM must be a positive integer")
     return dim
+
+
+def embedding_model_from_env() -> str | None:
+    """Model that embeds documents and queries, or None when not configured."""
+
+    return os.getenv("EMBEDDING_MODEL") or None
 
 
 def _positive_int_from_env(name: str) -> int | None:
@@ -115,3 +126,89 @@ def build_embeddings_from_env(*, query_instruction: str = "") -> Embeddings:
     if instruction:
         return QueryInstructionEmbeddings(embeddings, instruction)
     return embeddings
+
+
+class EmbeddingMismatch(StorageError):
+    """Stored vectors do not match the configured embedding size or model."""
+
+
+async def stored_embedding_dim(sessions: async_sessionmaker[AsyncSession]) -> int | None:
+    """Read the vector size of `knowledge_chunks.embedding` from the catalog.
+
+    Args:
+        sessions: Factory of sessions on the application database.
+
+    Returns:
+        The size stored as the column type modifier, or None when the column
+        has no fixed size.
+    """
+
+    async with sessions() as session:
+        size = await session.scalar(
+            text(
+                "SELECT atttypmod FROM pg_attribute "
+                "WHERE attrelid = CAST('knowledge_chunks' AS regclass) "
+                "AND attname = 'embedding'"
+            )
+        )
+    return size if size is not None and size > 0 else None
+
+
+def check_embedding_dimension(*, stored: int | None, configured: int) -> None:
+    """Require the column size to equal `EMBEDDING_DIM`.
+
+    Args:
+        stored: Vector size of the database column.
+        configured: Size from `EMBEDDING_DIM`.
+
+    Raises:
+        EmbeddingMismatch: The sizes differ or the column has no fixed size.
+    """
+
+    if stored == configured:
+        return
+    found = "no fixed size" if stored is None else f"{stored} dimensions"
+    raise EmbeddingMismatch(
+        f"knowledge_chunks.embedding has {found} but EMBEDDING_DIM is {configured}. "
+        f"Set EMBEDDING_DIM to {stored or 'the column size'}, or re-embed the chunks "
+        f"and migrate the column to {configured} dimensions before serving "
+        "ingestion or search."
+    )
+
+
+async def verify_embedding_dimension(sessions: async_sessionmaker[AsyncSession]) -> None:
+    """Compare the database column size with `EMBEDDING_DIM`.
+
+    Raises:
+        EmbeddingMismatch: The sizes differ.
+        ValueError: `EMBEDDING_DIM` is missing or invalid.
+    """
+
+    check_embedding_dimension(
+        stored=await stored_embedding_dim(sessions), configured=embedding_dim_from_env()
+    )
+
+
+def check_embedding_model(
+    knowledge_base: str, *, configured: str | None, recorded: Collection[str]
+) -> None:
+    """Require that a knowledge base was not embedded with another model.
+
+    Args:
+        knowledge_base: Name used in the message.
+        configured: Model from `EMBEDDING_MODEL`; None skips the check.
+        recorded: Models in the settings of the knowledge base's done runs.
+
+    Raises:
+        EmbeddingMismatch: A done run used a model other than the configured one.
+    """
+
+    if configured is None:
+        return
+    other = sorted(model for model in recorded if model != configured)
+    if other:
+        raise EmbeddingMismatch(
+            f"Knowledge base {knowledge_base} was embedded with {', '.join(other)} but "
+            f"EMBEDDING_MODEL is {configured}. Restore EMBEDDING_MODEL, or re-embed the "
+            "knowledge base with the new model before searching or ingesting."
+        )

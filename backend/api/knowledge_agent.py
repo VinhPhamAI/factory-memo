@@ -15,7 +15,8 @@ from pydantic import BaseModel, Field, field_validator
 from backend.api.auth import require_current_user
 from backend.api.knowledge_bases import refresh_catalog
 from backend.knowledge_bases import KnowledgeBaseSpec
-from backend.knowledge_bases.stores import open_store
+from backend.knowledge_bases.base import AnswerPipeline
+from backend.knowledge_bases.stores import open_application_store, open_store
 from backend.src.agents.agent.service import (
     STREAM_EVENT_VERSION,
     AgentStreamEvent,
@@ -24,6 +25,7 @@ from backend.src.agents.agent.service import (
 )
 from backend.src.agents.rag.store import DocumentStore
 from backend.src.storage import KnowledgeStore, StorageError
+from backend.src.storage.chunk_retrieval import ChunkRetrieval
 from backend.src.storage.databases import DatabaseAdminError
 
 
@@ -31,18 +33,27 @@ router = APIRouter(prefix="/v1/knowledge-agent", tags=["knowledge-agent"])
 
 
 class KnowledgeAgentPool:
-    """One agent per knowledge base, opened on its first request."""
+    """One agent per knowledge base, opened on its first request.
+
+    With `sessions` and `catalog`, catalog knowledge bases search the
+    application database through the shared engine; others, such as Industrial
+    QA, keep their own stores.
+    """
 
     def __init__(
         self,
         specs: Mapping[str, KnowledgeBaseSpec],
         *,
         agents: Mapping[str, Any] | None = None,
+        sessions: Any = None,
+        catalog: Any = None,
     ) -> None:
+        self._sessions = sessions
+        self._catalog = catalog
         self._specs = dict(specs)
         # Pre-built agents, e.g. fakes in HTTP tests.
         self._agents: dict[str, Any] = dict(agents or {})
-        self._stores: list[KnowledgeStore | DocumentStore] = []
+        self._stores: list[KnowledgeStore | DocumentStore | ChunkRetrieval] = []
         self._lock = asyncio.Lock()
 
     def add(self, spec: KnowledgeBaseSpec) -> None:
@@ -69,7 +80,7 @@ class KnowledgeAgentPool:
             raise KeyError(name)
         async with self._lock:
             if name not in self._agents:
-                store = await open_store(spec)
+                store = await self._open(name, spec)
                 try:
                     agent = KnowledgeAgentService.from_kb(spec, store)
                 except Exception:
@@ -78,6 +89,20 @@ class KnowledgeAgentPool:
                 self._stores.append(store)
                 self._agents[name] = agent
         return self._agents[name]
+
+    async def _open(
+        self, name: str, spec: KnowledgeBaseSpec
+    ) -> KnowledgeStore | DocumentStore | ChunkRetrieval:
+        """Open the application-database store of a catalog KB, else its own store."""
+
+        resolved = self._catalog.resolve(name) if self._catalog is not None else None
+        if (
+            self._sessions is None
+            or resolved is None
+            or spec.answer_pipeline is AnswerPipeline.INDUSTRIAL_QA
+        ):
+            return await open_store(spec)
+        return open_application_store(resolved[0], spec, sessions=self._sessions)
 
     async def aclose(self) -> None:
         for agent in self._agents.values():

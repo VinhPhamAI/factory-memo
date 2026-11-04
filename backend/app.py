@@ -41,6 +41,7 @@ from backend.src.storage.app_database import (
 from backend.src.storage.auth import AuthStorageUnavailable, AuthStore
 from backend.src.storage.conversations import ConversationStore
 from backend.src.storage.document_uploads import DocumentUploadStore
+from backend.src.storage.embeddings import verify_embedding_dimension
 from backend.src.storage.file_library import FileBlobStore, FileRecordStore
 from backend.src.services.auth import AuthService
 from backend.src.services.file_library import FileLibraryService
@@ -132,6 +133,11 @@ def create_app(
             # Connects lazily; an unreachable database fails requests with 503.
             app_engine = create_app_engine(url)
             sessions = create_session_factory(app_engine)
+            try:
+                await verify_embedding_dimension(sessions)
+            except BaseException:
+                await app_engine.dispose()
+                raise
             app.state.auth_service = auth_service or AuthService(AuthStore(sessions))
             app.state.conversation_store = conversation_store or ConversationStore(sessions)
             app.state.file_library = file_library or FileLibraryService(
@@ -163,6 +169,7 @@ def create_app(
             source_repository = sources or SourceRepository(sessions)
             app.state.sources = source_repository
             catalog = KnowledgeBaseCatalog(KnowledgeBaseRepository(sessions))
+            pool = KnowledgeAgentPool({}, sessions=sessions, catalog=catalog)
             capture = VoiceCaptureService(
                 {}, sources=source_repository, resolve_kb=catalog.resolve
             )

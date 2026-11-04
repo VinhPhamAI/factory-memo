@@ -38,7 +38,13 @@ from backend.src.storage.content_signatures import (
     shingles,
     signature,
 )
-from backend.src.storage.embeddings import build_embeddings_from_env, embedding_dim_from_env
+from backend.src.storage.embeddings import (
+    EmbeddingMismatch,
+    build_embeddings_from_env,
+    check_embedding_model,
+    embedding_dim_from_env,
+    embedding_model_from_env,
+)
 from backend.src.storage.extraction_runs import content_sha256, extraction_fingerprint
 from backend.src.storage.models import (
     ConversationStatus,
@@ -485,8 +491,25 @@ class ApplicationSourcePipeline:
             ingestion, settings = self._ingestion_factory(spec, store)
         else:
             ingestion, settings = None, index_config(spec.chunking)
+        embedding_model = embedding_model_from_env()
+        # Recorded so a later model change is detected before searching or ingesting.
+        settings = {
+            **settings,
+            "embedding_model": embedding_model,
+            "embedding_dim": embedding_dim_from_env(),
+        }
         fingerprint = extraction_fingerprint(mode, settings)
         assert fingerprint is not None
+        try:
+            check_embedding_model(
+                spec.name, configured=embedding_model, recorded=await runs.embedding_models()
+            )
+        except EmbeddingMismatch as exc:
+            state.update(status="failed", finished_at=now(), error=str(exc))
+            await self.sources.update(
+                job.knowledge_base_id, source.id, metadata={"management": state}
+            )
+            raise JobFailed(str(exc)) from exc
 
         run: ExtractionRun | None = None
         try:

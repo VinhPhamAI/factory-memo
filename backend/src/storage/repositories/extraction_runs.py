@@ -136,6 +136,25 @@ class ExtractionRunRepository(Repository):
             row = (await session.execute(query)).mappings().first()
         return _run(row) if row else None
 
+    async def embedding_models(self) -> set[str]:
+        """Return the embedding models recorded by this knowledge base's done runs.
+
+        Runs without a recorded model, from before it was tracked, are ignored.
+        """
+
+        model = _RUNS.c.settings["embedding_model"].astext
+        async with self._transaction() as session:
+            found = await session.scalars(
+                select(model)
+                .where(
+                    _RUNS.c.knowledge_base_id == self.knowledge_base_id,
+                    _RUNS.c.status == RunStatus.DONE.value,
+                    model.is_not(None),
+                )
+                .distinct()
+            )
+            return set(found.all())
+
     async def find_active(
         self, content: str, mode: str, *, exclude: UUID | None = None
     ) -> ExtractionRun | None:
