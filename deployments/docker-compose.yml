@@ -20,11 +20,14 @@ services:
       AGENT_BASE_URL: "${API_AGENT_BASE_URL:-http://host.docker.internal:8010}"
       VOICE_AUDIO_DIR: /app/data/audio
       DOCUMENT_UPLOAD_DIR: /app/data/uploads
+      FILE_LIBRARY_DIR: /app/data/files
     ports:
       - "${API_PORT:-8005}:8005"
     volumes:
       - ../data:/app/data
       - document_uploads:/app/data/uploads
+      # Personal file library (/v1/files); only the API reads it.
+      - file_library:/app/data/files
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -85,3 +88,4 @@ services:
 volumes:
   pgdata:
   document_uploads:
+  file_library:
