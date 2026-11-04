@@ -162,8 +162,22 @@ async def recheck_conflicts(request: Request, kb: str, body: ConflictRecheckRequ
 
 @router.post(
     "/{kb}/conflicts/{conflict_id}/review",
-    dependencies=[Depends(require_expert)],
 )
-async def review_conflict(request: Request, kb: str, conflict_id: UUID, body: ConflictReviewRequest):
+async def review_conflict(
+    request: Request,
+    kb: str,
+    conflict_id: UUID,
+    body: ConflictReviewRequest,
+    account: Annotated[Account, Depends(require_expert)],
+):
     manager = await service(request, kb)
-    return await result(manager.review_conflict(kb, conflict_id, body.decision, body.note, body.keep_id))
+    return await result(
+        manager.review_conflict(
+            kb,
+            conflict_id,
+            body.decision,
+            body.note,
+            body.keep_id,
+            account.id,
+        )
+    )

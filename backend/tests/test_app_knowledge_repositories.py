@@ -19,17 +19,19 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend.src.agents.rag.chunking import Chunk
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage.app_database import create_app_engine, create_session_factory
 from backend.src.storage.job_queue import STALE_ERROR, JobConflict, JobLeaseLost
 from backend.src.storage.extraction_runs import ABANDONED
 from backend.src.storage.knowledge_conflicts import ConflictRow, ordered
-from backend.src.storage.models import KnowledgeRecord, KnowledgeStatus
+from backend.src.storage.models import KnowledgeLinkUpdate, KnowledgeRecord, KnowledgeStatus
 from backend.src.storage.orm import (
     File,
     IngestionJob,
     KnowledgeBase,
     KnowledgeChunk,
+    KnowledgeChunkSource,
     KnowledgeSource,
     SourceKind,
     User,
@@ -213,6 +215,68 @@ class ChunkRepositoryTest(RepositoryTest):
         self.assertIsNone(await repository.review_record(self.add_kb().id, stored.id,
                                                          KnowledgeStatus.APPROVED,
                                                          reviewer_id=self.user.id, event={}))
+
+    async def test_records_links_and_consolidation_updates_commit_together(self) -> None:
+        repository = ChunkRepository(self.sessions)
+        old_source, new_source = await self.add_source(), await self.add_source()
+        old = record()
+        await repository.add_records(self.kb.id, old_source, [old])
+        new = record(evidence_id=new_source)
+        await repository.add_records_and_updates(
+            self.kb.id,
+            new_source,
+            [new],
+            updates=[KnowledgeLinkUpdate(
+                old.id,
+                supported_by=(new.id,),
+                event={"action": "supported_by_case"},
+            )],
+        )
+        loaded_old, loaded_new = await repository.get_records(
+            self.kb.id, [old.id, new.id]
+        )
+        self.assertEqual(loaded_old.supported_by, [new.id])
+        self.assertEqual(loaded_old.revision["history"][-1]["action"], "supported_by_case")
+        self.assertEqual(loaded_new.evidence_id, new_source)
+
+        before = self.count(KnowledgeChunk)
+        with self.assertRaises(LookupError):
+            await repository.add_records_and_updates(
+                self.kb.id,
+                new_source,
+                [record()],
+                updates=[KnowledgeLinkUpdate(uuid4(), event={"action": "missing"})],
+            )
+        self.assertEqual(self.count(KnowledgeChunk), before)
+
+    async def test_document_passages_keep_doc_index_and_source_reference(self) -> None:
+        repository = ChunkRepository(self.sessions)
+        source = await self.add_source()
+        chunks = [
+            Chunk(doc_id=str(source), index=0, text="First passage", title="Manual"),
+            Chunk(doc_id=str(source), index=1, text="Second passage", title="Manual"),
+        ]
+        ids = await repository.add_passages(
+            self.kb.id, source, chunks, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        passages = await repository.passages_for_source(self.kb.id, source)
+        self.assertEqual(
+            [(item["id"], item["doc_id"], item["index"]) for item in passages],
+            [(str(ids[0]), str(source), 0), (str(ids[1]), str(source), 1)],
+        )
+        with self.engine.connect() as connection:
+            references = connection.execute(
+                select(KnowledgeChunkSource.references)
+                .where(KnowledgeChunkSource.source_id == source)
+                .order_by(KnowledgeChunkSource.chunk_id)
+            ).scalars().all()
+        self.assertEqual(
+            sorted(references, key=lambda item: item[0]["chunk_index"]),
+            [
+                [{"type": "passage", "chunk_index": 0}],
+                [{"type": "passage", "chunk_index": 1}],
+            ],
+        )
 
 
 @unittest.skipUnless(DATABASE_URL, "TEST_DATABASE_URL is not set")

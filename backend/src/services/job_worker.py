@@ -18,6 +18,7 @@ from typing import Any
 from backend.src.services.source_pipeline import JobFailed, SourcePipeline, failure
 from backend.src.storage.job_queue import Job, JobLeaseLost
 from backend.src.storage.knowledge_store import StorageError
+from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
 
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ class StageWorker:
                 try:
                     await self.queue.recover_stale(self.stale_s)
                     job = await self._claim()
-                except StorageError:
+                except (StorageError, KnowledgeStorageUnavailable):
                     logger.warning("Job queue unavailable; retrying in %ss", self.poll_s, exc_info=True)
                     await _wait(stop, self.poll_s)
                     continue
@@ -98,8 +99,10 @@ class StageWorker:
     async def process(self, job: Job) -> Job | None:
         """Runs one claimed job and records the outcome; returns the next-stage job."""
 
-        logger.info("Job %s: %s %s:%s (attempt %s/%s)", job.id, job.stage, job.source_kind,
-                    job.source_id, job.attempts, job.max_attempts)
+        logger.info(
+            "Job %s: %s source %s (attempt %s/%s)",
+            job.id, job.stage, job.source_id, job.attempts, job.max_attempts,
+        )
         work = asyncio.create_task(self.pipeline.run(job))
         beat = asyncio.create_task(self._heartbeat(job, work))
         try:
@@ -129,7 +132,13 @@ class StageWorker:
             beat.cancel()
             await asyncio.gather(beat, return_exceptions=True)
         try:
-            following = await self.queue.complete(job, self.name, result)
+            continue_pipeline = not bool(result.pop("_terminal", False))
+            following = await self.queue.complete(
+                job,
+                self.name,
+                result,
+                continue_pipeline=continue_pipeline,
+            )
         except JobLeaseLost:
             logger.warning("Job %s finished after losing its lease; result kept, not recorded", job.id)
             return None
@@ -144,7 +153,7 @@ class StageWorker:
             await asyncio.sleep(self.heartbeat_s)
             try:
                 alive = await self.queue.heartbeat(job, self.name)
-            except StorageError:
+            except (StorageError, KnowledgeStorageUnavailable):
                 logger.warning("Heartbeat for job %s failed; retrying", job.id)
                 continue
             if not alive:
@@ -155,7 +164,7 @@ class StageWorker:
         try:
             await self.queue.release(job, self.name)
             logger.info("Job %s released back to the queue", job.id)
-        except StorageError:
+        except (StorageError, KnowledgeStorageUnavailable):
             logger.warning("Could not release job %s; it is requeued once stale", job.id)
 
 

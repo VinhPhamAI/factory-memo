@@ -173,6 +173,7 @@ def create_app(
                 source_repository,
                 ChunkRepository(sessions),
                 IngestionJobRepository(sessions),
+                sessions,
             )
             capture.on_ingested = manager.queue_conflicts
             try:

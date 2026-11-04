@@ -65,7 +65,8 @@ one or more sources (or **select all** visible ones) and use **Convert** or
 followed by extraction. Each button applies only to the checked sources that
 support that step and shows how many; running sources and sources without a
 converter cannot be checked. Sources whose request fails stay checked for a retry. Conversion reads UTF-8 (optionally with BOM) or BOM-marked UTF-16, preserves line endings,
-and saves a converted-text snapshot automatically. No manual Convert action is
+and saves the result in `knowledge_sources.extracted_text` with encoding, digest
+and timestamp metadata. No manual Convert action is
 required. Invalid encodings, empty text and NUL-containing text are refused;
 original bytes remain intact. Other text formats (MD, CSV, TSV, JSON, XML, YAML,
 LOG or `text/*`) have an explicit **Chuyển thành text** action. No OCR or generic
@@ -73,13 +74,12 @@ media converter is implemented: PDFs, images, Office files and uploaded media
 stay raw with an explanatory message. Microphone recordings already have ASR
 transcripts and therefore start in converted.
 
-The inventory combines uploads, existing source evidence in `raw_conversations`
-and existing indexed documents within the selected KB. Uploads and their linked
-text evidence appear once. Database and chunk-index list failures are shown as
-warnings, so the available original uploads remain visible. Source/index lists
-have a **Tải thêm** button; filters and counts operate on loaded entries.
-Unlinked interrupted audio files have no KB/source registry entry and remain
-outside this inventory. Original uploads can be downloaded as attachments.
+The inventory lists `knowledge_sources` from `APP_DATABASE_URL`. Knowledge records
+and document passages appear through `knowledge_chunk_sources`, so one source is
+shown once with counts by review status. Existing legacy `raw_conversations`,
+per-KB chunk tables and upload sidecars are not merged into this view. Source lists
+have a **Tải thêm** button; filters and counts operate on loaded entries. Original
+uploads can be downloaded as authenticated attachments.
 
 ## Extraction modes
 
@@ -285,8 +285,9 @@ All pairs grow quadratically; use `--limit` on large KBs.
 
 ## Job queue and workers
 
-Each stage is a job row in `ingestion_jobs` in the `DATABASE_URL` database
-(shared by all KBs). The pattern is notify-consume:
+Each stage is a job row in `ingestion_jobs` in `APP_DATABASE_URL` (shared by all
+served KBs). Jobs reference the knowledge-base and source IDs; the source row owns
+its kind. The pattern is notify-consume:
 
 ```text
 upload (Auto) / Extract on raw ─► convert job ─ NOTIFY ─► convert worker
@@ -298,19 +299,21 @@ upload (Auto) / Extract on raw ─► convert job ─ NOTIFY ─► convert work
                                   conflict job ─ NOTIFY ─► conflict worker ─► knowledge_conflicts
 ```
 
-The conflict stage runs only for knowledge-mode extraction in a KB that enables
-it (currently `industrial_qa`, `[conflicts] enabled`). It compares the new items
+The conflict stage runs only for knowledge-mode extraction in a served KB whose
+policy enables it. It compares the new items
 with similar stored items and records suspected conflicts for review; it never
-changes item status. Its job is reported separately (`processing.conflict_job`,
-summary in `processing.conflicts`) and does not change the source's processing
-state. See [industrial QA conflict detection](conflict-detection.md).
+approves either item. The source stays `processing` through the optional conflict
+stage and becomes `processed` when the last stage completes. A summary is stored
+in source `metadata.conflicts`. See [industrial QA conflict detection](conflict-detection.md)
+for the legacy policy that defines this behavior.
 
 - Enqueueing inserts the job and calls `pg_notify` on the stage's channel in one
   transaction. Workers `LISTEN`, claim with `FOR UPDATE SKIP LOCKED` and also
   poll (`WORKER_POLL_S`, default 15 s), so a missed notification only delays a job.
 - A job lists the stages that follow it. Completing it creates the next job in
   the same transaction, so a pipeline neither stops between stages nor runs a
-  stage twice. A failed convert queues no extraction.
+  stage twice. Duplicate and unconfirmed near-duplicate results end the pipeline;
+  a failed convert queues no extraction.
 - At most one queued/running job per source (unique partial index).
 - Running jobs heartbeat (`WORKER_HEARTBEAT_S`). A job without a heartbeat for
   `WORKER_STALE_S` (a crashed worker or killed container) is requeued.
@@ -331,7 +334,6 @@ uv run python -m backend.worker --stage extract     # one worker, no supervisor
 
 `WORKER_CONVERT_PROCESSES`/`WORKER_EXTRACT_PROCESSES`/`WORKER_CONFLICT_PROCESSES` set the default counts;
 several worker containers can share the queue. Without a running worker, jobs
-stay queued. Conversion covers plain-text uploads only; OCR and speech-to-text
-for uploaded media are not implemented, so such files stay raw. Legacy voice API
-clients that do not send `extract_mode` still extract in the API process and
-then queue the conflict job.
+stay queued. The worker and API must use the same `APP_DATABASE_URL`. Conversion
+covers plain-text uploads only; OCR and speech-to-text for uploaded media are not
+implemented, so such files stay raw.

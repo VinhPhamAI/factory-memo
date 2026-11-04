@@ -42,6 +42,8 @@ class FakePipeline:
             await self.release.wait()
         elif isinstance(action, BaseException):
             raise action
+        elif action == "terminal":
+            return {"stage": job.stage, "_terminal": True}
         return {"stage": job.stage}
 
 
@@ -158,6 +160,19 @@ class QueueContract:
         finally:
             stop.set()
             await asyncio.gather(*tasks)
+
+    async def test_terminal_result_does_not_queue_the_following_stage(self):
+        pipeline = FakePipeline({"convert": "terminal"})
+        await self.queue.enqueue(
+            "general", "convert", "upload", "terminal",
+            mode="knowledge", next_stages=["extract"],
+        )
+        worker = StageWorker(self.queue, pipeline, ["convert"], name="c")
+        job = await self.queue.claim("convert", "c")
+        self.assertIsNone(await worker.process(job))
+        self.assertIsNone(await self.queue.claim("extract", "e"))
+        latest = await self.queue.latest("general", [("upload", "terminal")])
+        self.assertEqual(latest[("upload", "terminal")].result, {"stage": "convert"})
 
     async def test_stopping_hands_an_unfinished_job_back(self):
         pipeline = FakePipeline({"extract": "block"})

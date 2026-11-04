@@ -488,7 +488,9 @@ class KnowledgeManagementService(SourcePipeline):
                     "quote": row.quotes.get(str(record_id)) or None}
         return {**row.to_json(), "stale": stale(row, records), "a": side(row.a_id), "b": side(row.b_id)}
 
-    async def review_conflict(self, kb, conflict_id, decision, note, keep_id=None):
+    async def review_conflict(
+        self, kb, conflict_id, decision, note, keep_id=None, reviewer_id=None
+    ):
         """A reviewer's decision on a pair's current row.
 
         confirm: the conflict links are written (if missing); dismiss: they
@@ -515,7 +517,8 @@ class KnowledgeManagementService(SourcePipeline):
         first, second = records[row.a_id], records[row.b_id]
         status = CONFLICT_DECISIONS[decision]
         event = {"action": "conflict_reviewed", "decision": decision, "status": status,
-                 "note": note.strip() or None, "actor": REVIEW_ACTOR, "at": now(),
+                 "note": note.strip() or None,
+                 "actor": str(reviewer_id) if reviewer_id else REVIEW_ACTOR, "at": now(),
                  "conflict_id": str(row.id), "pair": [str(row.a_id), str(row.b_id)]}
         linked = row.linked
         if decision == "supersede":

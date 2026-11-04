@@ -69,6 +69,15 @@ class KnowledgeBaseCatalog:
                 self._add(row)
             self._loaded = True
 
+    async def refresh(self) -> None:
+        """Load active rows added by another API or worker process."""
+
+        async with self._lock:
+            for row in await self._repository.list_active():
+                if row.name not in self._entries:
+                    self._add(row)
+            self._loaded = True
+
     def _add(self, row: KnowledgeBaseEntry) -> None:
         spec = custom_spec(row.name, title=row.title, description=row.description, template=row.template)
         self._entries[row.name] = row
@@ -81,6 +90,14 @@ class KnowledgeBaseCatalog:
 
         row = self._entries.get(name)
         return (row.id, self._specs[name]) if row is not None else None
+
+    def resolve_id(self, knowledge_base_id: UUID) -> tuple[str, KnowledgeBaseSpec] | None:
+        """Return the cached name and policy spec for an active database ID."""
+
+        for name, row in self._entries.items():
+            if row.id == knowledge_base_id:
+                return name, self._specs[name]
+        return None
 
     def names(self) -> list[str]:
         """Return active database-backed names in stable order."""

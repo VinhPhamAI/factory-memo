@@ -41,7 +41,7 @@ services:
       start_period: 30s
 
   # Job workers: one container, one process per stage slot (convert, extract, conflict).
-  # They consume the ingestion_jobs queue in DATABASE_URL (LISTEN/NOTIFY with a
+  # They consume the ingestion_jobs queue in APP_DATABASE_URL (LISTEN/NOTIFY with a
   # polling fallback); scale a stage with WORKER_<STAGE>_PROCESSES.
   worker:
     image: local/knowledge-agent-api
@@ -55,6 +55,7 @@ services:
         required: false
     environment:
       DATABASE_URL: "${API_DATABASE_URL:-postgresql+psycopg://voice_agent:voice_agent@postgres:5432/voice_agent}"
+      APP_DATABASE_URL: "${API_APP_DATABASE_URL:-postgresql+psycopg://voice_agent:voice_agent@postgres:5432/voice_agent_app}"
       VOICE_AUDIO_DIR: /app/data/audio
       DOCUMENT_UPLOAD_DIR: /app/data/uploads
     volumes:

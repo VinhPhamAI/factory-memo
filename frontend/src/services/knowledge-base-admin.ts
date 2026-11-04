@@ -57,8 +57,12 @@ export async function createKnowledgeBase(form: {
   }
   if (response.status === 409)
     throw new Error(`Mã “${form.name}” đã được dùng. Chọn mã khác.`);
-  if (response.status === 403)
+  if (response.status === 403) {
+    // The API uses 403 for both a missing role and the creation limit.
+    if (/role required/i.test(detail))
+      throw new Error("Chỉ chuyên gia hoặc quản trị viên mới tạo được knowledge base.");
     throw new Error("Đã đạt số knowledge base tối đa có thể tạo.");
+  }
   if (response.status === 503)
     throw new Error("Kho ứng dụng chưa sẵn sàng. Hãy thử lại.");
   throw new ApiError(response.status, detail);

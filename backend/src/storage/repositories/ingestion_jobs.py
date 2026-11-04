@@ -124,6 +124,7 @@ class IngestionJobRepository(Repository):
         self,
         sessions: async_sessionmaker[AsyncSession],
         *,
+        database_url: str | None = None,
         max_attempts: int | None = None,
         retry_delay_s: float | None = None,
         channel_prefix: str = CHANNEL_PREFIX,
@@ -132,6 +133,7 @@ class IngestionJobRepository(Repository):
         self.max_attempts = max_attempts or max_attempts_from_env()
         self.retry_delay_s = retry_delay_from_env() if retry_delay_s is None else retry_delay_s
         self._prefix = channel_prefix
+        self._database_url = database_url
 
     def channel(self, stage: str) -> str:
         """Notification channel of a stage."""
@@ -297,7 +299,12 @@ class IngestionJobRepository(Repository):
         return True
 
     async def complete(
-        self, job: Job, worker: str, result: dict[str, Any] | None = None
+        self,
+        job: Job,
+        worker: str,
+        result: dict[str, Any] | None = None,
+        *,
+        continue_pipeline: bool = True,
     ) -> Job | None:
         """Mark the job done and, in the same transaction, queue its next stage.
 
@@ -316,7 +323,7 @@ class IngestionJobRepository(Repository):
                 "locked_by": None,
                 "result": dict(result or {}),
             })
-            if not job.next_stages:
+            if not continue_pipeline or not job.next_stages:
                 await self._set_source_status(session, job, SourceStatus.PROCESSED)
                 return None
             return await self._insert(
@@ -423,14 +430,24 @@ class IngestionJobRepository(Repository):
             rows = (await session.execute(query)).mappings().all()
         return {row["source_id"]: _job(row) for row in rows}
 
-    def listener(self, database_url: str, stages: Sequence[str]) -> PgListener:
+    def listener(
+        self,
+        database_url: str | Sequence[str],
+        stages: Sequence[str] | None = None,
+    ) -> PgListener:
         """Return a LISTEN connection on the stages' channels, opened on its first wait.
 
         Args:
-            database_url: SQLAlchemy URL of the application database.
+            database_url: SQLAlchemy URL of the application database, or the
+                stages when the repository was constructed with a URL.
             stages: Stages whose notifications wake the worker.
         """
 
+        if stages is None:
+            stages = database_url  # type: ignore[assignment]
+            database_url = self._database_url or ""
+        if not isinstance(database_url, str) or not database_url:
+            raise ValueError("The application database URL is required for LISTEN")
         url = make_url(database_url).set(drivername="postgresql")
         return PgListener(
             url.render_as_string(hide_password=False),
