@@ -150,7 +150,8 @@ PLAYWRIGHT_DATA_MODE=mock npm run test:e2e
 Auth smoke test against a real backend: start the API with a migrated
 `APP_DATABASE_URL` and `AUTH_ALLOWED_ORIGINS` including the test origin, then run
 `PLAYWRIGHT_SUITE=auth npx playwright test` (optionally with `PLAYWRIGHT_CHANNEL=msedge`).
-It creates a new account on each run.
+It creates a new account on each run. `PLAYWRIGHT_SUITE=files` runs the
+[file library](../docs/features/file-library.md) smoke test the same way; it creates two accounts.
 
 `playwright.config.ts` uses port 5180 (override with `PLAYWRIGHT_PORT`) and starts the
 dev server if needed. Use a free `PLAYWRIGHT_PORT` when another Vite mode is already

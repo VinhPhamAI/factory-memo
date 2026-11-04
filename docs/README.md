@@ -25,6 +25,7 @@ Start with [product requirements](features/project-overview.md),
 
 - [Knowledge management](features/knowledge-management.md)
 - [Document uploads](features/document-uploads.md)
+- [File library](features/file-library.md) — `/v1/files` API and `/files` page for each user's own files.
 - [Industrial QA](features/industrial-qa.md)
 - [Conflict detection](features/conflict-detection.md)
 - [Voice capture](features/voice-capture.md)

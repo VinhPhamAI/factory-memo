@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import {
+  Files,
   FolderPlus,
   LibraryBig,
   LogOut,
@@ -36,6 +37,7 @@ const SECTIONS = [
     icon: LibraryBig,
     testId: "nav-knowledge-management",
   },
+  { to: "/files", label: "Thư viện file", icon: Files, testId: "nav-files" },
 ];
 
 /** Sidebar content: brand, sections, the chat list on /ask, and the account. */
