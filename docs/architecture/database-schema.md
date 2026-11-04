@@ -1,11 +1,12 @@
 # Database schema proposal
 
-**Status: tables created; only `users`, `auth_sessions` and `conversations` are used.** This document defines
+**Status: tables created; only `users`, `auth_sessions`, `conversations` and `files` are used.** This document defines
 the target tables, relationships, and the work handled by each service. The models in
 `backend/src/storage/orm/` and the Alembic revisions create these tables, the updated processing
 tables and the database rules in a separate database (`APP_DATABASE_URL`). Authentication
 reads and writes `users` and `auth_sessions`; agent chat reads and writes `conversations`
-([agent conversations](../features/conversations.md)); no other API, worker or agent uses these tables
+([agent conversations](../features/conversations.md)); the file library reads and writes `files`
+([file library](../features/file-library.md)). No other API, worker or agent uses these tables
 yet, and existing data has not been moved. See
 [database migrations](../development/database-migrations.md) for commands and enforced rules,
 and [authentication](../features/authentication.md) for login behavior.
@@ -122,6 +123,10 @@ Information about uploaded files. Actual file contents are not stored here.
 
 File permissions follow the related source or inquiry. A file ID alone does not
 grant download access. Processing status belongs to sources and processing jobs.
+
+Current implementation: the file library writes these rows. Its only read rule is
+owner access to a non-deleted file (`FileLibraryService.can_read`). Source and inquiry
+access is not implemented. See [file library](../features/file-library.md).
 
 ### 4. `knowledge_bases`
 

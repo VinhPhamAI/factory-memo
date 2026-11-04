@@ -4,10 +4,12 @@ Use Alembic to manage the sixteen application tables: the fifteen in the
 [schema proposal](../architecture/database-schema.md) (eleven proposed tables plus
 `ingestion_jobs`, `extraction_runs`, `content_signatures` and `knowledge_conflicts`
 rebuilt on shared IDs) and `auth_sessions` for login sessions. The API uses `users`
-and `auth_sessions` for [authentication](../features/authentication.md); workers,
-agents and other APIs do not use the remaining tables yet, and existing data has not
-been migrated. Service code still manages `knowledge_base_registry`, its own
-`ingestion_jobs` in the `DATABASE_URL` database and per-collection `kb_<name>` databases.
+and `auth_sessions` for [authentication](../features/authentication.md),
+`conversations` for [agent conversations](../features/conversations.md) and `files`
+for the [file library](../features/file-library.md); workers, agents and other APIs
+do not use the remaining tables yet, and existing data has not been migrated.
+Service code still manages `knowledge_base_registry`, its own `ingestion_jobs` in the
+`DATABASE_URL` database and per-collection `kb_<name>` databases.
 
 The new tables live in a separate database, because the new and service-created
 `ingestion_jobs` share a name.

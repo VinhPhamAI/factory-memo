@@ -10,6 +10,7 @@ copy every existing pattern. Use [engineering standards](code-standards.md) for 
 | `agent/` | Independent Python agent package, dependency lock, CLI, tests, and Dockerfile |
 | `agent/src/denso_agent/` | Agent API, graph/runtime, provider client, checkpoint access, setup commands |
 | `backend/app.py`, `backend/api/` | Existing backend HTTP APIs |
+| `backend/api/files.py`, `backend/src/services/file_*.py`, `backend/src/storage/file_library.py` | Personal file library: `/v1/files` routes, rules, type checks, and disk/`files` table storage |
 | `backend/src/services/` | Knowledge processing, extraction, and source handling |
 | `backend/src/storage/` | Current database access and knowledge/search records |
 | `backend/src/agents/rag/` | Existing original-document indexing and search |
@@ -39,7 +40,8 @@ Paths in this table are relative to the repository root.
 - [System responsibilities](../architecture/system-architecture.md) separate current and intended boundaries.
 - [Database proposal](../architecture/database-schema.md) has tables created by
   [migrations](database-migrations.md) (`backend/src/storage/orm/`, `backend/migrations/`)
-  in the `APP_DATABASE_URL` database; services do not use them yet.
+  in the `APP_DATABASE_URL` database; only the authentication and file library
+  code use them so far.
 - [Project guidance](../../AGENTS.md) preserves knowledge integrity and evaluation rules.
 
 Check the current code and configuration before reporting implementation status.
