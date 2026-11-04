@@ -58,6 +58,11 @@ async def _serve(stage: str) -> None:
     from backend.src.storage.repositories.knowledge_bases import KnowledgeBaseRepository
     from backend.src.storage.repositories.sources import SourceRepository
 
+    if stage == "convert":
+        from backend.src.services.converters.ocr import warn_ocr_configuration
+
+        warn_ocr_configuration()
+
     url = app_database_url_from_env()
     if not url:
         raise RuntimeError("APP_DATABASE_URL is required to start a worker")

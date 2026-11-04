@@ -6,7 +6,6 @@ import asyncio
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -14,6 +13,7 @@ from fastapi import HTTPException
 
 from backend.api.voice_capture import record_json
 from backend.knowledge_bases.base import KnowledgeBaseSpec
+from backend.src.services.converters import can_convert_file
 from backend.src.services.source_pipeline import NO_CONVERTER
 from backend.src.services.source_pipeline import duplicate_message, overlap_message
 from backend.src.services.knowledge_conflicts import link_updates, stale
@@ -33,7 +33,9 @@ from backend.src.storage.repositories.chunks import ChunkRepository
 from backend.src.storage.repositories.extraction_runs import ExtractionRunRepository
 from backend.src.storage.repositories.ingestion_jobs import IngestionJobRepository, JobConflict
 from backend.src.storage.repositories.knowledge_conflicts import ConflictRepository
-from backend.src.storage.repositories.sources import SourceEntry, SourceRepository
+from backend.src.storage.repositories.sources import (
+    SourceEntry, SourceJobRunning, SourceRemovalForbidden, SourceRepository,
+)
 
 
 PAGE_SIZE = 100
@@ -45,9 +47,6 @@ CLAIMING_STATUSES = ("open", "pending", "needs_review", "confirmed")
 RECHECK_SCAN_LIMIT = 1000
 OVERLAP_CANDIDATES = 20
 MAX_OVERLAPS = 5
-TEXT_EXTENSIONS = {
-    ".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml", ".log",
-}
 
 
 def review_state(counts: dict[str, int], extracted: bool) -> str:
@@ -94,10 +93,7 @@ class ApplicationKnowledgeManagementService:
     def _convertible(source: SourceEntry) -> bool:
         if source.file is None:
             return False
-        return (
-            source.file.content_type.startswith("text/")
-            or Path(source.file.filename).suffix.lower() in TEXT_EXTENSIONS
-        )
+        return can_convert_file(source.file.content_type, source.file.filename)
 
     @staticmethod
     def _processing(source: SourceEntry, job: Any | None) -> dict[str, Any]:
@@ -127,7 +123,7 @@ class ApplicationKnowledgeManagementService:
             mode = source.metadata["extraction_mode"]
         kind = (
             "upload"
-            if source.kind == "document" and source.file is not None
+            if source.kind in {"document", "image"} and source.file is not None
             else "conversation"
         )
         convertible = self._convertible(source)
@@ -146,16 +142,18 @@ class ApplicationKnowledgeManagementService:
             "can_convert": source.file is not None and not converted and convertible,
             "can_extract_raw": source.file is not None and not converted and convertible,
             "conversion_note": None if converted or convertible else NO_CONVERTER,
+            "submitted_by": str(source.submitted_by),
+            "removed_at": source.removed_at.isoformat() if source.removed_at else None,
             "source_kind": source.metadata.get("source_kind")
             or ("document_upload" if kind == "upload" else "text"),
         }
 
-    async def inventory(self, kb: str, offset: int = 0) -> dict[str, Any]:
+    async def inventory(self, kb: str, offset: int = 0, *, include_removed: bool = False) -> dict[str, Any]:
         """Return one source page with chunk counts and each latest job."""
 
         knowledge_base_id, spec = self.spec(kb)
         rows, total = await self.sources.list_page(
-            knowledge_base_id, limit=PAGE_SIZE, offset=offset
+            knowledge_base_id, limit=PAGE_SIZE, offset=offset, include_removed=include_removed
         )
         jobs = await self.jobs.latest(knowledge_base_id, [row.id for row in rows])
         return {
@@ -164,6 +162,23 @@ class ApplicationKnowledgeManagementService:
             "next_offset": offset + PAGE_SIZE if offset + len(rows) < total else None,
             "qa_mode": spec.retrieval.value,
         }
+
+    async def remove_source(
+        self, kb: str, source_id: UUID, *, actor_id: UUID, role: str,
+    ) -> None:
+        """Remove one source if the actor is allowed and it has no running job."""
+
+        knowledge_base_id, _spec = self.spec(kb)
+        try:
+            removed = await self.sources.remove(
+                knowledge_base_id, source_id, actor_id=actor_id, role=role,
+            )
+        except SourceRemovalForbidden as exc:
+            raise HTTPException(403, "Only the submitter, an expert or an administrator may remove this source") from exc
+        except SourceJobRunning as exc:
+            raise HTTPException(409, "A job is running for this source") from exc
+        if not removed:
+            raise HTTPException(404, "Source not found")
 
     async def detail(self, kb: str, kind: str, source_id: str) -> dict[str, Any]:
         """Return source text and every record or passage linked to it."""
@@ -179,6 +194,11 @@ class ApplicationKnowledgeManagementService:
         jobs = await self.jobs.latest(knowledge_base_id, [identifier])
         records = await self.chunks.records_for_source(knowledge_base_id, identifier)
         passages = await self.chunks.passages_for_source(knowledge_base_id, identifier)
+        references = (
+            await self.chunks.references_for_source(knowledge_base_id, identifier)
+            if hasattr(self.chunks, "references_for_source")
+            else {}
+        )
         counts = Counter(record.status.value for record in records)
         counts.update(chunk["status"] for chunk in passages)
         source = replace(source, chunk_counts=dict(counts))
@@ -219,11 +239,16 @@ class ApplicationKnowledgeManagementService:
                 "records": [record_json(record) for record in records],
                 "merged_into": [],
             }
+        serialized_records = []
+        for record in records:
+            value = record_json(record)
+            value["references"] = references.get(record.id, [{"type": "source"}])
+            serialized_records.append(value)
         return {
             **summary,
             "text": text[:PREVIEW_CHARS] if text is not None else None,
             "text_truncated": text is not None and len(text) > PREVIEW_CHARS,
-            "records": [record_json(record) for record in records],
+            "records": serialized_records,
             "chunks": passages,
             "conversation": conversation,
             "evidence_id": str(source.id),

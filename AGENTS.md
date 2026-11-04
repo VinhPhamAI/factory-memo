@@ -29,10 +29,10 @@ automatically create or approve reusable knowledge. Preserve original evidence,
 context, failed attempts, exceptions, and reported outcomes.
 
 This checkout supports text/document ingestion, retrieval, QA, evaluation and
-live microphone capture. A standalone PDF/image OCR service exists
-(`deployments/ocr`) but ingestion does not use it. Multimodal extraction,
-location/QR identification, Office OCR and transcription of uploaded media are
-not implemented.
+live microphone capture. PDF, DOCX, XLSX, PNG and JPEG ingestion preserves
+located evidence; scanned PDFs and images use the standalone OCR service through
+the hosted AI services gateway. Location/QR identification, Office image OCR and
+transcription of uploaded media are not implemented.
 Voice accuracy on Vietnamese factory audio has not been evaluated.
 
 ## Code boundaries
@@ -45,8 +45,9 @@ separate package from the older backend agent.
   and retrieval settings. Built-ins are `industrial_qa` and `general`; UI-created
   KBs copy General policy. `enterprise_rag` and `assetopsbench` are referenced in
   docs/tests but their packages are absent; recheck before using them.
-- `backend/src/services/`: extraction, normalization, verification, consolidation
-  and source processing. Save source evidence before extraction.
+- `backend/src/services/`: format conversion and OCR clients, extraction,
+  normalization, verification, consolidation and source processing. Save source
+  evidence before extraction.
 - `backend/src/storage/`: PostgreSQL + pgvector, evidence, knowledge and indexes.
   Each KB normally uses `kb_<name>`; the registry and job queue use `DATABASE_URL`.
 - `backend/src/storage/orm/` and `backend/migrations/`: application-table models and

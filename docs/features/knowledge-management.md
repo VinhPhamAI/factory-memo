@@ -7,6 +7,40 @@ uploads original files. It links to management after saving. Its **Auto · chạ
 [Job queue and workers](#job-queue-and-workers)). Existing
 `/capture/<kb>/<conversation_id>` bookmarks redirect to the shared workspace.
 
+## Manage a knowledge base
+
+1. Open **Knowledge base** in the **Quản lý tri thức** sidebar. Select a collection
+   to see its name, title, description, template, creator, dates and counts.
+2. Experts and administrators can create a collection and edit its title and
+   description in this tab. The stable name identifies URLs, QA threads and
+   storage keys.
+3. Open **Nguồn dữ liệu** and use **Thêm tài liệu** to upload files into the
+   selected collection. An upload of identical bytes opens the existing source
+   when uploading a single file.
+4. The submitter, an expert or an administrator can use **Gỡ nguồn**. A running
+   job must finish before the source can be removed. Queued jobs fail with
+   `SOURCE_REMOVED`.
+5. In **Knowledge base**, an administrator can delete a collection by typing its
+   name to confirm. Its name stays reserved. The API hides it from QA and capture,
+   drops its in-memory
+   QA threads and fails queued jobs with `KB_DELETED`. A running job for the
+   deleted KB fails without publishing new chunks or queuing a follow-up.
+
+Removal retains the source, its bytes, linked chunks and conflicts for history.
+A chunk remains searchable while it has another active evidence source. The
+original download follows the source and returns `404` after removal.
+
+| API | Access | Response |
+|---|---|---|
+| `GET /v1/knowledge-bases/{kb}` | Active user | `200` with `name`, `title`, `description`, `template`, `created_by` (username), `created_at`, `updated_at`, `source_counts` by active source status and `chunk_counts` by stored chunk kind and status |
+| `PATCH /v1/knowledge-bases/{kb}` | Expert or admin | `200` with the updated detail. Send a nonempty `title` (up to 80 characters), `description` (up to 500, empty clears it), or both. Sending `name` returns `422`. |
+| `DELETE /v1/knowledge-bases/{kb}` | Admin | `204`. An unknown or already deleted KB returns `404`. |
+| `DELETE /v1/knowledge-management/{kb}/sources/{kind}/{source_id}` | Submitter, expert or admin | `204`, `409` while an ingestion job is running, or `404` for an unknown or removed source. |
+| `GET /v1/knowledge-management/{kb}/sources?include_removed=true` | Active user | Includes removed sources with their `removed_at` timestamps. The default inventory hides them. |
+
+The routes return `401` for unusable bearer tokens, `403` for insufficient
+permissions and `503` when the application database is unavailable.
+
 ## Source lifecycle
 
 ### Conflict review
@@ -56,7 +90,7 @@ Processing and human review are independent:
 | Stage | Meaning |
 | --- | --- |
 | `raw` | The original upload is stored. This does not imply that it has been read, OCRed or indexed. |
-| `converted` | Text is available: a microphone transcript, an existing text evidence record, or a strictly decoded text upload. |
+| `converted` | Text is available from a transcript or a supported text, PDF, DOCX, XLSX, PNG or JPEG upload. |
 | `extracted` | Knowledge items or document chunks have been generated. Results still need human review. A completed run can also contain zero new items, e.g. consolidation only added support. |
 
 TXT uploads can go **directly from raw to extraction**. In the source list, check
@@ -64,15 +98,21 @@ one or more sources (or **select all** visible ones) and use **Convert** or
 **Extract** in the bar above the list; Extract on a raw source queues conversion
 followed by extraction. Each button applies only to the checked sources that
 support that step and shows how many; running sources and sources without a
-converter cannot be checked. Sources whose request fails stay checked for a retry. Conversion reads UTF-8 (optionally with BOM) or BOM-marked UTF-16, preserves line endings,
-and saves the result in `knowledge_sources.extracted_text` with encoding, digest
-and timestamp metadata. No manual Convert action is
-required. Invalid encodings, empty text and NUL-containing text are refused;
-original bytes remain intact. Other text formats (MD, CSV, TSV, JSON, XML, YAML,
-LOG or `text/*`) have an explicit **Chuyển thành text** action. No OCR or generic
-media converter is implemented: PDFs, images, Office files and uploaded media
-stay raw with an explanatory message. Microphone recordings already have ASR
-transcripts and therefore start in converted.
+converter cannot be checked. Sources whose request fails stay checked for a retry.
+The worker detects file content before selecting a converter:
+
+- text preserves strict UTF-8/UTF-16 decoding and original line endings;
+- PDF text extraction preserves page and block bounding boxes;
+- DOCX preserves paragraph and table-cell positions;
+- XLSX renders sheet headings and tab-separated rows with cell ranges;
+- PNG, JPEG and PDFs below `PDF_MIN_TEXT_CHARS_PER_PAGE` average text characters
+  per page use the hosted OCR gateway.
+
+Converted text is saved in `knowledge_sources.extracted_text`. Conversion metadata
+records the converter, version, digest, timestamp, provider details and exact
+located segments. Invalid or empty files are refused; original bytes remain intact.
+Office image OCR, PPTX and uploaded audio/video conversion are not implemented.
+Microphone recordings already have ASR transcripts and start in converted.
 
 The inventory lists `knowledge_sources` from `APP_DATABASE_URL`. Knowledge records
 and document passages appear through `knowledge_chunk_sources`, so one source is
@@ -123,6 +163,14 @@ quote navigation and audio playback alongside the shared review controls.
 Knowledge approval checks remain human decisions: source-faithfulness checks do
 not establish engineering correctness or make synthetic content an approved SOP.
 
+For converted uploads, each knowledge quote or document passage links to every
+exact segment it overlaps: PDF/OCR page and optional region, DOCX paragraph,
+XLSX sheet and cell range, or image area. An exact knowledge quote that cannot be
+found falls back to the whole source with `location_missing: true`; locations are
+never interpolated. The review UI opens PDF pages, marks image areas and labels
+paragraphs or cell ranges. OCR accuracy on Vietnamese factory documents has not
+been evaluated, so these locations and extracted text still require review.
+
 ## Storage and APIs
 
 Uploads keep original `content` bytes in the object directory and Docker volume.
@@ -142,7 +190,8 @@ All endpoints below are under `/v1/knowledge-management/{kb}`:
 | GET | `/sources?offset=0` | Source inventory and partial-availability warnings |
 | GET | `/sources/{kind}/{id}` | Source, text preview, processing and review results |
 | GET | `/sources/upload/{id}/original` | Download original bytes |
-| POST | `/sources/upload/{id}/convert` | Queue decoding of a supported text file (202 `{job}`) |
+| GET | `/sources/upload/{id}/pages/{page}` | Render one PDF page as PNG for a region highlight |
+| POST | `/sources/upload/{id}/convert` | Queue conversion of a supported file (202 `{job}`) |
 | POST | `/sources/{kind}/{id}/extract` | `{"mode":"knowledge"}` or `{"mode":"documents"}`; queues convert → extract for a raw upload (202 `{status, mode, job}`) |
 | POST | `/knowledge/{record_id}/review` | Knowledge decision and optional note |
 | POST | `/sources/{kind}/{id}/review-chunk` | Source-scoped chunk decision, chunk ID and optional note |
@@ -335,5 +384,6 @@ uv run python -m backend.worker --stage extract     # one worker, no supervisor
 `WORKER_CONVERT_PROCESSES`/`WORKER_EXTRACT_PROCESSES`/`WORKER_CONFLICT_PROCESSES` set the default counts;
 several worker containers can share the queue. Without a running worker, jobs
 stay queued. The worker and API must use the same `APP_DATABASE_URL`. Conversion
-covers plain-text uploads only; OCR and speech-to-text for uploaded media are not
-implemented, so such files stay raw.
+covers text, PDF, DOCX, XLSX, PNG and JPEG. Scanned PDFs and images need a hosted
+OCR gateway at `OCR_API_URL`; transcription of uploaded audio/video is not
+implemented.

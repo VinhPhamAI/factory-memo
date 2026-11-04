@@ -126,7 +126,7 @@ class ApplicationKnowledgeManagementTest(unittest.IsolatedAsyncioTestCase):
                 return (knowledge_base_id, get_kb("general")) if name == "factory" else None
 
         class Sources:
-            async def list_page(self, kb_id, *, limit, offset):
+            async def list_page(self, kb_id, *, limit, offset, include_removed=False):
                 return rows[offset:offset + limit], len(rows)
 
             async def get(self, kb_id, source_id):

@@ -12,14 +12,23 @@ import asyncio
 import hashlib
 import logging
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from backend.api.voice_capture import default_ingestion_factory
 from backend.src.agents.rag import Document, chunk_document
 from backend.src.agents.rag.indexing import index_config
+from backend.src.services.converters import ConverterError, Segment, convert_file
 from backend.src.services.knowledge_ingestion import transcript_sha256
+from backend.src.services.located_evidence import (
+    references_for_chunks,
+    references_for_record,
+    segments_from_metadata,
+)
 from backend.src.services.source_pipeline import (
     MAX_OVERLAPS,
     OVERLAP_CANDIDATES,
@@ -59,7 +68,7 @@ from backend.src.storage.repositories.extraction_runs import (
     ExtractionRunRepository,
     RunConflict,
 )
-from backend.src.storage.repositories.ingestion_jobs import Job
+from backend.src.storage.repositories.ingestion_jobs import Job, PreparedJobResult
 from backend.src.storage.repositories.knowledge_conflicts import ConflictRepository
 from backend.src.storage.repositories.sources import FileEntry, SourceEntry, SourceRepository
 
@@ -118,6 +127,9 @@ class ApplicationKnowledgeStore:
         *,
         vector_size: int,
         leading_keys: tuple[str, ...] = (),
+        source_text: str = "",
+        segments: tuple[Segment, ...] = (),
+        defer_writes: bool = False,
     ) -> None:
         self.knowledge_base_id = knowledge_base_id
         self.source_id = source_id
@@ -125,6 +137,10 @@ class ApplicationKnowledgeStore:
         self.embeddings = embeddings
         self.vector_size = vector_size
         self.leading_keys = leading_keys
+        self.source_text = source_text
+        self.segments = segments
+        self.defer_writes = defer_writes
+        self.write_chunks: Callable[..., Any] | None = None
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Embed texts and reject vectors that do not match the database dimension."""
@@ -155,16 +171,28 @@ class ApplicationKnowledgeStore:
         *,
         updates: list[KnowledgeLinkUpdate] | tuple[KnowledgeLinkUpdate, ...] = (),
     ) -> list[UUID]:
-        """Embed and atomically store records, evidence links and link updates."""
+        """Embed records and either store them or defer writes to job completion."""
 
         await self.embed_knowledge(records)
-        return await self.chunks.add_records_and_updates(
+        references_by_record = {
+            record.id: references_for_record(
+                record, self.source_text, self.segments
+            )
+            for record in records
+        }
+        write = partial(
+            self.chunks.add_records_and_updates,
             self.knowledge_base_id,
             self.source_id,
             records,
             updates=updates,
             leading_keys=self.leading_keys,
+            references_by_record=references_by_record,
         )
+        if not self.defer_writes:
+            return await write()
+        self.write_chunks = write
+        return [record.id for record in records]
 
     async def mark_conversation(
         self,
@@ -244,15 +272,24 @@ class ApplicationSourcePipeline:
         """Accept catalog listener notifications; policies are resolved per job."""
 
     async def _resolve(self, knowledge_base_id: UUID) -> tuple[str, Any]:
+        """Resolve the current policy even if the KB was previously cached."""
+
+        await self.catalog.refresh()
         resolved = self.catalog.resolve_id(knowledge_base_id)
-        if resolved is None:
-            await self.catalog.refresh()
-            resolved = self.catalog.resolve_id(knowledge_base_id)
         if resolved is None:
             raise LookupError(f"Knowledge base {knowledge_base_id} not found")
         return resolved
 
-    def _store(self, knowledge_base_id: UUID, source_id: UUID, spec: Any) -> ApplicationKnowledgeStore:
+    def _store(
+        self,
+        knowledge_base_id: UUID,
+        source: SourceEntry,
+        spec: Any,
+        *,
+        defer_writes: bool = False,
+    ) -> ApplicationKnowledgeStore:
+        """Build the ingestion adapter with the source's located conversion spans."""
+
         embeddings = self._embeddings.get(spec.name)
         if embeddings is None:
             embeddings = self._embeddings_factory(
@@ -263,11 +300,14 @@ class ApplicationSourcePipeline:
             self._vector_size = embedding_dim_from_env()
         return ApplicationKnowledgeStore(
             knowledge_base_id,
-            source_id,
+            source.id,
             self.chunks,
             embeddings,
             vector_size=self._vector_size,
             leading_keys=spec.embedding_context_keys,
+            source_text=source.extracted_text or "",
+            segments=tuple(segments_from_metadata(source.metadata)),
+            defer_writes=defer_writes,
         )
 
     async def _source(self, job: Job) -> tuple[str, Any, SourceEntry]:
@@ -277,7 +317,7 @@ class ApplicationSourcePipeline:
             raise JobFailed("Không tìm thấy nguồn của job.")
         return kb_name, spec, source
 
-    async def run(self, job: Job) -> dict[str, Any]:
+    async def run(self, job: Job) -> dict[str, Any] | PreparedJobResult:
         """Dispatch one claimed stage job."""
 
         handler = {
@@ -306,11 +346,23 @@ class ApplicationSourcePipeline:
         if source.file is None:
             raise JobFailed("Chỉ file tải lên cần bước chuyển đổi.")
         if source.extracted_text is None:
-            text, conversion = await asyncio.to_thread(
-                convert_plain_text,
-                source.file,
-                self.uploads.content_path(source.file.storage_key),
-            )
+            try:
+                converted = await convert_file(
+                    self.uploads.content_path(source.file.storage_key),
+                    source.file.content_type,
+                    source.file.filename,
+                )
+            except ConverterError as exc:
+                raise JobFailed(exc.message, retry=exc.retry) from exc
+            text = converted.text
+            conversion: dict[str, Any] = {
+                "converter": converted.converter,
+                "version": 1,
+                "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                "at": now(),
+                "details": converted.details,
+                "segments": [segment.to_json() for segment in converted.segments],
+            }
             source = await self.sources.update(
                 job.knowledge_base_id,
                 job.source_id,
@@ -323,9 +375,12 @@ class ApplicationSourcePipeline:
             conversion = dict(source.metadata.get("conversion") or {})
             if not conversion:
                 conversion = {
-                    "encoding": None,
+                    "converter": "existing_text",
+                    "version": 1,
                     "sha256": hashlib.sha256(source.extracted_text.encode()).hexdigest(),
                     "at": now(),
+                    "details": {},
+                    "segments": [],
                 }
                 await self.sources.update(
                     job.knowledge_base_id,
@@ -334,8 +389,7 @@ class ApplicationSourcePipeline:
                 )
         await self._sign(job.knowledge_base_id, job.source_id, source.extracted_text)
         return {
-            "converter": "text",
-            "encoding": conversion.get("encoding"),
+            "converter": conversion.get("converter"),
             "sha256": conversion.get("sha256"),
         }
 
@@ -407,7 +461,7 @@ class ApplicationSourcePipeline:
         )
         return matches[:MAX_OVERLAPS]
 
-    async def run_extract(self, job: Job) -> dict[str, Any]:
+    async def run_extract(self, job: Job) -> dict[str, Any] | PreparedJobResult:
         """Extract knowledge or passages once, with duplicate and overlap guards."""
 
         _kb_name, spec, source = await self._source(job)
@@ -486,7 +540,7 @@ class ApplicationSourcePipeline:
         if confirmation:
             state["overlap_confirmed"] = True
 
-        store = self._store(job.knowledge_base_id, source.id, spec)
+        store = self._store(job.knowledge_base_id, source, spec, defer_writes=True)
         if mode == "knowledge":
             ingestion, settings = self._ingestion_factory(spec, store)
         else:
@@ -564,9 +618,20 @@ class ApplicationSourcePipeline:
                     spec.chunking,
                 )
                 vectors = await store.embed_texts([chunk.search_text for chunk in passages])
-                state["stored"] = len(await self.chunks.add_passages(
-                    job.knowledge_base_id, source.id, passages, vectors
-                ))
+                references = references_for_chunks(
+                    passages,
+                    text,
+                    segments_from_metadata(source.metadata),
+                )
+                store.write_chunks = partial(
+                    self.chunks.add_passages,
+                    job.knowledge_base_id,
+                    source.id,
+                    passages,
+                    vectors,
+                    references_by_chunk=references,
+                )
+                state["stored"] = len(passages)
         except asyncio.CancelledError:
             state.update(status="interrupted", finished_at=now())
             await asyncio.shield(self.sources.update(
@@ -583,18 +648,25 @@ class ApplicationSourcePipeline:
                 await runs.finish(run.id, "failed", error=message)
             raise
         state.update(status="done", finished_at=now())
-        await runs.finish(
-            run.id,
-            "done",
-            result={"stored": state.get("stored", 0), "job_id": str(job.id)},
+
+        async def persist(session: AsyncSession) -> None:
+            """Store chunks and finish the extraction with the job's transaction."""
+
+            if store.write_chunks is not None:
+                await store.write_chunks(session=session)
+            await runs.finish(
+                run.id, "done", session=session,
+                result={"stored": state.get("stored", 0), "job_id": str(job.id)},
+            )
+            await self.sources.update(
+                job.knowledge_base_id, source.id, session=session,
+                metadata={"management": state},
+            )
+
+        return PreparedJobResult(
+            result={"evidence_id": str(source.id), "mode": mode, "stored": state.get("stored", 0)},
+            persist=persist,
         )
-        await self.sources.update(
-            job.knowledge_base_id, source.id, metadata={"management": state}
-        )
-        return {
-            "evidence_id": str(source.id), "mode": mode,
-            "stored": state.get("stored", 0),
-        }
 
     async def run_conflict(self, job: Job) -> dict[str, Any]:
         """Judge suspected conflicts and store the source-level result summary."""
@@ -603,7 +675,7 @@ class ApplicationSourcePipeline:
         detector = spec.conflict_factory(spec) if spec.conflict_factory is not None else None
         if detector is None:
             return {"skipped": "conflict detection disabled"}
-        store = self._store(job.knowledge_base_id, source.id, spec)
+        store = self._store(job.knowledge_base_id, source, spec)
         result = await detector.adetect(
             store,
             ConflictRepository(self.sessions, job.knowledge_base_id),

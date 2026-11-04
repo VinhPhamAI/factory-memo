@@ -45,6 +45,7 @@ from backend.src.storage.embeddings import verify_embedding_dimension
 from backend.src.storage.file_library import FileBlobStore, FileRecordStore
 from backend.src.services.auth import AuthService
 from backend.src.services.file_library import FileLibraryService
+from backend.src.storage.repositories.lifecycle import InactiveKnowledgeBase, InactiveSource
 from backend.src.storage.repositories.chunks import ChunkRepository
 from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
 from backend.src.storage.repositories.ingestion_jobs import IngestionJobRepository
@@ -193,15 +194,17 @@ def create_app(
         app.state.voice_capture = capture
         app.state.kb_catalog = catalog
         app.state.knowledge_management = manager
+        if catalog is not None:
+            catalog.start_listener(url)
         try:
             yield
         finally:
+            if catalog is not None:
+                await catalog.aclose()
             if manager is not None:
                 await manager.aclose()
             await capture.aclose()
             await pool.aclose()
-            if catalog is not None:
-                await catalog.aclose()
             if owned_agent_client is not None:
                 await owned_agent_client.aclose()
             if app_engine is not None:
@@ -217,6 +220,15 @@ def create_app(
     api.add_exception_handler(
         KnowledgeStorageUnavailable, knowledge_storage_unavailable
     )
+
+    @api.exception_handler(InactiveKnowledgeBase)
+    @api.exception_handler(InactiveSource)
+    async def inactive_ingestion_target(_request: Request, exc: LookupError) -> JSONResponse:
+        """Return 404 when a concurrent deletion invalidates a write target."""
+
+        detail = "Knowledge base not found" if isinstance(exc, InactiveKnowledgeBase) else "Source not found"
+        return JSONResponse(status_code=404, content={"detail": detail})
+
     api.add_exception_handler(RequestValidationError, auth_validation_error)
     api.include_router(auth_router)
     api.include_router(conversations_router)

@@ -152,6 +152,7 @@ or pasted text. Employee-agent chats are not knowledge sources.
 | `id` | `uuid` | Primary key |
 | `knowledge_base_id` | `uuid` | References `knowledge_bases.id` |
 | `file_id` | `uuid`, optional | References `files.id`; required for document/image sources |
+| `original_sha256` | `text`, optional | SHA-256 copied from the original file for document and image sources |
 | `title` | `text` | Source name |
 | `kind` | `text` | `document`, `image`, or `text` |
 | `extracted_text` | `text`, optional | Text read from the source; `NULL` before conversion |
@@ -163,6 +164,19 @@ or pasted text. Employee-agent chats are not knowledge sources.
 Do not store embeddings here. A source can finish processing without producing
 chunks if no usable knowledge is found. Keep original files and the evidence used
 by existing chunks when processing again. Record attempts and errors separately.
+
+A partial unique index on `(knowledge_base_id, original_sha256)` applies to
+sources with a hash and no `deleted_at`. Typed text and audio-backed transcripts
+leave the hash empty. Removing a source soft-deletes its file row when no other
+active source references that file. The bytes and evidence links remain stored.
+
+Before upgrading to revision `095bca4b489d`, stop the API and workers against the
+target application database. The revision backfills hashes from existing file
+records. If duplicate active sources exist, it keeps the one with the most
+non-deprecated, non-deleted linked chunks, breaking ties by earliest creation
+time and then ID. Other copies are soft-deleted, and their queued jobs fail with
+`SOURCE_REMOVED`. Chunks linked exclusively to those copies leave search. A
+schema downgrade removes the hash and index and preserves these removal records.
 
 ### 6. `knowledge_chunks`
 

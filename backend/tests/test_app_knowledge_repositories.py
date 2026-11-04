@@ -50,6 +50,7 @@ from backend.src.storage.repositories import (
     RunConflict,
     SourceRepository,
 )
+from backend.src.storage.repositories.lifecycle import InactiveKnowledgeBase, InactiveSource
 from backend.tests.test_database_migrations import DATABASE_URL, MigratedDatabaseTest
 
 # Content hashes are checked to be SHA-256 hex digests.
@@ -122,6 +123,32 @@ class KnowledgeBaseRepositoryTest(RepositoryTest):
             await repository.create(name="line_a", title="Again", description="", template="general",
                                     created_by=self.user.id)
 
+    async def test_detail_counts_source_status_and_chunk_kind(self) -> None:
+        """Include zero-filled counts, grouped by status and chunk kind."""
+
+        sources = SourceRepository(self.sessions)
+        chunks = ChunkRepository(self.sessions)
+        for status in ("received", "processing", "processed", "failed"):
+            source = await self.add_source()
+            await sources.update(self.kb.id, source, status=status)
+        await chunks.add_records(self.kb.id, source, [record(status=KnowledgeStatus.APPROVED)])
+        await chunks.add_passages(
+            self.kb.id, source, [Chunk(doc_id="manual", index=0, text="Pump inspection")],
+            [[1.0, 0.0, 0.0]],
+        )
+        repository = KnowledgeBaseRepository(self.sessions)
+        detail = await repository.detail(self.kb.name)
+        self.assertEqual(detail.created_by, self.user.username)
+        self.assertEqual(detail.source_counts, dict.fromkeys(
+            ("received", "processing", "processed", "failed"), 1,
+        ))
+        self.assertEqual(detail.chunk_counts, {
+            "knowledge": {"draft": 0, "approved": 1, "deprecated": 0},
+            "document_passage": {"draft": 1, "approved": 0, "deprecated": 0},
+        })
+        await repository.delete(self.kb.name)
+        self.assertIsNone(await repository.detail(self.kb.name))
+
     async def test_the_limit_counts_active_knowledge_bases(self) -> None:
         repository = KnowledgeBaseRepository(self.sessions)
         active = len(await repository.list_active())
@@ -147,8 +174,8 @@ class SourceRepositoryTest(RepositoryTest):
         with Session(self.engine) as session:
             self.assertEqual(session.get(File, source.file.id).uploaded_by, self.user.id)
         files, sources = self.count(File), self.count(KnowledgeSource)
-        with self.assertRaises(IntegrityError):
-            # The file row is inserted first; the source insert fails on the unknown KB.
+        with self.assertRaises(InactiveKnowledgeBase):
+            # No file is inserted for an inactive KB.
             await repository.create(uuid4(), kind=SourceKind.DOCUMENT, title="x",
                                     submitted_by=self.user.id, file=self.new_file())
         with self.assertRaises(IntegrityError):
@@ -157,6 +184,27 @@ class SourceRepositoryTest(RepositoryTest):
         self.assertEqual((self.count(File), self.count(KnowledgeSource)), (files, sources))
         with self.assertRaises(ValueError):
             await repository.create(self.kb.id, kind=SourceKind.IMAGE, title="z", submitted_by=self.user.id)
+
+    async def test_removal_keeps_a_file_shared_by_another_source(self) -> None:
+        """Only the removal of the last active reference soft-deletes the file."""
+
+        repository = SourceRepository(self.sessions)
+        upload = await repository.create(
+            self.kb.id, kind=SourceKind.DOCUMENT, title="manual.txt",
+            submitted_by=self.user.id, file=self.new_file(),
+        )
+        other_kb = self.add_kb()
+        other_source = await self.add_source(other_kb)
+        with self.engine.begin() as conn:
+            conn.execute(update(KnowledgeSource).where(
+                KnowledgeSource.id == other_source,
+            ).values(file_id=upload.file.id))
+        await repository.remove(self.kb.id, upload.id, actor_id=self.user.id, role=self.user.role)
+        with Session(self.engine) as session:
+            self.assertIsNone(session.get(File, upload.file.id).deleted_at)
+        await repository.remove(other_kb.id, other_source, actor_id=self.user.id, role=self.user.role)
+        with Session(self.engine) as session:
+            self.assertIsNotNone(session.get(File, upload.file.id).deleted_at)
 
     async def test_pages_count_chunks_and_updates_merge_metadata(self) -> None:
         repository = SourceRepository(self.sessions)
@@ -297,6 +345,45 @@ class IngestionJobRepositoryTest(RepositoryTest):
         with self.engine.connect() as conn:
             return conn.scalar(select(KnowledgeSource.status).where(KnowledgeSource.id == source_id))
 
+    async def test_kb_deletion_fails_queued_and_discards_prepared_chunks(self) -> None:
+        """Let a claimed job finish after deletion and refuse its pending writes."""
+
+        active = await self.add_source()
+        queued = await self.add_source()
+        await self.queue.enqueue(self.kb.id, active, "extract", mode="knowledge", next_stages=["conflict"])
+        running = await self.queue.claim("extract", "worker")
+        await self.queue.enqueue(self.kb.id, queued, "extract", mode="knowledge")
+        self.assertTrue(await KnowledgeBaseRepository(self.sessions).delete(self.kb.name))
+
+        latest = await self.queue.latest(self.kb.id)
+        self.assertEqual(latest[running.source_id].status, "running")
+        self.assertEqual((latest[queued].status, latest[queued].error), ("failed", "KB_DELETED"))
+        self.assertIsNone(await self.queue.claim("extract", "another"))
+
+        async def persist(session):
+            await ChunkRepository(self.sessions).add_records_and_updates(
+                self.kb.id, active, [record()], session=session,
+            )
+
+        self.assertIsNone(await self.queue.complete(running, "worker", persist=persist))
+        latest = await self.queue.latest(self.kb.id)
+        self.assertEqual((latest[active].status, latest[active].error), ("failed", "KB_DELETED"))
+        self.assertEqual(await ChunkRepository(self.sessions).records_for_source(self.kb.id, active), [])
+
+    async def test_running_source_cannot_be_removed(self) -> None:
+        """A running job wins the removal race and remains owned by its worker."""
+
+        from backend.src.storage.repositories.sources import SourceJobRunning
+
+        source = await self.add_source()
+        await self.queue.enqueue(self.kb.id, source, "convert")
+        running = await self.queue.claim("convert", "worker")
+        sources = SourceRepository(self.sessions)
+        with self.assertRaises(SourceJobRunning):
+            await sources.remove(self.kb.id, source, actor_id=self.user.id, role=self.user.role)
+        await self.queue.complete(running, "worker")
+        self.assertTrue(await sources.remove(self.kb.id, source, actor_id=self.user.id, role=self.user.role))
+
     async def test_enqueue_claim_and_chain_the_next_stage(self) -> None:
         source = await self.add_source()
         job = await self.queue.enqueue(self.kb.id, source, "convert", mode="documents",
@@ -332,7 +419,7 @@ class IngestionJobRepositoryTest(RepositoryTest):
             await self.queue.enqueue(self.kb.id, source, "ocr")
         # The source must belong to the job's knowledge base.
         fresh = await self.add_source()
-        with self.assertRaises(IntegrityError):
+        with self.assertRaises(InactiveSource):
             await self.queue.enqueue(self.add_kb().id, fresh, "convert")
 
     async def test_retry_with_backoff_then_fail(self) -> None:

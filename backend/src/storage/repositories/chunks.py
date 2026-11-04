@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -161,6 +161,8 @@ class ChunkRepository(Repository):
         updates: Sequence[KnowledgeLinkUpdate] = (),
         leading_keys: Sequence[str] = (),
         references: Sequence[dict[str, Any]] = (SOURCE_REFERENCE,),
+        references_by_record: Mapping[UUID, Sequence[dict[str, Any]]] | None = None,
+        session: AsyncSession | None = None,
     ) -> list[UUID]:
         """Insert records, source links and consolidation updates atomically.
 
@@ -170,7 +172,9 @@ class ChunkRepository(Repository):
             records: New extracted records, including their embeddings.
             updates: Link or supersession changes to existing records.
             leading_keys: Context keys indexed first in each record's search text.
-            references: Evidence locations within the source; at least one.
+            references: Default evidence locations within the source; at least one.
+            references_by_record: Per-record locations, used instead of the default
+                when present for a record ID.
 
         Returns:
             IDs of the inserted records in input order.
@@ -184,7 +188,7 @@ class ChunkRepository(Repository):
             raise ValueError("Every record must cite the source being stored")
         if not records and not updates:
             return []
-        async with self._transaction() as session:
+        async with self._transaction(session) as session:
             if records:
                 session.add_all(
                     chunk_row(knowledge_base_id, record, leading_keys=leading_keys)
@@ -193,7 +197,11 @@ class ChunkRepository(Repository):
                 await session.flush()
                 session.add_all(
                     KnowledgeChunkSource(
-                        chunk_id=record.id, source_id=source_id, references=list(references)
+                        chunk_id=record.id,
+                        source_id=source_id,
+                        references=list(
+                            (references_by_record or {}).get(record.id, references)
+                        ),
                     )
                     for record in records
                 )
@@ -206,13 +214,18 @@ class ChunkRepository(Repository):
         source_id: UUID,
         chunks: Sequence[Chunk],
         embeddings: Sequence[Sequence[float]],
+        *,
+        references_by_chunk: Sequence[Sequence[dict[str, Any]]] | None = None,
+        session: AsyncSession | None = None,
     ) -> list[UUID]:
-        """Store embedded document passages and their passage references atomically."""
+        """Store embedded document passages and their located references atomically."""
 
         if len(chunks) != len(embeddings):
             raise ValueError("Each document passage needs one embedding")
+        if references_by_chunk is not None and len(chunks) != len(references_by_chunk):
+            raise ValueError("Each document passage needs one reference list")
         ids = [new_id() for _ in chunks]
-        async with self._transaction() as session:
+        async with self._transaction(session) as session:
             session.add_all(
                 KnowledgeChunk(
                     id=chunk_id,
@@ -237,11 +250,32 @@ class ChunkRepository(Repository):
                 KnowledgeChunkSource(
                     chunk_id=chunk_id,
                     source_id=source_id,
-                    references=[{"type": "passage", "chunk_index": chunk.index}],
+                    references=list(
+                        references_by_chunk[index]
+                        if references_by_chunk is not None
+                        else [{"type": "passage", "chunk_index": chunk.index}]
+                    ),
                 )
-                for chunk_id, chunk in zip(ids, chunks, strict=True)
+                for index, (chunk_id, chunk) in enumerate(zip(ids, chunks, strict=True))
             )
         return ids
+
+    async def references_for_source(
+        self, knowledge_base_id: UUID, source_id: UUID
+    ) -> dict[UUID, list[dict[str, Any]]]:
+        """Return stored reference lists for every chunk linked to one source."""
+
+        async with self._transaction() as session:
+            rows = await session.execute(
+                select(KnowledgeChunkSource.chunk_id, KnowledgeChunkSource.references)
+                .join(KnowledgeChunk, KnowledgeChunk.id == KnowledgeChunkSource.chunk_id)
+                .where(
+                    KnowledgeChunk.knowledge_base_id == knowledge_base_id,
+                    KnowledgeChunkSource.source_id == source_id,
+                    KnowledgeChunk.deleted_at.is_(None),
+                )
+            )
+        return {chunk_id: list(references or []) for chunk_id, references in rows}
 
     async def apply_updates(
         self,
@@ -471,8 +505,8 @@ class ChunkRepository(Repository):
 
         async with self._transaction() as session:
             rows = (
-                await session.scalars(
-                    select(KnowledgeChunk)
+                await session.execute(
+                    select(KnowledgeChunk, KnowledgeChunkSource.references)
                     .join(
                         KnowledgeChunkSource,
                         KnowledgeChunkSource.chunk_id == KnowledgeChunk.id,
@@ -499,8 +533,9 @@ class ChunkRepository(Repository):
                 "title": row.title,
                 "status": row.status,
                 "history": (row.details or {}).get("review_history") or [],
+                "references": list(references or []),
             }
-            for row in rows
+            for row, references in rows
         ]
 
     async def review_record(

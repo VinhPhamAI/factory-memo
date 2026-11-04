@@ -58,6 +58,10 @@ services:
       APP_DATABASE_URL: "${API_APP_DATABASE_URL:-postgresql+psycopg://voice_agent:voice_agent@postgres:5432/voice_agent_app}"
       VOICE_AUDIO_DIR: /app/data/audio
       DOCUMENT_UPLOAD_DIR: /app/data/uploads
+      OCR_API_URL: "${OCR_API_URL:-}"
+      OCR_API_KEY: "${OCR_API_KEY:-}"
+      OCR_TIMEOUT_S: "${OCR_TIMEOUT_S:-}"
+      OCR_DOC_ORIENTATION: "${OCR_DOC_ORIENTATION:-}"
     volumes:
       - ../data:/app/data
       - document_uploads:/app/data/uploads

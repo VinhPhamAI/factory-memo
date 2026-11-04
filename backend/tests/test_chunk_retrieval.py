@@ -27,6 +27,7 @@ from backend.src.agents.agent.service import (
 from backend.src.agents.rag.chunking import Chunk
 from backend.src.agents.rag.store import SearchMode
 from backend.src.services.application_source_pipeline import ApplicationSourcePipeline
+from backend.src.services.job_worker import StageWorker
 from backend.src.services.source_pipeline import JobFailed
 from backend.src.services.knowledge_extraction import KnowledgeType
 from backend.src.storage import KnowledgeRecord, KnowledgeStatus, StorageError
@@ -39,7 +40,6 @@ from backend.src.storage.embeddings import (
 )
 from backend.src.storage.orm import (
     File,
-    IngestionJob,
     KnowledgeBase,
     KnowledgeChunk,
     KnowledgeChunkSource,
@@ -52,7 +52,8 @@ from backend.src.storage.repositories import (
     NewFile,
     SourceRepository,
 )
-from backend.src.storage.repositories.ingestion_jobs import Job
+from backend.src.storage.repositories.ingestion_jobs import IngestionJobRepository, Job
+from backend.src.storage.repositories.knowledge_bases import KnowledgeBaseRepository
 from backend.tests.test_app_knowledge_repositories import RepositoryTest
 from backend.tests.test_database_migrations import DATABASE_URL
 from backend.tests.test_knowledge_agent import ScriptedChatModel
@@ -217,16 +218,16 @@ class KnowledgeSearchTest(RetrievalTest):
         await self.add_knowledge(await self.add_source(doomed), kb=doomed)
         doomed_retrieval = self.retrieval_for(doomed)
         self.assertEqual(len(await doomed_retrieval.search_knowledge("bearing seal")), 1)
-        self.soft_delete(KnowledgeBase, doomed.id)
+        await KnowledgeBaseRepository(self.sessions).delete(doomed.name)
         self.assertEqual(await doomed_retrieval.search_knowledge("bearing seal"), [])
 
     async def test_a_chunk_stays_searchable_while_one_of_its_sources_is_live(self) -> None:
         live, gone = await self.add_source(), await self.add_source()
         chunk = await self.add_knowledge(live)
         self.link_source(chunk, gone)
-        self.soft_delete(KnowledgeSource, gone)
+        await self.sources.remove(self.kb.id, gone, actor_id=self.user.id, role=self.user.role)
         self.assertEqual(await self.found_knowledge(), {chunk})
-        self.soft_delete(KnowledgeSource, live)
+        await self.sources.remove(self.kb.id, live, actor_id=self.user.id, role=self.user.role)
         self.assertEqual(await self.found_knowledge(), set())
 
     def link_source(self, chunk: UUID, source: UUID) -> None:
@@ -451,25 +452,29 @@ class FakeCatalog:
     def __init__(self, kb: KnowledgeBase) -> None:
         self.kb = kb
 
+    async def refresh(self) -> None:
+        """Keep the fixture knowledge base active."""
+
     def resolve_id(self, knowledge_base_id: UUID):
         return (self.kb.name, get_kb("general")) if knowledge_base_id == self.kb.id else None
 
 
 @unittest.skipUnless(DATABASE_URL, "TEST_DATABASE_URL is not set")
 class IngestionEmbeddingRecordTest(RetrievalTest):
-    def job(self, source: UUID) -> Job:
-        now = datetime.now(timezone.utc)
-        job_id = uuid4()
-        with self.engine.begin() as conn:
-            conn.execute(insert(IngestionJob).values(
-                id=job_id, knowledge_base_id=self.kb.id, source_id=source,
-                stage="extract", mode="documents", status="running",
-            ))
-        return Job(
-            id=job_id, knowledge_base_id=self.kb.id, source_id=source, stage="extract",
-            mode="documents", next_stages=(), status="running", attempts=1, max_attempts=3,
-            created_at=now, run_after=now,
+    async def job(self, source: UUID) -> Job:
+        """Create and lease a document-extraction job through the real queue."""
+
+        queue = IngestionJobRepository(self.sessions)
+        await queue.enqueue(self.kb.id, source, "extract", mode="documents")
+        return await queue.claim("extract", "test-worker")
+
+    async def extract(self, source: UUID) -> None:
+        """Run the worker's prepared-write and completion path."""
+
+        worker = StageWorker(
+            IngestionJobRepository(self.sessions), self.pipeline(), ["extract"], name="test-worker",
         )
+        await worker.process(await self.job(source))
 
     def pipeline(self) -> ApplicationSourcePipeline:
         return ApplicationSourcePipeline(
@@ -480,19 +485,21 @@ class IngestionEmbeddingRecordTest(RetrievalTest):
     async def test_a_run_records_the_embedding_model_and_dimension(self) -> None:
         source = await self.add_source(text_value="Replace the bearing seal.")
         with mock.patch.dict(os.environ, {"EMBEDDING_MODEL": "model-a", "EMBEDDING_DIM": "3"}):
-            await self.pipeline().run_extract(self.job(source))
+            await self.extract(source)
         (run,) = await self.runs.for_source(source)
         self.assertEqual(run.settings["embedding_model"], "model-a")
         self.assertEqual(run.settings["embedding_dim"], 3)
+        self.assertEqual(run.status, "done")
+        self.assertTrue(await self.chunks.has_results(self.kb.id, source, "documents"))
 
     async def test_ingestion_refuses_a_model_that_differs_from_earlier_runs(self) -> None:
         first = await self.add_source(text_value="Replace the bearing seal.")
         with mock.patch.dict(os.environ, {"EMBEDDING_MODEL": "model-a", "EMBEDDING_DIM": "3"}):
-            await self.pipeline().run_extract(self.job(first))
+            await self.extract(first)
         second = await self.add_source(text_value="Grease the shaft every month.")
         with mock.patch.dict(os.environ, {"EMBEDDING_MODEL": "model-b", "EMBEDDING_DIM": "3"}):
             with self.assertRaises(JobFailed) as caught:
-                await self.pipeline().run_extract(self.job(second))
+                await self.pipeline().run_extract(await self.job(second))
         self.assertIn("model-a", str(caught.exception))
         self.assertEqual(await self.runs.for_source(second), [])
 

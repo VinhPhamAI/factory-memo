@@ -11,14 +11,13 @@ import logging
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 
 from backend.api.knowledge_bases import refresh_catalog
 from backend.api.auth import require_current_user
 from backend.src.services.auth import Account
-from backend.src.storage.orm import SourceKind
 from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
 from backend.src.storage.repositories.sources import NewFile, SourceRepository
 from backend.src.storage.document_uploads import (
@@ -46,6 +45,7 @@ async def require_kb(request: Request, kb: str) -> tuple[str, UUID]:
 
 
 class UploadedDocument(StoredDocument):
+    duplicate: bool = False
     job: dict[str, Any] | None = None
     job_error: str | None = None
 
@@ -70,15 +70,21 @@ async def queue_processing(connection: HTTPConnection, kb: str, kind: str, sourc
     return queued["job"], None
 
 
-@router.post("/{kb}/uploads", status_code=201, response_model=UploadedDocument,
-             response_model_exclude_unset=True)
+@router.post(
+    "/{kb}/uploads", status_code=201, response_model=UploadedDocument,
+    response_model_exclude_unset=True,
+    responses={200: {"model": UploadedDocument, "description": "Existing identical upload"}},
+)
 async def upload_document(
     request: Request,
+    response: Response,
     account: Annotated[Account, Depends(require_current_user)],
     kb_ref: Annotated[tuple[str, UUID], Depends(require_kb)],
     file: Annotated[UploadFile, File()],
     extract_mode: Annotated[Literal["knowledge", "documents"] | None, Form()] = None,
 ) -> UploadedDocument:
+    """Save original bytes and return the existing source when the hash matches."""
+
     kb, knowledge_base_id = kb_ref
     store: DocumentUploadStore = request.app.state.document_uploads
     sources: SourceRepository = request.app.state.sources
@@ -99,10 +105,8 @@ async def upload_document(
     finally:
         await file.close()
     try:
-        await sources.create(
+        source, duplicate = await sources.create_upload(
             knowledge_base_id,
-            kind=SourceKind.DOCUMENT,
-            title=document.filename,
             submitted_by=account.id,
             source_id=source_id,
             file=NewFile(
@@ -119,6 +123,20 @@ async def upload_document(
     except Exception:
         await run_in_threadpool(store.remove, document.storage_key)
         raise
+    if duplicate:
+        try:
+            await run_in_threadpool(store.remove, document.storage_key)
+        except OSError as exc:
+            logger.exception("Could not remove the redundant upload for KB %s", kb)
+            raise HTTPException(503, "Document storage is unavailable; please retry") from exc
+        response.status_code = 200
+        original = source.file
+        return UploadedDocument(
+            id=source.id.hex, kb=kb, filename=original.filename,
+            content_type=original.content_type, size_bytes=original.size_bytes,
+            sha256=original.sha256, storage_key=original.storage_key,
+            uploaded_at=original.created_at, status="stored", duplicate=True,
+        )
     uploaded = UploadedDocument(**document.model_dump())
     if extract_mode is not None:
         uploaded.job, uploaded.job_error = await queue_processing(

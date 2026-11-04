@@ -23,17 +23,20 @@ class Repository:
         self._sessions = sessions
 
     @asynccontextmanager
-    async def _transaction(self) -> AsyncIterator[AsyncSession]:
-        """Open one transaction, committed when the block exits without an error.
+    async def _transaction(self, session: AsyncSession | None = None) -> AsyncIterator[AsyncSession]:
+        """Borrow the caller’s session or own a transaction that commits on success.
 
         Raises:
             KnowledgeStorageUnavailable: The connection failed, the pool had no
                 free connection, or a lock or statement timeout expired.
         """
 
+        if session is not None:
+            yield session
+            return
         try:
-            async with self._sessions() as session, session.begin():
-                yield session
+            async with self._sessions() as owned, owned.begin():
+                yield owned
         except (OperationalError, InterfaceError, PoolTimeoutError, OSError) as exc:
             raise KnowledgeStorageUnavailable("The application database is unavailable") from exc
 

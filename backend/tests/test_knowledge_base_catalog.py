@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -12,7 +13,7 @@ from backend.api.knowledge_bases import KnowledgeBaseCatalog, KnowledgeBaseConfl
 from backend.app import create_app
 from backend.src.services.auth import Account, InvalidSession
 from backend.src.storage.repositories.knowledge_bases import (
-    KnowledgeBaseEntry,
+    KnowledgeBaseDetail, KnowledgeBaseEntry,
     KnowledgeBaseLimitReached,
     KnowledgeBaseNameTaken,
 )
@@ -45,12 +46,39 @@ class FakeRepository:
         return row
 
 
+    async def detail(self, name):
+        row = self.rows.get(name)
+        if row is None:
+            return None
+        return KnowledgeBaseDetail(
+            row.name, row.title, row.description, row.template, "expert",
+            row.created_at, row.created_at, {}, {},
+        )
+
+    async def rename(self, name, *, title, description):
+        row = self.rows.get(name)
+        if row is None:
+            return None
+        self.rows[name] = replace(
+            row, title=row.title if title is None else title,
+            description=row.description if description is None else description,
+        )
+        return self.rows[name], await self.detail(name)
+
+    async def delete(self, name):
+        return self.rows.pop(name, None) is not None
+
+
 class Listener:
     def __init__(self):
         self.names: list[str] = []
+        self.removed: list[str] = []
 
     def add(self, spec):
         self.names.append(spec.name)
+
+    def remove(self, name):
+        self.removed.append(name)
 
 
 class FakeAuth:
@@ -107,6 +135,22 @@ class CatalogTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("general", restarted.names())
 
 
+    async def test_refresh_updates_and_removes_kbs_in_other_processes(self):
+        repository = FakeRepository()
+        writer = KnowledgeBaseCatalog(repository)
+        listener = Listener()
+        reader = KnowledgeBaseCatalog(repository, listeners=[listener])
+        await writer.create(name="may_ep", title="Máy ép", created_by=uuid4())
+        await reader.refresh()
+        await writer.rename("may_ep", title="Renamed", description=None)
+        await reader.refresh()
+        self.assertEqual(reader.resolve("may_ep")[1].title, "Renamed")
+        await writer.delete("may_ep")
+        await reader.refresh()
+        self.assertIsNone(reader.resolve("may_ep"))
+        self.assertEqual(listener.removed, ["may_ep"])
+
+
 class CatalogApiTest(unittest.TestCase):
     def setUp(self):
         self.repository = FakeRepository()
@@ -141,6 +185,26 @@ class CatalogApiTest(unittest.TestCase):
         ).json()["knowledge_bases"]
         self.assertEqual([item["name"] for item in listing], ["may_ep"])
         self.assertTrue(all(item["builtin"] is False for item in listing))
+
+    def test_detail_and_patch_permissions(self):
+        path = "/v1/knowledge-bases/may_ep"
+        self.assertEqual(self.client.get(path, headers=bearer("employee")).status_code, 404)
+        self.assertEqual(self.client.post(
+            "/v1/knowledge-bases", headers=bearer("expert"),
+            json={"name": "may_ep", "title": "Máy ép"},
+        ).status_code, 201)
+        self.assertEqual(self.client.patch(
+            path, headers=bearer("employee"), json={"title": "Renamed"},
+        ).status_code, 403)
+        self.assertEqual(self.client.patch(
+            path, headers=bearer("expert"), json={"name": "other"},
+        ).status_code, 422)
+        self.assertEqual(self.client.patch(
+            path, headers=bearer("expert"), json={"title": "Renamed"},
+        ).json()["title"], "Renamed")
+        self.assertEqual(self.client.get(
+            "/v1/knowledge-bases", headers=bearer("employee"),
+        ).json()["knowledge_bases"][0]["title"], "Renamed")
 
 
 if __name__ == "__main__":

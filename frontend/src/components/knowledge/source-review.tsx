@@ -38,6 +38,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { SpeakerBadge } from "@/components/voice/speaker-badge";
 import { cn } from "@/utils/cn";
+import type { LocatedReference } from "@/types";
 
 const ACTIVE = new Set(["queued", "running"]);
 
@@ -439,11 +440,13 @@ export function KnowledgePanel({
   conversation,
   counts,
   onEvidence,
+  onLocated,
   onRecord,
 }: {
   conversation: VoiceConversation;
   counts: Record<ReviewStatus, number>;
   onEvidence(evidence: Evidence): void;
+  onLocated?(reference: LocatedReference): void;
   onRecord(record: VoiceRecord): void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
@@ -542,6 +545,7 @@ export function KnowledgePanel({
             record={record}
             speakers={conversation.speakers}
             onEvidence={onEvidence}
+            onLocated={onLocated}
             onChange={onRecord}
           />
         ))}
@@ -587,12 +591,14 @@ function RecordCard({
   record,
   speakers,
   onEvidence,
+  onLocated,
   onChange,
 }: {
   kb: string;
   record: VoiceRecord;
   speakers: Speaker[];
   onEvidence(evidence: Evidence): void;
+  onLocated?(reference: LocatedReference): void;
   onChange(record: VoiceRecord): void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -690,6 +696,22 @@ function RecordCard({
             >
               {item.turnId && <span className="vc-turn-id">{item.turnId}</span>}
               <q>{item.quote}</q>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!!record.references?.length && (
+        <div className="vc-evidence" data-testid="located-references">
+          <span className="vc-evidence-label">Vị trí trong file gốc</span>
+          {record.references.map((reference, index) => (
+            <button
+              key={index}
+              type="button"
+              className="vc-quote"
+              onClick={() => onLocated?.(reference)}
+            >
+              {referenceLabel(reference)}
             </button>
           ))}
         </div>
@@ -793,4 +815,17 @@ function RecordCard({
       {error && <p className="vc-inline-error">{error}</p>}
     </li>
   );
+}
+
+function referenceLabel(reference: LocatedReference) {
+  if (reference.type === "page") return `Trang ${reference.page}`;
+  if (reference.type === "image") return "Vùng ảnh";
+  if (reference.type === "paragraph")
+    return reference.table && reference.cell
+      ? `Bảng ${reference.table}, ô ${reference.cell}`
+      : `Đoạn ${reference.index}`;
+  if (reference.type === "cells") return `${reference.sheet} · ${reference.range}`;
+  if (reference.type === "source" && reference.location_missing)
+    return "Không xác định được vị trí";
+  return "Toàn bộ nguồn";
 }

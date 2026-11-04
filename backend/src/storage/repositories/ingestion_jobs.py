@@ -12,13 +12,13 @@ transactions: `processing` once claimed, `processed` after the last stage and
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, func, null, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
@@ -35,14 +35,20 @@ from backend.src.storage.job_queue import (
 )
 from backend.src.storage.orm import (
     ExtractionMode,
+    ExtractionRun,
     IngestionJob,
     JobStage,
     JobStatus,
+    RunStatus,
     KnowledgeSource,
     SourceStatus,
     new_id,
 )
 from backend.src.storage.repositories.base import Repository, violated_constraint
+
+from backend.src.storage.repositories.lifecycle import (
+    KB_DELETED, SOURCE_REMOVED, InactiveKnowledgeBase, InactiveSource, lock_kb, lock_source,
+)
 
 
 ACTIVE_SOURCE_INDEX = "ix_ingestion_jobs_active_source"
@@ -98,6 +104,14 @@ class Job:
                 if self.status == JobStatus.QUEUED.value and self.attempts else None
             ),
         }
+
+
+@dataclass(frozen=True)
+class PreparedJobResult:
+    """Job output with writes that commit only while the worker still owns the job."""
+
+    result: dict[str, Any]
+    persist: Callable[[AsyncSession], Awaitable[None]]
 
 
 def _job(row: Mapping[str, Any]) -> Job:
@@ -233,13 +247,18 @@ class IngestionJobRepository(Repository):
         Raises:
             ValueError: A stage or mode is unknown.
             JobConflict: The source already has a queued or running job.
-            sqlalchemy.exc.IntegrityError: The source is not in the knowledge base.
+            InactiveKnowledgeBase: The KB no longer accepts jobs.
+            InactiveSource: The source is absent or removed.
             KnowledgeStorageUnavailable: The database could not be reached.
         """
 
         next_stages = _checked(stage, mode, next_stages)
         try:
             async with self._transaction() as session:
+                if not await lock_kb(session, knowledge_base_id):
+                    raise InactiveKnowledgeBase()
+                if await lock_source(session, knowledge_base_id, source_id) is None:
+                    raise InactiveSource()
                 return await self._insert(
                     session, knowledge_base_id=knowledge_base_id, source_id=source_id,
                     stage=stage, mode=mode, next_stages=next_stages, options=options,
@@ -250,43 +269,61 @@ class IngestionJobRepository(Repository):
             raise
 
     async def claim(self, stage: str, worker: str) -> Job | None:
-        """Lease the oldest due job of a stage, or return None when none is due.
-
-        Concurrent workers skip rows another worker is claiming, so each job
-        goes to one worker. The source becomes `processing`.
-        """
+        """Lease the oldest due job whose source can be locked without waiting."""
 
         due = (
-            select(_JOBS.c.id)
+            select(_JOBS.c.id, _JOBS.c.knowledge_base_id, _JOBS.c.source_id)
             .where(
-                _JOBS.c.stage == stage,
-                _JOBS.c.status == JobStatus.QUEUED.value,
+                _JOBS.c.stage == stage, _JOBS.c.status == JobStatus.QUEUED,
                 _JOBS.c.run_after <= func.now(),
             )
             .order_by(_JOBS.c.run_after, _JOBS.c.created_at)
-            .with_for_update(skip_locked=True)
-            .limit(1)
-            .scalar_subquery()
         )
         async with self._transaction() as session:
-            row = (
-                await session.execute(
-                    _JOBS.update()
-                    .where(_JOBS.c.id == due)
-                    .values(
-                        status=JobStatus.RUNNING.value,
+            for job_id, kb_id, source_id in (await session.execute(due)).all():
+                if not await lock_kb(session, kb_id):
+                    await session.execute(_JOBS.update().where(
+                        _JOBS.c.id == job_id, _JOBS.c.status == JobStatus.QUEUED,
+                    ).values(status=JobStatus.FAILED, error=KB_DELETED, finished_at=func.now()))
+                    continue
+                if await lock_source(session, kb_id, source_id, skip_locked=True) is None:
+                    continue
+                row = (await session.execute(
+                    _JOBS.update().where(
+                        _JOBS.c.id == job_id, _JOBS.c.status == JobStatus.QUEUED,
+                        _JOBS.c.run_after <= func.now(),
+                    ).values(
+                        status=JobStatus.RUNNING,
                         attempts=_JOBS.c.attempts + 1,
                         locked_by=worker,
                         started_at=func.now(),
                         heartbeat_at=func.now(),
                         error=None,
-                    )
-                    .returning(*_JOBS.c)
-                )
-            ).mappings().first()
-            if row is not None:
-                await self._set_source_status(session, row, SourceStatus.PROCESSING)
-        return _job(row) if row else None
+                    ).returning(*_JOBS.c)
+                )).mappings().first()
+                if row is not None:
+                    await self._set_source_status(session, row, SourceStatus.PROCESSING)
+                    return _job(row)
+        return None
+
+    async def _fail_extraction(
+        self, session: AsyncSession, job_id: UUID, error: str,
+    ) -> None:
+        """Close a running extraction attempt when its lease ends unsuccessfully."""
+
+        runs = ExtractionRun.__table__
+        await session.execute(runs.update().where(
+            runs.c.job_id == job_id, runs.c.status == RunStatus.RUNNING,
+        ).values(status=RunStatus.FAILED, error=error[:MAX_ERROR_LENGTH], finished_at=func.now()))
+
+    async def _target_error(self, session: AsyncSession, job: Job) -> str | None:
+        """Lock the KB and source for an owned transition, or return its deletion reason."""
+
+        if not await lock_kb(session, job.knowledge_base_id):
+            return KB_DELETED
+        if await lock_source(session, job.knowledge_base_id, job.source_id) is None:
+            return SOURCE_REMOVED
+        return None
 
     async def heartbeat(self, job: Job, worker: str) -> bool:
         """Extend the worker's lease; False when the job is no longer its own."""
@@ -305,8 +342,9 @@ class IngestionJobRepository(Repository):
         result: dict[str, Any] | None = None,
         *,
         continue_pipeline: bool = True,
+        persist: Callable[[AsyncSession], Awaitable[None]] | None = None,
     ) -> Job | None:
-        """Mark the job done and, in the same transaction, queue its next stage.
+        """Commit prepared writes and complete or fail the job in one transaction.
 
         Returns:
             The next stage job, or None after the last stage (the source
@@ -317,12 +355,21 @@ class IngestionJobRepository(Repository):
         """
 
         async with self._transaction() as session:
+            if error := await self._target_error(session, job):
+                await self._owned(session, job, worker, {
+                    "status": JobStatus.FAILED, "error": error,
+                    "finished_at": func.now(), "locked_by": None,
+                })
+                await self._fail_extraction(session, job.id, error)
+                return None
             await self._owned(session, job, worker, {
                 "status": JobStatus.DONE.value,
                 "finished_at": func.now(),
                 "locked_by": None,
                 "result": dict(result or {}),
             })
+            if persist is not None:
+                await persist(session)
             if not continue_pipeline or not job.next_stages:
                 await self._set_source_status(session, job, SourceStatus.PROCESSED)
                 return None
@@ -344,6 +391,9 @@ class IngestionJobRepository(Repository):
         requeue = retry and job.attempts < job.max_attempts
         delay = retry_delay(job.attempts, self.retry_delay_s)
         async with self._transaction() as session:
+            target_error = await self._target_error(session, job)
+            if target_error:
+                requeue, error = False, target_error
             row = await self._owned(session, job, worker, {
                 "status": JobStatus.QUEUED.value if requeue else JobStatus.FAILED.value,
                 "error": error[:MAX_ERROR_LENGTH],
@@ -351,7 +401,8 @@ class IngestionJobRepository(Repository):
                 "run_after": func.now() + func.make_interval(0, 0, 0, 0, 0, 0, delay),
                 "finished_at": None if requeue else func.now(),
             })
-            if not requeue:
+            await self._fail_extraction(session, job.id, error)
+            if not requeue and not target_error:
                 await self._set_source_status(session, job, SourceStatus.FAILED)
         return _job(row)
 
@@ -360,47 +411,57 @@ class IngestionJobRepository(Repository):
 
         try:
             async with self._transaction() as session:
+                error = await self._target_error(session, job)
                 await self._owned(session, job, worker, {
-                    "status": JobStatus.QUEUED.value,
+                    "status": JobStatus.FAILED if error else JobStatus.QUEUED,
+                    "error": error,
+                    "finished_at": func.now() if error else None,
                     "attempts": func.greatest(_JOBS.c.attempts - 1, 0),
                     "locked_by": None,
                     "run_after": func.now(),
                 })
-                await self._notify(session, job.stage, job.id)
+                if error:
+                    await self._fail_extraction(session, job.id, error)
+                else:
+                    await self._notify(session, job.stage, job.id)
         except JobLeaseLost:
             pass
 
     async def recover_stale(self, older_than_s: float) -> list[Job]:
-        """Requeue, or fail after `max_attempts`, running jobs without a recent heartbeat."""
+        """Recover expired leases without requeueing work for removed targets."""
 
-        retry = _JOBS.c.attempts < _JOBS.c.max_attempts
+        stale = (
+            _JOBS.c.status == JobStatus.RUNNING,
+            _JOBS.c.heartbeat_at < func.now() - func.make_interval(0, 0, 0, 0, 0, 0, older_than_s),
+        )
         async with self._transaction() as session:
-            rows = (
-                await session.execute(
-                    _JOBS.update()
-                    .where(
-                        _JOBS.c.status == JobStatus.RUNNING.value,
-                        _JOBS.c.heartbeat_at
-                        < func.now() - func.make_interval(0, 0, 0, 0, 0, 0, older_than_s),
-                    )
-                    .values(
-                        status=case(
-                            (retry, JobStatus.QUEUED.value), else_=JobStatus.FAILED.value
-                        ),
-                        finished_at=case((retry, null()), else_=func.now()),
-                        error=STALE_ERROR,
+            candidates = (await session.execute(select(*_JOBS.c).where(*stale))).mappings().all()
+        recovered = []
+        for candidate in candidates:
+            job = _job(candidate)
+            async with self._transaction() as session:
+                error = await self._target_error(session, job)
+                retry = not error and job.attempts < job.max_attempts
+                row = (await session.execute(
+                    _JOBS.update().where(
+                        _JOBS.c.id == job.id, _JOBS.c.attempts == job.attempts, *stale,
+                    ).values(
+                        status=JobStatus.QUEUED if retry else JobStatus.FAILED,
+                        finished_at=None if retry else func.now(),
+                        error=error or STALE_ERROR,
                         locked_by=None,
                         run_after=func.now(),
-                    )
-                    .returning(*_JOBS.c)
-                )
-            ).mappings().all()
-            for row in rows:
-                if row["status"] == JobStatus.QUEUED.value:
-                    await self._notify(session, row["stage"], row["id"])
-                else:
+                    ).returning(*_JOBS.c)
+                )).mappings().first()
+                if row is None:
+                    continue
+                await self._fail_extraction(session, job.id, error or STALE_ERROR)
+                if retry:
+                    await self._notify(session, job.stage, job.id)
+                elif not error:
                     await self._set_source_status(session, row, SourceStatus.FAILED)
-        return [_job(row) for row in rows]
+                recovered.append(_job(row))
+        return recovered
 
     async def latest(
         self, knowledge_base_id: UUID, source_ids: Iterable[UUID] | None = None

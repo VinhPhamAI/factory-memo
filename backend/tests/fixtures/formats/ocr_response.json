@@ -1,0 +1,36 @@
+{
+  "pipeline": "PaddleOCR-VL-1.6",
+  "vlm_model": "fixture-vlm",
+  "file_name": "label.png",
+  "file_type": "image",
+  "page_count": 1,
+  "settings": {"doc_orientation": false, "doc_unwarping": false},
+  "elapsed_s": 0.2,
+  "pages": [
+    {
+      "page_number": 1,
+      "width": 900,
+      "height": 500,
+      "regions": [
+        {
+          "order": 1,
+          "label": "paragraph_title",
+          "bbox": [80, 100, 300, 130],
+          "content": "MA LOI E101",
+          "block_id": 0,
+          "block_order": 1
+        },
+        {
+          "order": 2,
+          "label": "text",
+          "bbox": [80, 190, 420, 220],
+          "content": "Kiem tra cam bien nhiet",
+          "block_id": 1,
+          "block_order": 2
+        }
+      ],
+      "markdown": "MA LOI E101\n\nKiem tra cam bien nhiet"
+    }
+  ],
+  "markdown": "<!-- page 1 -->\n\nMA LOI E101\n\nKiem tra cam bien nhiet\n"
+}

@@ -13,6 +13,7 @@ export interface StoredDocument {
   storage_key: string;
   uploaded_at: string;
   status: "stored";
+  duplicate?: boolean;
   /** Present only when Auto queued conversion and extraction. */
   job?: { id: string; stage: string; status: string } | null;
   job_error?: string | null;

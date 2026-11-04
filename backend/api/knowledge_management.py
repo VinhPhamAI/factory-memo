@@ -1,10 +1,12 @@
 """Shared source lifecycle and human review API."""
 
+from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from backend.api.knowledge_bases import refresh_catalog
@@ -55,9 +57,25 @@ async def result(awaitable):
 
 
 @router.get("/{kb}/sources")
-async def sources(request: Request, kb: str, offset: int = Query(0, ge=0)):
+async def sources(
+    request: Request, kb: str, offset: int = Query(0, ge=0), include_removed: bool = False,
+):
+    """List active sources and optionally include removed entries."""
+
     manager = await service(request, kb)
-    return await result(manager.inventory(kb, offset))
+    return await result(manager.inventory(kb, offset, include_removed=include_removed))
+
+
+@router.delete("/{kb}/sources/{kind}/{source_id}", status_code=204)
+async def remove_source(
+    request: Request, kb: str, kind: Kind, source_id: UUID,
+    account: Annotated[Account, Depends(require_current_user)],
+) -> Response:
+    """Remove a source by its ID across any of the supported URL aliases."""
+
+    manager = await service(request, kb)
+    await result(manager.remove_source(kb, source_id, actor_id=account.id, role=account.role))
+    return Response(status_code=204)
 
 
 @router.get("/{kb}/sources/{kind}/{source_id}")
@@ -77,6 +95,51 @@ async def original(request: Request, kb: str, source_id: UUID):
     if not path.is_file():
         raise HTTPException(404, "Source file not found")
     return FileResponse(path, filename=source.file.filename, media_type=source.file.content_type)
+
+
+@router.get("/{kb}/sources/upload/{source_id}/pages/{page_number}")
+async def original_pdf_page(
+    request: Request,
+    kb: str,
+    source_id: UUID,
+    page_number: int,
+):
+    """Render one original PDF page for an authenticated evidence highlight."""
+
+    if page_number < 1:
+        raise HTTPException(422, "Page number must be positive")
+    manager = await service(request, kb)
+    knowledge_base_id, _spec = manager.spec(kb)
+    source = await manager.sources.get(knowledge_base_id, source_id)
+    if source is None or source.file is None:
+        raise HTTPException(404, "Source file not found")
+    path = request.app.state.document_uploads.content_path(source.file.storage_key)
+    if not path.is_file():
+        raise HTTPException(404, "Source file not found")
+    try:
+        content = await run_in_threadpool(_render_pdf_page, path, page_number)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(content, media_type="image/png")
+
+
+def _render_pdf_page(path: Path, page_number: int) -> bytes:
+    """Render one 1-based PDF page to PNG without retaining document bytes."""
+
+    import pymupdf
+
+    try:
+        with pymupdf.open(path) as document:
+            if page_number > document.page_count:
+                raise ValueError(f"PDF has only {document.page_count} pages")
+            pixmap = document[page_number - 1].get_pixmap(
+                matrix=pymupdf.Matrix(2, 2), alpha=False
+            )
+            return pixmap.tobytes("png")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Source is not a readable PDF") from exc
 
 
 @router.post("/{kb}/sources/upload/{source_id}/convert", status_code=202)

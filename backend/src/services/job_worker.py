@@ -19,6 +19,7 @@ from backend.src.services.source_pipeline import JobFailed, SourcePipeline, fail
 from backend.src.storage.job_queue import Job, JobLeaseLost
 from backend.src.storage.knowledge_store import StorageError
 from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
+from backend.src.storage.repositories.ingestion_jobs import PreparedJobResult
 
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,18 @@ class StageWorker:
         work = asyncio.create_task(self.pipeline.run(job))
         beat = asyncio.create_task(self._heartbeat(job, work))
         try:
-            result: dict[str, Any] = await work
+            outcome: dict[str, Any] | PreparedJobResult = await work
+            prepared = isinstance(outcome, PreparedJobResult)
+            result = outcome.result if prepared else outcome
+            options = {"persist": outcome.persist} if prepared else {}
+            following = await self.queue.complete(
+                job, self.name, result,
+                continue_pipeline=not bool(result.pop("_terminal", False)),
+                **options,
+            )
+        except JobLeaseLost:
+            logger.warning("Job %s lost its lease before completion", job.id)
+            return None
         except asyncio.CancelledError:
             current = asyncio.current_task()
             if work.cancelled() and current is not None and not current.cancelling():
@@ -131,21 +143,10 @@ class StageWorker:
         finally:
             beat.cancel()
             await asyncio.gather(beat, return_exceptions=True)
-        try:
-            continue_pipeline = not bool(result.pop("_terminal", False))
-            following = await self.queue.complete(
-                job,
-                self.name,
-                result,
-                continue_pipeline=continue_pipeline,
-            )
-        except JobLeaseLost:
-            logger.warning("Job %s finished after losing its lease; result kept, not recorded", job.id)
-            return None
         if following is not None:
             logger.info("Job %s done; queued %s job %s", job.id, following.stage, following.id)
         else:
-            logger.info("Job %s done", job.id)
+            logger.info("Job %s finished", job.id)
         return following
 
     async def _heartbeat(self, job: Job, work: asyncio.Task) -> bool:

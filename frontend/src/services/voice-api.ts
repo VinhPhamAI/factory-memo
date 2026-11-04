@@ -1,4 +1,4 @@
-import type { KnowledgeBase } from "@/types";
+import type { KnowledgeBase, LocatedReference } from "@/types";
 import { apiBaseUrl } from "./config";
 import { sessionClient } from "./auth-api";
 
@@ -71,6 +71,7 @@ export interface VoiceRecord {
   verify: VerifyResult | null;
   consolidation: { action?: string; reason?: string; target?: string } | null;
   history: { decision?: string; note?: string | null; at?: string }[];
+  references?: LocatedReference[];
 }
 
 export interface Speaker {

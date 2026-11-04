@@ -7,6 +7,7 @@ import type {
   VoiceConversation,
   VoiceRecord,
 } from "./voice-api";
+import type { LocatedReference } from "@/types";
 
 export type SourceKind = "upload" | "conversation" | "document";
 export type ExtractionMode = "knowledge" | "documents";
@@ -104,6 +105,8 @@ export interface ManagedSource {
   can_extract_raw: boolean;
   conversion_note?: string | null;
   source_kind?: string;
+  submitted_by?: string;
+  removed_at?: string | null;
 }
 
 export interface ManagedChunk {
@@ -114,12 +117,17 @@ export interface ManagedChunk {
   title: string;
   status: ReviewStatus;
   history: { decision: string; note?: string | null; at: string }[];
+  references?: LocatedReference[];
+}
+
+export interface ManagedRecord extends VoiceRecord {
+  references?: LocatedReference[];
 }
 
 export interface ManagedSourceDetail extends ManagedSource {
   text: string | null;
   text_truncated?: boolean;
-  records: VoiceRecord[];
+  records: ManagedRecord[];
   chunks: ManagedChunk[];
   conversation: VoiceConversation | null;
   evidence_id?: string;
@@ -140,19 +148,43 @@ export const sourceLink = (source: Pick<ManagedSource, "kb" | "kind" | "id">) =>
   `/knowledge/${encodeURIComponent(source.kb)}/sources/${source.kind}/${encodeURIComponent(source.id)}`;
 const originalDocumentUrl = (source: ManagedSource) =>
   `${sourcePath(source.kb, "upload", source.id)}/original`;
+const originalPageUrl = (source: ManagedSource, page: number) =>
+  `${sourcePath(source.kb, "upload", source.id)}/pages/${page}`;
 
 export async function downloadOriginalDocument(source: ManagedSource) {
-  const response = await sessionClient.authorizedFetch(
-    originalDocumentUrl(source),
-  );
-  if (!response.ok)
-    throw new Error(`Không tải được file gốc (HTTP ${response.status}).`);
-  const url = URL.createObjectURL(await response.blob());
+  const url = URL.createObjectURL(await fetchOriginalDocument(source));
   const link = document.createElement("a");
   link.href = url;
   link.download = source.name;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export async function fetchOriginalDocument(
+  source: ManagedSource,
+  signal?: AbortSignal,
+) {
+  const response = await sessionClient.authorizedFetch(
+    originalDocumentUrl(source),
+    { signal },
+  );
+  if (!response.ok)
+    throw new Error(`Không tải được file gốc (HTTP ${response.status}).`);
+  return response.blob();
+}
+
+export async function fetchOriginalPdfPage(
+  source: ManagedSource,
+  page: number,
+  signal?: AbortSignal,
+) {
+  const response = await sessionClient.authorizedFetch(
+    originalPageUrl(source, page),
+    { signal },
+  );
+  if (!response.ok)
+    throw new Error(`Không mở được trang bằng chứng (HTTP ${response.status}).`);
+  return response.blob();
 }
 
 /** Extraction refused: the same content was already extracted in this mode. */
@@ -245,6 +277,14 @@ export const listManagedSources = (
   offset = 0,
 ) =>
   request<SourceInventory>(`${base(kb)}/sources?offset=${offset}`, { signal });
+export async function removeManagedSource(source: ManagedSource) {
+  const response = await sessionClient.authorizedFetch(
+    sourcePath(source.kb, source.kind, source.id), { method: "DELETE" },
+  );
+  if (response.status === 409) throw new Error("Nguồn đang được xử lý. Hãy thử lại sau.");
+  if (response.status === 403) throw new Error("Bạn không có quyền gỡ nguồn này.");
+  if (response.status !== 204) throw new Error(`Không gỡ được nguồn (HTTP ${response.status}).`);
+}
 export const getManagedSource = (
   kb: string,
   kind: SourceKind,

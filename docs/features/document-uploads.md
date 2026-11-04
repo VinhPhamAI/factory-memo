@@ -5,11 +5,12 @@ capture form. Select a knowledge base and one or more files. The tab has no
 conversation name, speaker settings or extraction controls. Successful uploads
 show their object IDs; retries send only files that failed in the current batch.
 
-This feature stores original files only. It does not create conversations,
-parse/OCR documents, extract knowledge, embed content or make it searchable.
-PDF, images, TXT, PPTX, DOCX, XLSX and other file types are accepted as opaque
-bytes, independent of the KB's retrieval mode. Each file must be nonempty and
-at most **100 MiB**. MIME types are client-supplied metadata, not validated formats.
+Upload always stores the original file first. Processing is separate: TXT and
+other text files, PDF, DOCX, XLSX, PNG and JPEG can then be converted and
+extracted. Scanned PDFs and images require the hosted OCR gateway. Other formats,
+including PPTX and uploaded audio/video, remain stored as opaque bytes. Each file
+must be nonempty and at most **100 MiB**. The worker detects supported formats
+from their bytes; the client-supplied MIME type is metadata, not proof of format.
 
 ## Storage
 
@@ -43,11 +44,15 @@ removed. No LLM, embedding or speech calls occur during storage.
 
 `POST /v1/documents/{kb}/uploads` accepts one multipart **file** field per request
 and an existing application KB name. A bearer access token is required. It
-returns `201` with the source ID and saved file metadata, `401` for an unusable
-token, `404` for an
-unknown KB, `422` for missing/empty files or invalid filenames, `413` for a file
-over the limit and `503` when storage fails. Clients can submit multiple requests
-for a batch.
+returns `201` with the new source ID and saved file metadata. An identical active
+file in the same KB returns `200` with the existing source ID, file metadata and
+`duplicate: true`. Duplicate uploads discard the extra copy of the bytes and leave
+the existing source's jobs as they are. After the source is removed, the same bytes
+can be uploaded as a new source.
+
+Errors include `401` for an unusable token, `404` for an unknown or deleted KB,
+`422` for missing or empty files or invalid filenames, `413` for a file over the
+limit and `503` when storage fails. Clients can submit multiple requests for a batch.
 
 ```sh
 curl --fail-with-body \
@@ -60,8 +65,10 @@ The response's `storage_key` is relative to the storage root, for example
 `general/0123456789abcdef0123456789abcdef/content`. The upload response confirms
 storage only. Listing, original downloads, text conversion, per-source extraction
 and human review are available separately in **Quản lý tri thức**; see the
-[management guide](knowledge-management.md). TXT files can be extracted directly
-without a manual Convert step. OCR for PDF/images/Office media is not implemented.
+[management guide](knowledge-management.md). Supported files can be extracted
+directly without a manual Convert step. PDF files with a sufficient text layer
+are read locally. PNG, JPEG and scanned PDFs use `OCR_API_URL`; OCR of embedded
+Office images is not implemented.
 
 **Auto mode.** With **Auto · chạy đến Extract** selected on the capture page, the
 upload also sends the form field `extract_mode` (`knowledge` or `documents`).

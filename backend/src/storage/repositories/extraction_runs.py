@@ -313,6 +313,7 @@ class ExtractionRunRepository(Repository):
         *,
         result: dict[str, Any] | None = None,
         error: str | None = None,
+        session: AsyncSession | None = None,
     ) -> None:
         """Finish a running run; a run that is no longer running is left as it is.
 
@@ -321,7 +322,7 @@ class ExtractionRunRepository(Repository):
         """
 
         _checked(ExtractionMode.KNOWLEDGE.value, status)
-        async with self._transaction() as session:
+        async with self._transaction(session) as session:
             await session.execute(
                 _RUNS.update()
                 .where(

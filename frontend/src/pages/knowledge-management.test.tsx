@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +13,14 @@ import type {
   OverlapMatch,
   SourceJob,
 } from "@/services/knowledge-management";
+
+const { useAuth } = vi.hoisted(() => ({
+  useAuth: vi.fn((): { status: "signed-out" } | {
+    status: "signed-in";
+    user: { id: string; role: string };
+  } => ({ status: "signed-out" })),
+}));
+vi.mock("@/hooks/auth", () => ({ useAuth }));
 
 const job = (overrides: Partial<SourceJob> = {}): SourceJob => ({
   id: "job1",
@@ -104,6 +113,14 @@ const rawText = (): ManagedSourceDetail => ({
   conversation: null,
 });
 
+function kbDetail(name = "general") {
+  return Response.json({
+    name, title: name, description: "", template: "general",
+    created_by: "expert", created_at: "2026-10-23T00:00:00Z", updated_at: "2026-10-23T00:00:00Z",
+    source_counts: {}, chunk_counts: {},
+  });
+}
+
 function show(path: string) {
   const router = createMemoryRouter(
     [
@@ -124,11 +141,164 @@ function show(path: string) {
 }
 
 afterEach(() => {
+  useAuth.mockReturnValue({ status: "signed-out" });
   vi.unstubAllGlobals();
   localStorage.clear();
 });
 
 describe("knowledge management", () => {
+  it("renames a knowledge base, requires its name to delete, and switches the selector", async () => {
+    useAuth.mockReturnValue({ status: "signed-in", user: { id: "1", role: "admin" } });
+    let title = "General";
+    let deleted = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/knowledge-bases")) return Response.json({
+        knowledge_bases: [
+          ...(deleted ? [] : [{ name: "general", title, description: "" }]),
+          { name: "backup", title: "Backup", description: "" },
+        ],
+      });
+      if (url.includes("/sources?")) return Response.json({
+        sources: [], warnings: [], next_offset: null, qa_mode: "knowledge",
+      });
+      const name = url.endsWith("/backup") ? "backup" : "general";
+      if (init?.method === "PATCH") {
+        const fields = JSON.parse(init.body as string);
+        expect(fields).toEqual({ title: "Line A", description: "" });
+        title = fields.title;
+      }
+      if (init?.method === "DELETE") {
+        expect(name).toBe("general");
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      return Response.json({
+        name, title: name === "general" ? title : "Backup", template: "general",
+        description: "", created_by: "expert", created_at: "2026-10-23T00:00:00Z",
+        updated_at: "2026-10-23T00:00:00Z",
+        source_counts: { received: 2 }, chunk_counts: { knowledge: { draft: 1 } },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    show("/knowledge");
+
+    await screen.findByRole("option", { name: "General" });
+    expect(screen.queryByRole("button", { name: "Sửa knowledge base" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Xóa knowledge base" })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: "Knowledge base" }));
+    expect(await screen.findByText("Đã nhận 2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sửa knowledge base" }));
+    fireEvent.change(screen.getByLabelText("Tiêu đề"), { target: { value: "Line A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Lưu thay đổi" }));
+    await screen.findByRole("option", { name: "Line A" });
+    fireEvent.click(screen.getByRole("button", { name: "Xóa knowledge base" }));
+    const confirm = screen.getByRole("button", { name: "Xác nhận xóa" });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Mã xác nhận"), { target: { value: "general" } });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(screen.getByTestId("management-kb")).toHaveValue("backup"));
+    await user.click(screen.getByRole("tab", { name: "Mâu thuẫn" }));
+    expect(screen.queryByRole("button", { name: "Sửa knowledge base" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Xóa knowledge base" })).toBeNull();
+  });
+
+  it("creates a knowledge base from its own tab and selects the result", async () => {
+    useAuth.mockReturnValue({ status: "signed-in", user: { id: "1", role: "expert" } });
+    const created = { name: "may_ep", title: "Máy ép", description: "" };
+    let hasCreated = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/v1/knowledge-bases") && init?.method === "POST") {
+        expect(JSON.parse(init.body as string)).toEqual(created);
+        hasCreated = true;
+        return Response.json(created, { status: 201 });
+      }
+      if (url.endsWith("/knowledge-agent/knowledge-bases")) {
+        return Response.json({ knowledge_bases: hasCreated ? [created] : [] });
+      }
+      if (url.endsWith("/knowledge-bases/may_ep")) return kbDetail(created.name);
+      if (url.includes("/sources?")) return Response.json({
+        sources: [], warnings: [], next_offset: null, qa_mode: "knowledge",
+      });
+      throw new Error(`Unexpected request ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    show("/knowledge?tab=knowledge-bases");
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^Tạo knowledge base$/ }));
+    await user.type(screen.getByTestId("kb-title"), "Máy ép");
+    expect(screen.getByTestId("kb-name")).toHaveValue("may_ep");
+    await user.click(screen.getByTestId("kb-create"));
+    await screen.findByRole("option", { name: "Máy ép" });
+    expect(screen.getByTestId("management-kb")).toHaveValue("may_ep");
+    expect(screen.queryByRole("button", { name: "Xóa knowledge base" })).toBeNull();
+  });
+
+  it("lets the submitter remove a queued source and disables removal for running jobs", async () => {
+    useAuth.mockReturnValue({ status: "signed-in", user: { id: "owner", role: "employee" } });
+    const source = { ...rawText(), submitted_by: "owner" };
+    const running = {
+      ...source, id: "running", name: "Running", processing: { job: job({ status: "running" }) },
+    };
+    let removed = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/knowledge-bases")) return Response.json({
+        knowledge_bases: [{ name: "general", title: "General", description: "" }],
+      });
+      if (url.endsWith("/knowledge-bases/general")) return Response.json({
+        name: "general", title: "General", description: "", template: "general",
+        created_by: "expert", created_at: "2026-10-23T00:00:00Z", updated_at: "2026-10-23T00:00:00Z",
+        source_counts: {}, chunk_counts: {},
+      });
+      if (init?.method === "DELETE") {
+        expect(url).toContain("/sources/upload/upload1");
+        removed = true;
+        return new Response(null, { status: 204 });
+      }
+      return Response.json({
+        sources: removed ? [running] : [source, running], warnings: [], next_offset: null,
+        qa_mode: "knowledge",
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    show("/knowledge");
+    const [allowed, disabled] = await screen.findAllByRole("button", { name: "Gỡ nguồn" });
+    expect(disabled).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Sửa knowledge base" })).not.toBeInTheDocument();
+    fireEvent.click(allowed);
+    fireEvent.click(screen.getByRole("button", { name: "Xác nhận gỡ" }));
+    await waitFor(() => expect(screen.queryByText("notes.txt")).not.toBeInTheDocument());
+  });
+
+  it("opens the existing source and reports a single duplicate upload", async () => {
+    const source = rawText();
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.endsWith("/knowledge-bases")) return Response.json({
+        knowledge_bases: [{ name: "general", title: "General", description: "" }],
+      });
+      if (url.endsWith("/uploads")) return Response.json({ ...source, duplicate: true });
+      if (url.endsWith("/sources/upload/upload1")) return Response.json(source);
+      if (url.includes("/sources?")) return Response.json({
+        sources: [source], warnings: [], next_offset: null, qa_mode: "knowledge",
+      });
+      return Response.json({
+        name: "general", title: "General", description: "", template: "general",
+        created_by: "expert", created_at: "2026-10-23T00:00:00Z", updated_at: "2026-10-23T00:00:00Z",
+        source_counts: {}, chunk_counts: {},
+      });
+    }));
+    const router = show("/knowledge");
+    await screen.findByRole("option", { name: "General" });
+    fireEvent.click(screen.getByText("Thêm tài liệu"));
+    fireEvent.change(screen.getByTestId("document-files"), {
+      target: { files: [new File(["same bytes"], "renamed.txt")] },
+    });
+    fireEvent.click(screen.getByTestId("document-upload"));
+    expect(await screen.findByText("File đã có trong KB")).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/knowledge/general/sources/upload/upload1");
+  });
+
   it("queues Extract on raw TXT (convert, then extract) with a per-source mode and reviews chunks", async () => {
     let source = rawText();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -186,7 +356,9 @@ describe("knowledge management", () => {
     expect(screen.getByTestId("extract-source")).toHaveTextContent(
       "Chuyển đổi & trích xuất",
     );
-    expect(screen.getByText(/File TXT đã là văn bản/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/tự chọn bộ chuyển đổi theo nội dung file/),
+    ).toBeInTheDocument();
     fireEvent.change(screen.getByTestId("extraction-mode"), {
       target: { value: "documents" },
     });
@@ -230,7 +402,8 @@ describe("knowledge management", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.includes("/knowledge-bases"))
+        if (url.endsWith("/v1/knowledge-bases/general")) return kbDetail();
+        if (url.endsWith("/knowledge-bases"))
           return Response.json({
             knowledge_bases: [{ name: "general", description: "General" }],
           });
@@ -344,7 +517,8 @@ describe("knowledge management", () => {
             url,
             body: init.body ? JSON.parse(init.body as string) : undefined,
           });
-        if (url.includes("/knowledge-bases"))
+        if (url.endsWith("/v1/knowledge-bases/general")) return kbDetail();
+        if (url.endsWith("/knowledge-bases"))
           return Response.json({
             knowledge_bases: [{ name: "general", description: "General" }],
           });
@@ -438,7 +612,8 @@ describe("knowledge management", () => {
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         if (init?.method === "POST") posted.push(url);
-        if (url.includes("/knowledge-bases"))
+        if (url.endsWith("/v1/knowledge-bases/general")) return kbDetail();
+        if (url.endsWith("/knowledge-bases"))
           return Response.json({
             knowledge_bases: [{ name: "general", description: "General" }],
           });
@@ -535,7 +710,8 @@ describe("knowledge management", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.includes("/knowledge-bases"))
+        if (url.endsWith("/v1/knowledge-bases/general")) return kbDetail();
+        if (url.endsWith("/knowledge-bases"))
           return Response.json({
             knowledge_bases: [{ name: "general", description: "General" }],
           });
@@ -697,7 +873,8 @@ describe("knowledge management", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.includes("/knowledge-bases"))
+        if (url.endsWith("/v1/knowledge-bases/general")) return kbDetail();
+        if (url.endsWith("/knowledge-bases"))
           return Response.json({
             knowledge_bases: [{ name: "general", description: "General" }],
           });
@@ -774,6 +951,7 @@ describe("knowledge management", () => {
 
 it("opens conflict review inside management and follows the selected KB", async () => {
   const fetchMock = vi.fn(async (url: string) => {
+    if (url.includes("/v1/knowledge-bases/")) return kbDetail(url.split("/").pop());
     if (url.endsWith("/knowledge-bases"))
       return Response.json({
         knowledge_bases: [
@@ -811,7 +989,7 @@ it("opens conflict review inside management and follows the selected KB", async 
   expect(fetchMock.mock.calls.some(([url]) => url.includes("/conflicts"))).toBe(
     false,
   );
-  fireEvent.click(screen.getByRole("tab", { name: "Mâu thuẫn" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Mâu thuẫn" }));
   await screen.findByText(/Chưa có cặp nào ở trạng thái này/);
   expect(
     fetchMock.mock.calls.some(([url]) =>
@@ -822,6 +1000,6 @@ it("opens conflict review inside management and follows the selected KB", async 
     target: { value: "general" },
   });
   await screen.findByText("Knowledge base này chưa bật phát hiện mâu thuẫn.");
-  fireEvent.click(screen.getByRole("tab", { name: "Nguồn dữ liệu" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Nguồn dữ liệu" }));
   await screen.findByText("Chưa có nguồn dữ liệu");
 });

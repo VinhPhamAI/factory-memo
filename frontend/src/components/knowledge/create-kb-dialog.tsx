@@ -17,7 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-/** Creates a knowledge base (own database, general-purpose extraction). */
+/** Create a knowledge base with the default extraction policy. */
 export function CreateKnowledgeBaseDialog({
   open,
   taken,
@@ -95,9 +95,7 @@ function CreateForm({
       <DialogHeader>
         <DialogTitle>Tạo knowledge base mới</DialogTitle>
         <DialogDescription>
-          Knowledge base có database riêng. Tri thức trích xuất được lưu theo
-          cấu trúc chung: loại, mức chắc chắn, phạm vi áp dụng và trích dẫn
-          nguyên văn.
+          Tạo một bộ sưu tập để lưu nguồn dữ liệu, trích xuất tri thức và hỏi đáp.
         </DialogDescription>
       </DialogHeader>
 
@@ -139,7 +137,7 @@ function CreateForm({
           <small className="vc-inline-error">{nameProblem}</small>
         ) : (
           <small>
-            Database <code>kb_{id || "…"}</code>. Không đổi được sau khi tạo.
+            Mã dùng để định danh knowledge base và được cố định sau khi tạo.
           </small>
         )}
       </label>

@@ -22,7 +22,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CreateKnowledgeBaseDialog } from "@/components/voice/create-kb-dialog";
 import { LevelMeter, SpeakerBadge } from "@/components/voice/speaker-badge";
 import { cn } from "@/utils/cn";
 import { DocumentUpload } from "@/components/voice/document-upload";
@@ -37,9 +36,6 @@ const EXTRACT_MODE_KEY = "voice-capture:extract-mode";
 type ExtractMode = "knowledge" | "documents";
 
 type Mode = "voice" | "documents";
-
-// Select value of the "create a knowledge base" entry; not a valid KB id.
-const NEW_KB = "+new";
 
 function readSetting(key: string, storage = () => localStorage) {
   try {
@@ -69,7 +65,6 @@ export function CapturePage() {
   );
   const [kbReload, setKbReload] = useState(0);
   const [kb, setKb] = useState(() => readSetting(KB_KEY) ?? "");
-  const [creatingKb, setCreatingKb] = useState(false);
   const [name, setName] = useState(() => defaultConversationName());
   const [clean, setClean] = useState(() => readSetting(CLEAN_KEY) !== "false");
   const [mode, setMode] = useState<Mode>(() =>
@@ -256,10 +251,7 @@ export function CapturePage() {
                 <select
                   value={kb}
                   disabled={kbState !== "ready" || sending}
-                  onChange={(event) => {
-                    if (event.target.value === NEW_KB) setCreatingKb(true);
-                    else setKb(event.target.value);
-                  }}
+                  onChange={(event) => setKb(event.target.value)}
                   data-testid="capture-kb"
                 >
                   {kbState === "loading" && <option>Đang tải…</option>}
@@ -271,19 +263,22 @@ export function CapturePage() {
                       {item.title || item.name}
                     </option>
                   ))}
-                  {kbState === "ready" && (
-                    <option value={NEW_KB}>＋ Tạo knowledge base mới…</option>
-                  )}
                 </select>
                 {mode === "voice" && kbState === "ready" && kb && (
                   <small data-testid="capture-kb-info">
                     {knowledgeBases.find((item) => item.name === kb)
-                      ?.description || `Database kb_${kb}.`}
+                      ?.description}
                   </small>
                 )}
               </>
             )}
           </label>
+
+          {kbState === "ready" && !knowledgeBases.length && (
+            <Link to="/knowledge?tab=knowledge-bases" className="link-button">
+              Mở tab Knowledge base
+            </Link>
+          )}
 
           <ProcessingChoice
             auto={auto}
@@ -358,17 +353,6 @@ export function CapturePage() {
           </Link>
         </p>
 
-        <CreateKnowledgeBaseDialog
-          open={creatingKb}
-          taken={knowledgeBases.map((item) => item.name)}
-          onClose={() => setCreatingKb(false)}
-          onCreated={(created) => {
-            setKnowledgeBases((items) => [...items, created]);
-            setKb(created.name);
-            writeSetting(KB_KEY, created.name);
-            setCreatingKb(false);
-          }}
-        />
       </div>
     </main>
   );

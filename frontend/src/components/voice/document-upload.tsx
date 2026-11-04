@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { CheckCircle2, FileText, Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { uploadDocument, type StoredDocument } from "@/services/document-api";
@@ -17,18 +17,25 @@ function fileSize(bytes: number) {
   return `${value.toLocaleString("vi-VN", { maximumFractionDigits: 2 })} ${unit}`;
 }
 
+function documentLink(document: StoredDocument) {
+  return `/knowledge/${encodeURIComponent(document.kb)}/sources/upload/${encodeURIComponent(document.id)}`;
+}
+
 export function DocumentUpload({
   kb,
   disabled,
   extractMode = null,
   onBusy,
+  onStored,
 }: {
   kb: string;
   disabled: boolean;
   /** Auto: queue conversion and extraction in this mode after each upload. */
   extractMode?: "knowledge" | "documents" | null;
   onBusy(busy: boolean): void;
+  onStored?(): void;
 }) {
+  const navigate = useNavigate();
   const [items, setItems] = useState<UploadItem[]>([]);
   const [sending, setSending] = useState(false);
   const [active, setActive] = useState<number | null>(null);
@@ -39,6 +46,7 @@ export function DocumentUpload({
     if (disabled || sending || !pending) return;
     setSending(true);
     onBusy(true);
+    let stored = false;
     try {
       for (let index = 0; index < items.length; index++) {
         const item = items[index];
@@ -46,6 +54,11 @@ export function DocumentUpload({
         setActive(index);
         try {
           const document = await uploadDocument(kb, item.file, extractMode);
+          stored = true;
+          if (document.duplicate && pendingCount === 1) {
+            void navigate(documentLink(document), { state: { notice: "File đã có trong KB" } });
+            return;
+          }
           setItems((current) =>
             current.map((entry, i) =>
               i === index ? { file: entry.file, document } : entry,
@@ -69,6 +82,7 @@ export function DocumentUpload({
       setActive(null);
       setSending(false);
       onBusy(false);
+      if (stored) onStored?.();
     }
   }
 
@@ -118,10 +132,11 @@ export function DocumentUpload({
               <small>{fileSize(item.file.size)}</small>
               {item.document ? (
                 <span className="vc-upload-success">
-                  <CheckCircle2 size={16} /> Đã lưu vào {item.document.kb} · Mã:{" "}
+                  <CheckCircle2 size={16} />{" "}
+                  {item.document.duplicate ? "File đã có trong KB" : `Đã lưu vào ${item.document.kb}`} · Mã:{" "}
                   {item.document.id} ·{" "}
                   <Link
-                    to={`/knowledge/${encodeURIComponent(item.document.kb)}/sources/upload/${item.document.id}`}
+                    to={documentLink(item.document)}
                     className="link-button"
                   >
                     Xem / xử lý

@@ -202,6 +202,11 @@ class VoiceCaptureService:
         if spec.retrieval is Retrieval.KNOWLEDGE:
             self._specs[spec.name] = spec
 
+    def remove(self, name: str) -> None:
+        """Stop accepting capture requests for a deleted KB."""
+
+        self._specs.pop(name, None)
+
     def knowledge_bases(self) -> list[dict[str, str]]:
         return [
             {"name": name, "title": spec.title or name, "description": spec.description.strip()}
@@ -1044,7 +1049,7 @@ async def record(websocket: WebSocket, kb: str) -> None:
         await fail("Not authenticated", "auth")
         return
     try:
-        await websocket.app.state.kb_catalog.ensure_loaded()
+        await websocket.app.state.kb_catalog.refresh()
     except Exception:
         await fail("The knowledge base catalog is unavailable", "server")
         return

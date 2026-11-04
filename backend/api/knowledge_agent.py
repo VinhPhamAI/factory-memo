@@ -61,6 +61,12 @@ class KnowledgeAgentPool:
 
         self._specs[spec.name] = spec
 
+    def remove(self, name: str) -> None:
+        """Stop serving a deleted KB and release its in-memory chat service."""
+
+        self._specs.pop(name, None)
+        self._agents.pop(name, None)
+
     def names(self) -> list[str]:
         return sorted({*self._specs, *self._agents})
 
@@ -75,12 +81,15 @@ class KnowledgeAgentPool:
     async def get(self, name: str) -> Any:
         if name in self._agents:
             return self._agents[name]
-        spec = self._specs.get(name)
-        if spec is None:
-            raise KeyError(name)
         async with self._lock:
             if name not in self._agents:
+                spec = self._specs.get(name)
+                if spec is None:
+                    raise KeyError(name)
                 store = await self._open(name, spec)
+                if name not in self._specs:
+                    await store.aclose()
+                    raise KeyError(name)
                 try:
                     agent = KnowledgeAgentService.from_kb(spec, store)
                 except Exception:

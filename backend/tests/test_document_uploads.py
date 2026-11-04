@@ -22,7 +22,7 @@ class FakeCatalog:
         self.id = uuid4()
         self.spec = custom_spec("factory", title="Factory")
 
-    async def ensure_loaded(self):
+    async def refresh(self):
         pass
 
     def resolve(self, name):
@@ -37,10 +37,11 @@ class FakeSources:
         self.created = []
         self.error = None
 
-    async def create(self, knowledge_base_id, **values):
+    async def create_upload(self, knowledge_base_id, **values):
         if self.error:
             raise self.error
         self.created.append((knowledge_base_id, values))
+        return None, False
 
 
 class FakeAuth:
