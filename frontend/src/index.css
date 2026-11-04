@@ -3829,6 +3829,19 @@ button.ref-chip:hover,
 .km-stage.converted { background: #eaf2ff; color: #215cad; }
 .km-stage.extracted { background: #e9f5ee; color: #247349; }
 .km-footnote { margin-top: 24px; font-size: 13px; }
+/* File library page (/files). */
+.files-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; }
+/* Popup notifications (components/ui/toast.tsx). */
+.toast-stack { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+.toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; padding: 12px 12px 12px 14px; border-radius: 10px; font-size: 14px; line-height: 1.5; background: white; border: 1px solid #e1e8f3; box-shadow: 0 8px 24px rgba(23, 45, 75, .14); animation: toast-in .18s ease-out; }
+.toast > svg { flex-shrink: 0; margin-top: 2px; }
+.toast.success { background: #edf8f1; border-color: #b9dfc8; color: #1f6340; }
+.toast.error { background: #fdeeee; border-color: #f0c2c2; color: #9b2c2c; }
+.toast-message { flex: 1; min-width: 0; overflow-wrap: anywhere; color: #172d4b; }
+.toast-close { flex-shrink: 0; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: #69798d; }
+.toast-close:hover { background: rgba(23, 45, 75, .08); color: #172d4b; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 .km-empty { display: grid; justify-items: center; gap: 12px; padding: 60px 20px; color: #637b9b; border: 1px dashed #d7e1ef; border-radius: 12px; }
 .km-empty h2 { margin: 0; font-size: 17px; }
 .km-empty a { color: #1263eb; }

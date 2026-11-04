@@ -62,6 +62,12 @@ const router = createBrowserRouter([
               }),
             },
             {
+              path: "/files",
+              lazy: async () => ({
+                Component: (await import("@/pages/files")).FilesPage,
+              }),
+            },
+            {
               path: "/knowledge/:kb/sources/:kind/:sourceId",
               lazy: async () => ({
                 Component: (await import("@/pages/knowledge-management"))
