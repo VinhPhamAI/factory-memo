@@ -123,12 +123,27 @@ class DocumentUploadStore:
         self.update_processing(kb, document_id, state)
         return state
 
-    def save(self, kb: str, source: BinaryIO, *, filename: str, content_type: str) -> StoredDocument:
+    def save(
+        self,
+        kb: str,
+        source: BinaryIO,
+        *,
+        filename: str,
+        content_type: str,
+        source_id: UUID | None = None,
+    ) -> StoredDocument:
+        """Stream original bytes into their final source-keyed object.
+
+        Passing `source_id` uses the application-database layout and writes no
+        metadata sidecar. Omitting it preserves the legacy object format used
+        by benchmark and pre-cutover code.
+        """
+
         if not re.fullmatch(r"[a-z][a-z0-9_]{0,59}", kb):
             raise ValueError("Invalid knowledge base name")
         if not filename.strip() or len(filename) > 1024 or "\x00" in filename:
             raise ValueError("A filename of 1-1024 characters is required")
-        document_id = uuid4().hex
+        document_id = (source_id or uuid4()).hex
         parent = self.root / kb
         parent.mkdir(parents=True, exist_ok=True)
         pending = Path(tempfile.mkdtemp(prefix=".upload-", dir=parent))
@@ -151,13 +166,34 @@ class DocumentUploadStore:
                 storage_key=f"{kb}/{document_id}/content",
                 uploaded_at=datetime.now(timezone.utc),
             )
-            (pending / "metadata.json").write_text(document.model_dump_json(indent=2), encoding="utf-8")
+            if source_id is None:
+                (pending / "metadata.json").write_text(
+                    document.model_dump_json(indent=2), encoding="utf-8"
+                )
             pending.rename(parent / document_id)
             return document
         finally:
             # Also removes partial files after disk errors or an interrupted copy.
             if pending.exists():
                 shutil.rmtree(pending)
+
+    def remove(self, storage_key: str) -> None:
+        """Remove one source object after its database transaction failed."""
+
+        parts = Path(storage_key).parts
+        if len(parts) != 3 or parts[2] != "content":
+            raise ValueError("Invalid document storage key")
+        directory = self.object_dir(parts[0], parts[1])
+        if directory.exists():
+            shutil.rmtree(directory)
+
+    def content_path(self, storage_key: str) -> Path:
+        """Resolve a validated storage key to the original byte file."""
+
+        parts = Path(storage_key).parts
+        if len(parts) != 3 or parts[2] != "content":
+            raise ValueError("Invalid document storage key")
+        return self.object_dir(parts[0], parts[1]) / "content"
 
 
 def text_convertible(document: StoredDocument) -> bool:

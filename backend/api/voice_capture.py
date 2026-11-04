@@ -26,6 +26,7 @@ from uuid import UUID
 
 from fastapi import (
     APIRouter,
+    Depends,
     File,
     Form,
     HTTPException,
@@ -37,6 +38,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
+from backend.api.auth import require_current_user
 from backend.api.knowledge_bases import refresh_catalog
 from backend.knowledge_bases.base import DATA_DIR, KnowledgeBaseSpec, Retrieval
 from backend.src.services.knowledge_consolidation import KnowledgeConsolidator
@@ -67,7 +69,10 @@ from backend.src.services.voice_capture import (
     unique_path,
 )
 from backend.src.storage import KnowledgeRecord, KnowledgeStore, StorageError
+from backend.src.services.auth import Account, InvalidSession
 from backend.src.storage.models import ConversationStatus, KnowledgeStatus
+from backend.src.storage.orm import SourceKind
+from backend.src.storage.repositories.sources import NewFile, SourceRepository
 
 
 logger = logging.getLogger(__name__)
@@ -168,6 +173,8 @@ class VoiceCaptureService:
         open_store: Callable[[KnowledgeBaseSpec], Any] = KnowledgeStore.for_kb,
         ingestion_factory: Callable[[KnowledgeBaseSpec, Any], Any] = default_ingestion_factory,
         cleaner_factory: Callable[[], Any] = TranscriptCleaner.from_env,
+        sources: SourceRepository | None = None,
+        resolve_kb: Callable[[str], tuple[UUID, KnowledgeBaseSpec] | None] | None = None,
     ) -> None:
         # Extraction needs a knowledge store; document-retrieval KBs do not search one.
         self._specs = {
@@ -178,6 +185,8 @@ class VoiceCaptureService:
         self._open_store = open_store
         self._ingestion_factory = ingestion_factory
         self._cleaner_factory = cleaner_factory
+        self._sources = sources
+        self._resolve_kb = resolve_kb
         self._stores: dict[str, Any] = {}
         self._store_lock = asyncio.Lock()
         self._jobs: dict[tuple[UUID, str], Job] = {}
@@ -218,6 +227,22 @@ class VoiceCaptureService:
             raise HTTPException(404, "Conversation not found")
         return conversation
 
+    async def application_source(self, kb: str, source_id: UUID):
+        """Return a captured application source, or None in legacy mode."""
+
+        if self._sources is None:
+            return None
+        resolved = self._resolve_kb(kb) if self._resolve_kb is not None else None
+        if resolved is None:
+            raise HTTPException(404, "Knowledge base not found")
+        return await self._sources.get(resolved[0], source_id)
+
+    @property
+    def uses_application_sources(self) -> bool:
+        """Whether capture reads and writes the application source repository."""
+
+        return self._sources is not None
+
     def audio_path(self, metadata: Mapping[str, Any]) -> Path | None:
         name = (metadata.get("audio") or {}).get("file")
         if not name:
@@ -240,13 +265,13 @@ class VoiceCaptureService:
         language: str,
         endpointing_ms: int,
         extract: bool = True,
+        submitted_by: UUID | None = None,
     ) -> UUID:
         """Stores the transcript as evidence and starts extraction (and cleaning)."""
 
         transcript = outcome.transcript
         if not transcript.strip():
             raise EmptyRecordingError("no speech was recognized in the recording")
-        store = await self.store(kb)
         turns = build_turns(outcome.utterances)
         sidecar = recorder.path.with_suffix(".asr.json")
         sidecar.write_text(json.dumps({
@@ -288,6 +313,32 @@ class VoiceCaptureService:
             "cleaning": {"enabled": clean, "status": "queued" if clean else "off"},
             "ingestion": {"status": "queued" if extract else "off"},
         }
+        if self._sources is not None:
+            metadata["ingestion"] = {"status": "off"}
+            resolved = self._resolve_kb(kb) if self._resolve_kb is not None else None
+            if resolved is None:
+                raise HTTPException(404, "Knowledge base not found")
+            if submitted_by is None:
+                raise ValueError("submitted_by is required")
+            source = await self._sources.create(
+                resolved[0],
+                kind=SourceKind.TEXT,
+                title=name,
+                submitted_by=submitted_by,
+                extracted_text=transcript,
+                metadata=metadata,
+                file=NewFile(
+                    filename=recorder.path.name,
+                    content_type="audio/wav",
+                    size_bytes=recorder.path.stat().st_size,
+                    storage_key=f"audio/{recorder.path.name}",
+                    sha256=recorder.sha256(),
+                ),
+            )
+            if clean:
+                self.start_cleaning(kb, source.id, transcript)
+            return source.id
+        store = await self.store(kb)
         conversation = await store.add_conversation(transcript, metadata=metadata)
         if extract:
             self._start_ingestion(kb, conversation)
@@ -295,7 +346,15 @@ class VoiceCaptureService:
             self.start_cleaning(kb, conversation.id, conversation.transcript)
         return conversation.id
 
-    async def save_text(self, kb: str, *, name: str, text: str, dialogue: bool) -> UUID:
+    async def save_text(
+        self,
+        kb: str,
+        *,
+        name: str,
+        text: str,
+        dialogue: bool,
+        submitted_by: UUID | None = None,
+    ) -> UUID:
         """Stores a typed or pasted conversation as evidence and starts extraction.
 
         Typed text has no recognition noise, so it is not cleaned.
@@ -305,7 +364,6 @@ class VoiceCaptureService:
         if not turns:
             raise ValueError("the text is empty")
         transcript = format_turns(turns)
-        store = await self.store(kb)
         metadata = {
             "source_kind": TEXT_SOURCE_KIND,
             "kb": kb,
@@ -319,6 +377,23 @@ class VoiceCaptureService:
             "cleaning": {"enabled": False, "status": "off"},
             "ingestion": {"status": "queued"},
         }
+        if self._sources is not None:
+            metadata["ingestion"] = {"status": "off"}
+            resolved = self._resolve_kb(kb) if self._resolve_kb is not None else None
+            if resolved is None:
+                raise HTTPException(404, "Knowledge base not found")
+            if submitted_by is None:
+                raise ValueError("submitted_by is required")
+            source = await self._sources.create(
+                resolved[0],
+                kind=SourceKind.TEXT,
+                title=name,
+                submitted_by=submitted_by,
+                extracted_text=transcript,
+                metadata=metadata,
+            )
+            return source.id
+        store = await self.store(kb)
         conversation = await store.add_conversation(transcript, metadata=metadata)
         self._start_ingestion(kb, conversation)
         return conversation.id
@@ -408,8 +483,23 @@ class VoiceCaptureService:
         job = Job("cleaning")
         self._spawn((conversation_id, "cleaning"), job, self._clean(kb, conversation_id, transcript, job))
 
+    async def update_source_metadata(
+        self, kb: str, source_id: UUID, metadata: dict[str, Any]
+    ) -> None:
+        """Merge capture metadata into either application or legacy storage."""
+
+        if self._sources is not None:
+            resolved = self._resolve_kb(kb) if self._resolve_kb is not None else None
+            if resolved is None:
+                raise HTTPException(404, "Knowledge base not found")
+            if await self._sources.update(
+                resolved[0], source_id, metadata=metadata
+            ) is None:
+                raise HTTPException(404, "Conversation not found")
+            return
+        await (await self.store(kb)).update_conversation_metadata(source_id, metadata)
+
     async def _clean(self, kb: str, conversation_id: UUID, transcript: str, job: Job) -> None:
-        store = await self.store(kb)
         turns = parse_transcript(transcript)
         state: dict[str, Any] = {
             "enabled": True, "status": "running", "started_at": _now(),
@@ -420,11 +510,11 @@ class VoiceCaptureService:
         try:
             cleaner = self._cleaner_factory()
             state["model"] = cleaner.provenance.get("model")
-            await store.update_conversation_metadata(conversation_id, {"cleaning": state})
+            await self.update_source_metadata(kb, conversation_id, {"cleaning": state})
 
             async def on_batch(batch: dict[str, dict[str, Any]]) -> None:
                 state["turns"].update(batch)
-                await store.update_conversation_metadata(conversation_id, {"cleaning": state})
+                await self.update_source_metadata(kb, conversation_id, {"cleaning": state})
 
             await cleaner.aclean(turns, on_batch=on_batch)
             state.update(status="done", finished_at=_now())
@@ -433,7 +523,7 @@ class VoiceCaptureService:
         except Exception as exc:
             logger.warning("Transcript cleaning failed for %s", conversation_id, exc_info=True)
             state.update(status="failed", finished_at=_now(), error=_error_text(exc))
-        await store.update_conversation_metadata(conversation_id, {"cleaning": state})
+        await self.update_source_metadata(kb, conversation_id, {"cleaning": state})
 
     async def aclose(self) -> None:
         tasks = [job.task for job in self._jobs.values() if job.task is not None]
@@ -596,33 +686,81 @@ class ReviewRequest(BaseModel):
     note: str = Field(default="", max_length=1000)
 
 
-@router.get("/knowledge-bases")
+@router.get("/knowledge-bases", dependencies=[Depends(require_current_user)])
 async def list_capture_knowledge_bases(request: Request) -> dict[str, list[dict[str, str]]]:
     await refresh_catalog(request)
     return {"knowledge_bases": _service(request).knowledge_bases()}
 
 
-@router.get("/{kb}/conversations")
+@router.get("/{kb}/conversations", dependencies=[Depends(require_current_user)])
 async def list_conversations(request: Request, kb: str, limit: int = 30) -> dict[str, Any]:
+    service = _service(request)
+    if service.uses_application_sources:
+        await refresh_catalog(request)
+        manager = request.app.state.knowledge_management
+        inventory = await manager.inventory(kb)
+        conversations = []
+        for item in inventory["sources"]:
+            if item["kind"] != "conversation":
+                continue
+            detail = await manager.detail(kb, "conversation", item["id"])
+            conversation = detail["conversation"]
+            conversations.append({
+                "id": conversation["id"],
+                "source": conversation["source"],
+                "name": conversation["name"],
+                "recorded_at": conversation["recorded_at"],
+                "duration_s": conversation["audio"].get("duration_s"),
+                "speakers": len(conversation["speakers"]),
+                "ingestion": conversation["ingestion"],
+                "knowledge": item["counts"],
+            })
+            if len(conversations) >= limit:
+                break
+        return {"conversations": conversations}
     try:
-        return {"conversations": await _service(request).conversations(kb, limit)}
+        return {"conversations": await service.conversations(kb, limit)}
     except StorageError as exc:
         raise _storage_error(exc)
 
 
-@router.get("/{kb}/conversations/{conversation_id}")
+@router.get("/{kb}/conversations/{conversation_id}", dependencies=[Depends(require_current_user)])
 async def get_conversation(request: Request, kb: str, conversation_id: UUID) -> dict[str, Any]:
+    service = _service(request)
+    if service.uses_application_sources:
+        await refresh_catalog(request)
+        detail = await request.app.state.knowledge_management.detail(
+            kb, "conversation", str(conversation_id)
+        )
+        return detail["conversation"]
     try:
-        return await _service(request).detail(kb, conversation_id)
+        return await service.detail(kb, conversation_id)
     except StorageError as exc:
         raise _storage_error(exc)
 
 
-@router.patch("/{kb}/conversations/{conversation_id}/speakers")
+@router.patch("/{kb}/conversations/{conversation_id}/speakers", dependencies=[Depends(require_current_user)])
 async def rename_speakers(
     request: Request, kb: str, conversation_id: UUID, body: SpeakerNames
 ) -> dict[str, Any]:
     service = _service(request)
+    if service.uses_application_sources:
+        await refresh_catalog(request)
+        source = await service.application_source(kb, conversation_id)
+        if source is None:
+            raise HTTPException(404, "Conversation not found")
+        speakers = dict(source.metadata.get("speakers") or {})
+        if unknown := sorted(set(body.speakers) - set(speakers)):
+            raise HTTPException(422, f"Unknown speakers: {', '.join(unknown)}")
+        for letter, name in body.speakers.items():
+            speakers[letter] = {**(speakers[letter] or {}), "name": name}
+        await service.update_source_metadata(
+            kb, conversation_id, {"speakers": speakers}
+        )
+        detail = await request.app.state.knowledge_management.detail(
+            kb, "conversation", str(conversation_id)
+        )
+        return detail["conversation"]
     try:
         conversation = await service.conversation(kb, conversation_id)
         speakers = dict(conversation.metadata.get("speakers") or {})
@@ -638,8 +776,14 @@ async def rename_speakers(
         raise _storage_error(exc)
 
 
-@router.post("/{kb}/conversations/{conversation_id}/extract", status_code=202)
+@router.post("/{kb}/conversations/{conversation_id}/extract", status_code=202, dependencies=[Depends(require_current_user)])
 async def retry_extraction(request: Request, kb: str, conversation_id: UUID) -> dict[str, str]:
+    if _service(request).uses_application_sources:
+        await refresh_catalog(request)
+        await request.app.state.knowledge_management.extract(
+            kb, "conversation", str(conversation_id), "knowledge"
+        )
+        return {"status": "queued"}
     try:
         await _service(request).retry_ingestion(kb, conversation_id)
     except StorageError as exc:
@@ -647,9 +791,21 @@ async def retry_extraction(request: Request, kb: str, conversation_id: UUID) -> 
     return {"status": "queued"}
 
 
-@router.post("/{kb}/conversations/{conversation_id}/clean", status_code=202)
+@router.post("/{kb}/conversations/{conversation_id}/clean", status_code=202, dependencies=[Depends(require_current_user)])
 async def start_cleaning(request: Request, kb: str, conversation_id: UUID) -> dict[str, str]:
     service = _service(request)
+    if service.uses_application_sources:
+        await refresh_catalog(request)
+        source = await service.application_source(kb, conversation_id)
+        if source is None:
+            raise HTTPException(404, "Conversation not found")
+        if source.file is None:
+            raise HTTPException(409, "Typed text is not cleaned")
+        await service.update_source_metadata(
+            kb, conversation_id, {"cleaning": {"enabled": True, "status": "queued"}}
+        )
+        service.start_cleaning(kb, conversation_id, source.extracted_text or "")
+        return {"status": "queued"}
     try:
         conversation = await service.conversation(kb, conversation_id)
         if _source(conversation.metadata) == "text":
@@ -663,9 +819,18 @@ async def start_cleaning(request: Request, kb: str, conversation_id: UUID) -> di
     return {"status": "queued"}
 
 
-@router.get("/{kb}/conversations/{conversation_id}/audio")
+@router.get("/{kb}/conversations/{conversation_id}/audio", dependencies=[Depends(require_current_user)])
 async def get_audio(request: Request, kb: str, conversation_id: UUID) -> FileResponse:
     service = _service(request)
+    if service.uses_application_sources:
+        await refresh_catalog(request)
+        source = await service.application_source(kb, conversation_id)
+        if source is None or source.file is None:
+            raise HTTPException(404, "The audio file is missing")
+        path = (service.audio_dir / source.file.filename).resolve()
+        if path.parent != service.audio_dir or not path.is_file():
+            raise HTTPException(404, "The audio file is missing")
+        return FileResponse(path, media_type=source.file.content_type, filename=path.name)
     try:
         conversation = await service.conversation(kb, conversation_id)
     except StorageError as exc:
@@ -678,9 +843,20 @@ async def get_audio(request: Request, kb: str, conversation_id: UUID) -> FileRes
 
 @router.post("/{kb}/knowledge/{record_id}/review")
 async def review_knowledge(
-    request: Request, kb: str, record_id: UUID, body: ReviewRequest
+    request: Request,
+    kb: str,
+    record_id: UUID,
+    body: ReviewRequest,
+    account: Annotated[Account, Depends(require_current_user)],
 ) -> dict[str, Any]:
+    if account.role not in {"expert", "admin"}:
+        raise HTTPException(403, "Expert or administrator role required")
     service = _service(request)
+    if service.uses_application_sources:
+        await refresh_catalog(request)
+        return await request.app.state.knowledge_management.review_record(
+            kb, record_id, body.decision, body.note, account.id
+        )
     status = DECISIONS[body.decision]
     try:
         store = await service.store(kb)
@@ -689,7 +865,7 @@ async def review_knowledge(
             "decision": body.decision,
             "status": status.value,
             "note": body.note.strip() or None,
-            "actor": REVIEW_ACTOR,
+            "actor": str(account.id),
             "at": _now(),
         })
     except StorageError as exc:
@@ -710,6 +886,7 @@ def _check_name(name: str) -> str:
 async def upload_recording(
     request: Request,
     kb: str,
+    account: Annotated[Account, Depends(require_current_user)],
     name: Annotated[str, Form()],
     audio: Annotated[UploadFile, File()],
     clean: Annotated[bool, Form()] = True,
@@ -723,6 +900,7 @@ async def upload_recording(
     is the legacy in-process extraction, used only without a mode.
     """
 
+    await refresh_catalog(request)
     service = _service(request)
     service.spec(kb)
     try:
@@ -756,6 +934,7 @@ async def upload_recording(
             capture_mode="upload", language=client.settings.language,
             endpointing_ms=client.settings.endpointing_ms,
             extract=extract and extract_mode is None,
+            submitted_by=account.id,
         )
     except (SpeechServiceError, OSError) as exc:
         raise HTTPException(502, f"Speech recognition failed; the audio is kept as {path.name}") from exc
@@ -785,15 +964,22 @@ class TypedConversation(BaseModel):
 
 
 @router.post("/{kb}/texts", status_code=201)
-async def add_text(request: Request, kb: str, body: TypedConversation) -> dict[str, str]:
+async def add_text(
+    request: Request,
+    kb: str,
+    body: TypedConversation,
+    account: Annotated[Account, Depends(require_current_user)],
+) -> dict[str, str]:
     """A typed or pasted conversation, extracted like a recording."""
 
+    await refresh_catalog(request)
     service = _service(request)
     service.spec(kb)
     try:
         name = _check_name(body.name)
         conversation_id = await service.save_text(
-            kb, name=name, text=body.text, dialogue=body.dialogue
+            kb, name=name, text=body.text, dialogue=body.dialogue,
+            submitted_by=account.id,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc))
@@ -807,6 +993,7 @@ async def add_text(request: Request, kb: str, body: TypedConversation) -> dict[s
 
 class StartMessage(BaseModel):
     type: Literal["start"]
+    access_token: str = Field(min_length=1)
     name: str
     sample_rate: int = Field(ge=8_000, le=96_000)
     clean: bool = True
@@ -842,15 +1029,27 @@ async def record(websocket: WebSocket, kb: str) -> None:
         except (WebSocketDisconnect, RuntimeError):
             pass
 
-    if kb not in {item["name"] for item in service.knowledge_bases()}:
-        await fail(f"Knowledge base {kb!r} does not support voice capture", "kb")
-        return
     try:
         start = StartMessage.model_validate_json(await websocket.receive_text())
     except WebSocketDisconnect:
         return
     except ValueError as exc:
         await fail(f"Invalid start message: {exc}", "start")
+        return
+    try:
+        account = await websocket.app.state.auth_service.authenticate_access(
+            start.access_token
+        )
+    except (AttributeError, InvalidSession):
+        await fail("Not authenticated", "auth")
+        return
+    try:
+        await websocket.app.state.kb_catalog.ensure_loaded()
+    except Exception:
+        await fail("The knowledge base catalog is unavailable", "server")
+        return
+    if kb not in {item["name"] for item in service.knowledge_bases()}:
+        await fail(f"Knowledge base {kb!r} does not support voice capture", "kb")
         return
 
     client = service.speech_client()
@@ -902,6 +1101,7 @@ async def record(websocket: WebSocket, kb: str) -> None:
             clean=start.clean, capture_mode="live", language=client.settings.language,
             endpointing_ms=client.settings.endpointing_ms,
             extract=start.extract and start.extract_mode is None,
+            submitted_by=account.id,
         )
     except EmptyRecordingError as exc:
         await fail(f"{exc}. The audio is kept as {recorder.path.name}.", "empty", recorder.path.name)

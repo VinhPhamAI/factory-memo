@@ -32,20 +32,18 @@ and AssetOpsBench integrations described below are absent from this checkout.
 
 ### Knowledge bases created in the UI
 
-The capture page (`/capture`, KB list → **＋ Tạo knowledge base mới…**) calls
+The authenticated capture page (`/capture`, KB list → **＋ Tạo knowledge base mới…**) calls
 `POST /v1/knowledge-bases` with `name` (id, same pattern as above), `title`,
 optional `description` and `template` (only `general`). The new KB copies the
-template's policy (`custom.py`: prompts, typed schema, embedding settings), gets
-its own `kb_<name>` database at once, and is recorded in the
-`knowledge_base_registry` table of the `DATABASE_URL` database
-(`backend/src/storage/kb_registry.py`). The API loads that table on start-up and
-serves created KBs for QA and capture without a restart; `GET /v1/knowledge-bases`
-lists built-in and created ones.
+template's policy (`custom.py`: prompts, typed schema and retrieval settings) and
+is recorded in the `knowledge_bases` table of `APP_DATABASE_URL`. No database is
+created for the KB. The API loads those rows on startup and serves them for QA
+and capture without a restart. `GET /v1/knowledge-bases` lists only these rows.
 
-Creation is refused for a taken name, for an existing but unregistered
-`kb_<name>` database (it may hold another KB's data), or beyond `KB_MAX_CREATED`
-(default 50). If registration fails, the new empty database is dropped. There is
-no rename, delete or authentication; the `kb` CLI does not know created KBs.
+Creation is refused for a used or soft-deleted name, the reserved names
+`general` and `industrial_qa`, or beyond `KB_MAX_CREATED` (default 50). Listing
+requires any active account. Creation requires an expert or administrator.
+There is no rename or delete endpoint; the `kb` CLI does not know created KBs.
 Industrial QA is not offered as a template because it depends on its equipment
 catalog, manuals and benchmark.
 

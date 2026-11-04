@@ -5,6 +5,7 @@ import {
   MicRecorder,
 } from "@/services/mic-recorder";
 import {
+  recordAccessToken,
   recordSocketUrl,
   uploadRecording,
   type SavedRecording,
@@ -232,6 +233,7 @@ export function useVoiceRecording(onSaved: (saved: SavedRecording) => void) {
       socket.onopen = () =>
         socket.send(
           JSON.stringify({
+            access_token: recordAccessToken(),
             extract: false,
             type: "start",
             name: current.options.name,

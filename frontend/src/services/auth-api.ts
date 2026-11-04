@@ -299,3 +299,6 @@ export class AuthClient {
     this.listeners.forEach((listener) => listener());
   }
 }
+
+/** Shared browser session used by protected API service modules. */
+export const sessionClient = new AuthClient();

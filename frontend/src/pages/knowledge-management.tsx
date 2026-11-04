@@ -34,7 +34,7 @@ import {
 } from "@/components/knowledge/conflict-review";
 import { listKnowledgeBases } from "@/services/knowledge-api";
 import {
-  audioUrl,
+  fetchAudio,
   type VoiceConversation,
   type VoiceRecord,
 } from "@/services/voice-api";
@@ -51,7 +51,7 @@ import {
   getManagedSource,
   listManagedSources,
   NearDuplicateError,
-  originalDocumentUrl,
+  downloadOriginalDocument,
   reviewManagedChunk,
   sourceLink,
   withJob,
@@ -992,14 +992,39 @@ export function KnowledgeSourcePage() {
     nonce: number;
   }>();
   const [mobileTab, setMobileTab] = useState("knowledge");
+  const [audioObjectUrl, setAudioObjectUrl] = useState<string>();
   const audio = useRef<HTMLAudioElement>(null);
   const preview = useRef<HTMLPreElement>(null);
   const refresh = useCallback(() => setReload((value) => value + 1), []);
+  const audioConversationId = source?.conversation?.id;
+  const audioAvailable = source?.conversation?.audio.available;
 
   useEffect(() => {
     setSource(undefined);
     setError("");
   }, [kb, kind, sourceId]);
+
+  useEffect(() => {
+    if (!audioConversationId || !audioAvailable) {
+      setAudioObjectUrl(undefined);
+      return;
+    }
+    const abort = new AbortController();
+    let objectUrl: string | undefined;
+    void fetchAudio(kb, audioConversationId, abort.signal)
+      .then((blob) => {
+        if (abort.signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setAudioObjectUrl(objectUrl);
+      })
+      .catch((reason) => {
+        if (!abort.signal.aborted) setError(errorText(reason));
+      });
+    return () => {
+      abort.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [audioAvailable, audioConversationId, kb]);
 
   useEffect(() => {
     if (!validKind) return;
@@ -1187,10 +1212,15 @@ export function KnowledgeSourcePage() {
         </div>
         <div className="km-actions">
           {source.kind === "upload" && (
-            <Button variant="outline" asChild>
-              <a href={originalDocumentUrl(source)} download>
-                <Download /> File gốc
-              </a>
+            <Button
+              variant="outline"
+              onClick={() =>
+                void downloadOriginalDocument(source).catch((reason) =>
+                  setError(errorText(reason)),
+                )
+              }
+            >
+              <Download /> File gốc
             </Button>
           )}
           <Button variant="outline" onClick={refresh} disabled={busy}>
@@ -1348,12 +1378,12 @@ export function KnowledgeSourcePage() {
           {error}
         </p>
       )}
-      {source.conversation?.audio.available && (
+      {source.conversation?.audio.available && audioObjectUrl && (
         <audio
           ref={audio}
           className="vc-audio"
           controls
-          src={audioUrl(kb, source.conversation.id)}
+          src={audioObjectUrl}
         />
       )}
       {source.stage !== "raw" && (

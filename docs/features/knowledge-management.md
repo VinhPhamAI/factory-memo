@@ -111,7 +111,7 @@ extraction. Model/embedding calls use configured providers and can incur costs.
 
 Both knowledge items and chunks start in `draft` (Chờ duyệt). **Duyệt** sets
 `approved`, **Loại bỏ** sets `deprecated`, and **Hoàn tác** returns to `draft`.
-Decisions append time, note and an unauthenticated actor to history. Review does
+Decisions append time, note and the signed-in reviewer's account ID to history. Review does
 not rewrite source text or remove historical results. Superseded knowledge
 records cannot be reapproved. Drafts remain searchable in the applicable index;
 deprecated records/chunks are excluded from search and retained for citations.
@@ -125,13 +125,15 @@ not establish engineering correctness or make synthetic content an approved SOP.
 
 ## Storage and APIs
 
-Uploads keep `content` and immutable `metadata.json`; processing adds an atomic
-`processing.json` and `converted.txt` in the same object directory and Docker
-volume. Evidence and knowledge records use existing KB database tables. The
+Uploads keep original `content` bytes in the object directory and Docker volume.
+File metadata, converted text, processing state and source metadata live in the
+application database. Evidence and knowledge records use `knowledge_sources`,
+`knowledge_chunks` and their source links. The
 `document_upload` evidence kind distinguishes an uploaded document from a
 conversation; it has no invented speakers or dialogue turns. Chunk metadata
 retains evidence IDs, original upload IDs, transcript hashes and review history.
-The UI does not implement user authentication.
+All management endpoints require a bearer access token. Record, passage and
+conflict review additionally require an expert or administrator account.
 
 All endpoints below are under `/v1/knowledge-management/{kb}`:
 

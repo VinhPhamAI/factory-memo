@@ -48,7 +48,12 @@ unreachable. Pin both in tests.
   Startup fails with a clear message when `APP_DATABASE_URL` is unset outside tests.
 - **Frontend (`frontend/src/services/knowledge-management.ts`, `document-api.ts`,
   `knowledge-base-admin.ts`, `voice-api.ts`).** Send the bearer token from the
-  existing session client; handle 401 by refreshing once, then signing out.
+  shared in-memory session client. Keep `AuthClient.authorizedFetch()` as a
+  single-attempt request: it never refreshes or retries, and returns a 401 response
+  unchanged to its caller. Callers keep their existing error handling. WebSocket
+  capture sends the current access token in its `start` message. Protected file and
+  audio downloads use authenticated fetches because `<a>` and `<audio src>` cannot
+  attach an `Authorization` header.
 
 Illustrative upload flow:
 
@@ -74,7 +79,9 @@ async def store_upload(kb: KnowledgeBaseRef, upload: UploadFile, user: Account) 
   an upload source extracted in knowledge mode, one extracted in documents mode, and
   a text source.
 - `test_voice_capture.py`: a typed text creates a `text` source with `submitted_by`.
-- Frontend: requests carry `Authorization`; a 401 triggers one refresh.
+- Frontend: requests carry `Authorization`; `authorizedFetch()` returns a 401
+  without refreshing or retrying; WebSocket capture includes the access token in
+  `start`; protected file and audio requests use authenticated fetches.
 
 ## Completion checks
 

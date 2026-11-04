@@ -1,34 +1,44 @@
 """Shared source lifecycle and human review API."""
 
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend.api.knowledge_bases import refresh_catalog
+from backend.api.auth import require_current_user
+from backend.api.knowledge_bases import require_expert
 from backend.api.voice_capture import ReviewRequest
+from backend.src.services.auth import Account
+from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
 from backend.src.storage import StorageError
 
 
-router = APIRouter(prefix="/v1/knowledge-management", tags=["knowledge-management"])
+router = APIRouter(
+    prefix="/v1/knowledge-management",
+    tags=["knowledge-management"],
+    dependencies=[Depends(require_current_user)],
+)
 Kind = Literal["upload", "conversation", "document"]
 
 
 def normalized_id(kind: Kind, value: str) -> str:
-    if kind == "document":
-        return value
     try:
         identifier = UUID(value)
     except ValueError as exc:
         raise HTTPException(422, "Invalid source ID") from exc
-    return identifier.hex if kind == "upload" else str(identifier)
+    return str(identifier)
 
 
 async def service(request: Request, kb: str):
+    """Resolve management for an active KB or report unavailable storage."""
+
     await refresh_catalog(request)
     manager = request.app.state.knowledge_management
+    if manager is None:
+        raise HTTPException(503, "Knowledge management is not configured")
     manager.spec(kb)
     return manager
 
@@ -40,7 +50,7 @@ async def result(awaitable):
         raise HTTPException(404, "Source file not found") from exc
     except (ValueError, UnicodeError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    except (OSError, StorageError) as exc:
+    except (OSError, StorageError, KnowledgeStorageUnavailable) as exc:
         raise HTTPException(503, "Source storage is unavailable") from exc
 
 
@@ -59,12 +69,14 @@ async def source(request: Request, kb: str, kind: Kind, source_id: str):
 @router.get("/{kb}/sources/upload/{source_id}/original")
 async def original(request: Request, kb: str, source_id: UUID):
     manager = await service(request, kb)
-    try:
-        document = manager.uploads.get(kb, source_id.hex)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, "Source file not found") from exc
-    return FileResponse(manager.uploads.object_dir(kb, source_id.hex) / "content",
-                        filename=document.filename, media_type="application/octet-stream")
+    knowledge_base_id, _spec = manager.spec(kb)
+    source = await manager.sources.get(knowledge_base_id, source_id)
+    if source is None or source.file is None:
+        raise HTTPException(404, "Source file not found")
+    path = request.app.state.document_uploads.content_path(source.file.storage_key)
+    if not path.is_file():
+        raise HTTPException(404, "Source file not found")
+    return FileResponse(path, filename=source.file.filename, media_type=source.file.content_type)
 
 
 @router.post("/{kb}/sources/upload/{source_id}/convert", status_code=202)
@@ -92,9 +104,15 @@ async def extract(request: Request, kb: str, kind: Kind, source_id: str, body: E
 
 
 @router.post("/{kb}/knowledge/{record_id}/review")
-async def review(request: Request, kb: str, record_id: UUID, body: ReviewRequest):
+async def review(
+    request: Request,
+    kb: str,
+    record_id: UUID,
+    body: ReviewRequest,
+    account: Annotated[Account, Depends(require_expert)],
+):
     manager = await service(request, kb)
-    return await result(manager.review_record(kb, record_id, body.decision, body.note))
+    return await result(manager.review_record(kb, record_id, body.decision, body.note, account.id))
 
 
 class ChunkReviewRequest(ReviewRequest):
@@ -102,9 +120,16 @@ class ChunkReviewRequest(ReviewRequest):
 
 
 @router.post("/{kb}/sources/{kind}/{source_id}/review-chunk")
-async def review_chunk(request: Request, kb: str, kind: Kind, source_id: str, body: ChunkReviewRequest):
+async def review_chunk(
+    request: Request,
+    kb: str,
+    kind: Kind,
+    source_id: str,
+    body: ChunkReviewRequest,
+    account: Annotated[Account, Depends(require_expert)],
+):
     manager = await service(request, kb)
-    return await result(manager.review_chunk(kb, kind, normalized_id(kind, source_id), body.chunk_id, body.decision, body.note))
+    return await result(manager.review_chunk(kb, kind, normalized_id(kind, source_id), body.chunk_id, body.decision, body.note, account.id))
 
 
 @router.get("/{kb}/conflicts")
@@ -135,7 +160,10 @@ async def recheck_conflicts(request: Request, kb: str, body: ConflictRecheckRequ
     return await result(manager.recheck_conflicts(kb, body.record_ids))
 
 
-@router.post("/{kb}/conflicts/{conflict_id}/review")
+@router.post(
+    "/{kb}/conflicts/{conflict_id}/review",
+    dependencies=[Depends(require_expert)],
+)
 async def review_conflict(request: Request, kb: str, conflict_id: UUID, body: ConflictReviewRequest):
     manager = await service(request, kb)
     return await result(manager.review_conflict(kb, conflict_id, body.decision, body.note, body.keep_id))

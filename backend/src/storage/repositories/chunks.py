@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Integer, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.src.storage.models import KnowledgeRecord, KnowledgeStatus
@@ -169,6 +169,45 @@ class ChunkRepository(Repository):
             ).all()
         return [chunk_record(row, source_id) for row in rows]
 
+    async def passages_for_source(
+        self, knowledge_base_id: UUID, source_id: UUID
+    ) -> list[dict[str, Any]]:
+        """Return document-passage chunks linked to one source, in passage order."""
+
+        async with self._transaction() as session:
+            rows = (
+                await session.scalars(
+                    select(KnowledgeChunk)
+                    .join(
+                        KnowledgeChunkSource,
+                        KnowledgeChunkSource.chunk_id == KnowledgeChunk.id,
+                    )
+                    .where(
+                        KnowledgeChunk.knowledge_base_id == knowledge_base_id,
+                        KnowledgeChunkSource.source_id == source_id,
+                        KnowledgeChunk.deleted_at.is_(None),
+                        KnowledgeChunk.details["chunk_kind"].astext
+                        == DOCUMENT_PASSAGE_KIND,
+                    )
+                    .order_by(
+                        KnowledgeChunk.details["chunk_index"].astext.cast(Integer),
+                        KnowledgeChunk.id,
+                    )
+                )
+            ).all()
+        return [
+            {
+                "id": str(row.id),
+                "doc_id": str((row.details or {}).get("doc_id") or row.id),
+                "index": int((row.details or {}).get("chunk_index") or 0),
+                "text": row.content,
+                "title": row.title,
+                "status": row.status,
+                "history": (row.details or {}).get("review_history") or [],
+            }
+            for row in rows
+        ]
+
     async def review_record(
         self,
         knowledge_base_id: UUID,
@@ -222,6 +261,50 @@ class ChunkRepository(Repository):
             row.reviewed_at = datetime.now(timezone.utc) if reviewed else None
             evidence = await _first_sources(session, [row.id])
         return chunk_record(row, evidence.get(row.id))
+
+    async def review_passage(
+        self,
+        knowledge_base_id: UUID,
+        source_id: UUID,
+        chunk_id: UUID,
+        status: KnowledgeStatus,
+        *,
+        reviewer_id: UUID,
+        event: dict[str, Any],
+    ) -> bool:
+        """Review one document passage linked to the requested source."""
+
+        status = KnowledgeStatus(status)
+        async with self._transaction() as session:
+            row = await session.scalar(
+                select(KnowledgeChunk)
+                .join(
+                    KnowledgeChunkSource,
+                    KnowledgeChunkSource.chunk_id == KnowledgeChunk.id,
+                )
+                .where(
+                    KnowledgeChunk.id == chunk_id,
+                    KnowledgeChunk.knowledge_base_id == knowledge_base_id,
+                    KnowledgeChunkSource.source_id == source_id,
+                    KnowledgeChunk.deleted_at.is_(None),
+                    KnowledgeChunk.details["chunk_kind"].astext
+                    == DOCUMENT_PASSAGE_KIND,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                return False
+            details = dict(row.details or {})
+            details["review_history"] = [
+                *details.get("review_history", []),
+                json.loads(json_text(event)),
+            ]
+            row.details = details
+            row.status = status.value
+            reviewed = status is not KnowledgeStatus.DRAFT
+            row.reviewed_by = reviewer_id if reviewed else None
+            row.reviewed_at = datetime.now(timezone.utc) if reviewed else None
+        return True
 
 
 async def _first_sources(session: AsyncSession, chunk_ids: Sequence[UUID]) -> dict[UUID, UUID]:

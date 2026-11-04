@@ -1,6 +1,7 @@
 import type { KnowledgeBase } from "@/types";
 import { ApiError } from "./voice-api";
 import { apiBaseUrl } from "./config";
+import { sessionClient } from "./auth-api";
 
 export const MAX_KB_TITLE = 80;
 export const MAX_KB_DESCRIPTION = 500;
@@ -36,7 +37,7 @@ export async function createKnowledgeBase(form: {
 }): Promise<KnowledgeBase> {
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}/v1/knowledge-bases`, {
+    response = await sessionClient.authorizedFetch(`${apiBaseUrl}/v1/knowledge-bases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(form),
@@ -55,16 +56,10 @@ export async function createKnowledgeBase(form: {
     // Not JSON; the status code is enough.
   }
   if (response.status === 409)
-    throw new Error(
-      detail.startsWith("Database")
-        ? `Trên máy chủ đã có database kb_${form.name} chưa đăng ký. Chọn mã khác để không lẫn dữ liệu cũ.`
-        : `Mã “${form.name}” đã được dùng. Chọn mã khác.`,
-    );
+    throw new Error(`Mã “${form.name}” đã được dùng. Chọn mã khác.`);
   if (response.status === 403)
     throw new Error("Đã đạt số knowledge base tối đa có thể tạo.");
   if (response.status === 503)
-    throw new Error(
-      "Máy chủ không tạo được database. Kiểm tra PostgreSQL rồi thử lại.",
-    );
+    throw new Error("Kho ứng dụng chưa sẵn sàng. Hãy thử lại.");
   throw new ApiError(response.status, detail);
 }

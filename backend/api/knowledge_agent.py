@@ -8,10 +8,11 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from backend.api.auth import require_current_user
 from backend.api.knowledge_bases import refresh_catalog
 from backend.knowledge_bases import KnowledgeBaseSpec
 from backend.knowledge_bases.stores import open_store
@@ -166,7 +167,7 @@ async def _service(request: Request, kb: str) -> KnowledgeAgentService:
         ) from exc
 
 
-@router.get("/knowledge-bases")
+@router.get("/knowledge-bases", dependencies=[Depends(require_current_user)])
 async def list_knowledge_bases(request: Request) -> dict[str, list[dict[str, str]]]:
     await refresh_catalog(request)
     pool = _pool(request)
@@ -178,23 +179,33 @@ async def list_knowledge_bases(request: Request) -> dict[str, list[dict[str, str
     }
 
 
-@router.post("/stream", response_class=StreamingResponse)
+@router.post(
+    "/stream",
+    response_class=StreamingResponse,
+    dependencies=[Depends(require_current_user)],
+)
 async def stream_knowledge_agent(
     request: Request,
     payload: Annotated[KnowledgeAgentStreamRequest, Body(...)],
 ) -> StreamingResponse:
     """Compatibility endpoint: select a knowledge base in the JSON body."""
+    await refresh_catalog(request)
     service = await _service(request, payload.kb)
     return _stream_response(service, payload)
 
 
-@router.post("/{kb}/stream", response_class=StreamingResponse)
+@router.post(
+    "/{kb}/stream",
+    response_class=StreamingResponse,
+    dependencies=[Depends(require_current_user)],
+)
 async def stream_scoped_knowledge_agent(
     kb: str,
     request: Request,
     payload: Annotated[ScopedAgentQueryRequest, Body(...)],
 ) -> StreamingResponse:
     """Stream a KB's agent, including /enterprise_rag/stream, with its own history."""
+    await refresh_catalog(request)
     service = await _service(request, kb)
     return _stream_response(service, payload)
 

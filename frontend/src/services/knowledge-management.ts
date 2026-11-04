@@ -1,4 +1,5 @@
 import { apiBaseUrl } from "./config";
+import { sessionClient } from "./auth-api";
 import type {
   IngestionStatus,
   JobState,
@@ -137,8 +138,22 @@ const sourcePath = (kb: string, kind: SourceKind, id: string) =>
   `${base(kb)}/sources/${kind}/${encodeURIComponent(id)}`;
 export const sourceLink = (source: Pick<ManagedSource, "kb" | "kind" | "id">) =>
   `/knowledge/${encodeURIComponent(source.kb)}/sources/${source.kind}/${encodeURIComponent(source.id)}`;
-export const originalDocumentUrl = (source: ManagedSource) =>
+const originalDocumentUrl = (source: ManagedSource) =>
   `${sourcePath(source.kb, "upload", source.id)}/original`;
+
+export async function downloadOriginalDocument(source: ManagedSource) {
+  const response = await sessionClient.authorizedFetch(
+    originalDocumentUrl(source),
+  );
+  if (!response.ok)
+    throw new Error(`Không tải được file gốc (HTTP ${response.status}).`);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = source.name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 /** Extraction refused: the same content was already extracted in this mode. */
 export class DuplicateContentError extends Error {
@@ -193,7 +208,7 @@ async function duplicateError(response: Response) {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(path, init);
+    response = await sessionClient.authorizedFetch(path, init);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;

@@ -1,4 +1,5 @@
 import { apiBaseUrl } from "./config";
+import { sessionClient } from "./auth-api";
 
 export const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024;
 
@@ -30,7 +31,7 @@ export async function uploadDocument(
   if (extractMode) data.set("extract_mode", extractMode);
   let response: Response;
   try {
-    response = await fetch(
+    response = await sessionClient.authorizedFetch(
       `${apiBaseUrl}/v1/documents/${encodeURIComponent(kb)}/uploads`,
       { method: "POST", body: data },
     );

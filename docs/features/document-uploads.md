@@ -29,28 +29,31 @@ Objects are stored as:
 
 ```text
 <root>/<kb>/<uuid>/content
-<root>/<kb>/<uuid>/metadata.json
 ```
 
-Metadata retains the object ID, KB, original filename, client content type, byte
-size, SHA-256, relative storage key, upload time (UTC) and `status: "stored"`.
+The `files` and `knowledge_sources` application tables retain the source ID,
+KB, original filename, client content type, byte size, SHA-256, storage key,
+submitter and timestamps.
 Original filenames never become paths; repeated filenames create separate UUID
-objects. File and metadata are written in a temporary directory, then published
-together with a directory rename. Failed writes are cleaned up. Metadata persists
-beside the file without a database write; no LLM, embedding or speech calls occur.
+objects. Bytes are written in a temporary directory and then published with a
+directory rename. If the database transaction fails, the published object is
+removed. No LLM, embedding or speech calls occur during storage.
 
 ## API / CLI
 
 `POST /v1/documents/{kb}/uploads` accepts one multipart **file** field per request
-and an existing KB name. It returns `201` with the saved metadata, `404` for an
+and an existing application KB name. A bearer access token is required. It
+returns `201` with the source ID and saved file metadata, `401` for an unusable
+token, `404` for an
 unknown KB, `422` for missing/empty files or invalid filenames, `413` for a file
 over the limit and `503` when storage fails. Clients can submit multiple requests
-for a batch. As with the existing API, no authentication is configured.
+for a batch.
 
 ```sh
 curl --fail-with-body \
+  -H 'Authorization: Bearer <access-token>' \
   -F 'file=@/path/to/manual.pdf' \
-  http://localhost:8005/v1/documents/general/uploads
+  http://localhost:8005/v1/documents/<kb>/uploads
 ```
 
 The response's `storage_key` is relative to the storage root, for example
