@@ -21,6 +21,7 @@ from backend.api.auth import router as auth_router
 from backend.api.conversations import router as conversations_router
 from backend.api.speech import router as speech_router
 from backend.api.document_uploads import router as document_uploads_router
+from backend.api.files import router as files_router
 from backend.api.knowledge_agent import KnowledgeAgentPool
 from backend.api.knowledge_agent import router as knowledge_agent_router
 from backend.api.knowledge_bases import KnowledgeBaseCatalog
@@ -39,7 +40,9 @@ from backend.src.storage.app_database import (
 from backend.src.storage.auth import AuthStorageUnavailable, AuthStore
 from backend.src.storage.conversations import ConversationStore
 from backend.src.storage.document_uploads import DocumentUploadStore
+from backend.src.storage.file_library import FileBlobStore, FileRecordStore
 from backend.src.services.auth import AuthService
+from backend.src.services.file_library import FileLibraryService
 from backend.src.services.knowledge_management import KnowledgeManagementService
 
 
@@ -55,13 +58,16 @@ def create_app(
     conversation_store: ConversationStore | None = None,
     agent_client: Any | None = None,
     chat_speech: Any | None = None,
+    file_library: FileLibraryService | None = None,
 ) -> FastAPI:
     """Build the API; injected agents and services keep HTTP tests dependency-free.
 
-    With injected knowledge services, auth and conversations use only the
-    injected `auth_service`, `conversation_store` and `agent_client` (routes
-    return 503 without them) and never open the application database or the
-    agent. Otherwise they use APP_DATABASE_URL, AGENT_BASE_URL and AGENT_API_TOKEN.
+    With injected knowledge services, auth, conversations and the file library
+    use only the injected `auth_service`, `conversation_store`, `agent_client`
+    and `file_library` (routes return 503 without them) and never open the
+    application database or the agent. Otherwise they use APP_DATABASE_URL,
+    AGENT_BASE_URL and AGENT_API_TOKEN; the database services share one
+    connection pool, created when any of them is not passed in.
     """
 
     @asynccontextmanager
@@ -80,6 +86,7 @@ def create_app(
             app.state.conversation_store = conversation_store
             app.state.agent_client = agent_client
             app.state.chat_speech = chat_speech
+            app.state.file_library = file_library
             try:
                 yield
             finally:
@@ -91,16 +98,21 @@ def create_app(
         app_engine = None
         app.state.auth_service = auth_service
         app.state.conversation_store = conversation_store
+        app.state.file_library = file_library
         url = app_database_url_from_env()
-        if url and (auth_service is None or conversation_store is None):
+        needs_database = auth_service is None or conversation_store is None or file_library is None
+        if url and needs_database:
             # Connects lazily; an unreachable database fails requests with 503.
             app_engine = create_app_engine(url)
             sessions = create_session_factory(app_engine)
             app.state.auth_service = auth_service or AuthService(AuthStore(sessions))
             app.state.conversation_store = conversation_store or ConversationStore(sessions)
-        elif not url and (auth_service is None or conversation_store is None):
+            app.state.file_library = file_library or FileLibraryService(
+                FileRecordStore(sessions), FileBlobStore()
+            )
+        elif not url and needs_database:
             logging.getLogger(__name__).warning(
-                "APP_DATABASE_URL is not set; authentication or conversations are unavailable"
+                "APP_DATABASE_URL is not set; authentication, conversations or the file library are unavailable"
             )
         owned_agent_client = None
         app.state.agent_client = agent_client
@@ -163,6 +175,7 @@ def create_app(
     api.include_router(knowledge_bases_router)
     api.include_router(voice_capture_router)
     api.include_router(document_uploads_router)
+    api.include_router(files_router)
     api.include_router(knowledge_management_router)
 
     @api.get("/healthz")
