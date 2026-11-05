@@ -142,7 +142,7 @@ class RegistryTest(unittest.TestCase):
     def test_repository_registry_loads(self) -> None:
         path = Path(__file__).resolve().parents[1] / "services.yaml"
         services = load_services(path, {})
-        self.assertEqual([s.name for s in services], ["speech", "ocr", "embedding"])
+        self.assertEqual([s.name for s in services], ["speech", "ocr", "embedding", "llm"])
         embedding = services[2]
         self.assertEqual((embedding.ready_path, embedding.models_path), ("/health", "/info"))
         self.assertEqual(find(services, "/v1/embeddings").name, "embedding")
@@ -154,8 +154,9 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(speech.target("/v1/audio/transcriptions/realtime"),
                          "/v1/audio/transcriptions/realtime")
         # Worker-native paths are not public.
-        for path in ("/embed", "/tokenize", "/info", "/transcribe", "/health"):
+        for path in ("/embed", "/info", "/transcribe", "/health"):
             self.assertIsNone(find(services, path), path)
+        self.assertEqual(find(services, "/tokenize").name, "llm")  # vLLM-native path
         self.assertEqual(find(services, "/v1/audio/transcriptions/realtime").name, "speech")
         self.assertEqual(find(services, "/v1/ocr").name, "ocr")
         self.assertIsNone(find(services, "/v1/ocrx"))

@@ -166,3 +166,44 @@ services:
             - driver: nvidia
               device_ids: ["${EMBEDDING_TEI_GPU_ID:-0}"]
               capabilities: [gpu]
+
+  # Chat LLM: Qwen/Qwen3.5-4B on vLLM, text only, with tool calling. Native
+  # vLLM OpenAI API on 0.0.0.0:8043 (LLM_PORT) and, with the same paths and
+  # bodies, through ai-services-api (/v1/chat/completions, ...). No API key
+  # unless LLM_API_KEY is set; the port is public by default (LLM_BIND).
+  ai-llm:
+    image: "vllm/vllm-openai:${LLM_VLLM_IMAGE_TAG:-latest}"
+    container_name: ai-llm
+    restart: unless-stopped
+    command: ["--model", "${LLM_MODEL:-Qwen/Qwen3.5-4B}",
+              "--served-model-name", "${LLM_MODEL:-Qwen/Qwen3.5-4B}",
+              "--host", "0.0.0.0", "--port", "8000",
+              "--max-model-len", "${LLM_MAX_MODEL_LEN:-32768}",
+              "--gpu-memory-utilization", "${LLM_GPU_MEM_UTIL:-0.30}",
+              "--enable-auto-tool-choice",
+              "--tool-call-parser", "${LLM_TOOL_PARSER:-qwen3_coder}",
+              "--reasoning-parser", "${LLM_REASONING_PARSER:-qwen3}",
+              "--limit-mm-per-prompt", "{\"image\":0,\"video\":0}"]
+    environment:
+      HF_TOKEN: "${HF_TOKEN:-}"
+      # Non-empty makes vLLM require `Authorization: Bearer <key>` (also via the gateway).
+      VLLM_API_KEY: "${LLM_API_KEY:-}"
+    ports:
+      - "${LLM_BIND:-0.0.0.0}:${LLM_PORT:-8043}:8000"
+    volumes:
+      # Hugging Face cache; the model is downloaded here on first start.
+      - "${LLM_HF_CACHE:-/mnt/data/llm/hf}:/root/.cache/huggingface"
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${LLM_GPU_ID:-0}"]
+              capabilities: [gpu]

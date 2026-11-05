@@ -39,3 +39,15 @@ services:
       - /v1/embeddings                       # OpenAI-compatible embeddings
       - /v1/embeddings/tokenize: /tokenize   # TEI tokenizer
       - /v1/embeddings/info: /info           # TEI model and limits
+
+  llm:
+    description: Qwen/Qwen3.5-4B chat LLM with tool calling (vLLM, native OpenAI API paths)
+    url: http://ai-llm:8000
+    ready: /health   # vLLM has no /ready
+    routes:
+      - /v1/chat/completions
+      - /v1/completions
+      - /v1/responses
+      - /v1/messages
+      - /tokenize
+      - /detokenize
