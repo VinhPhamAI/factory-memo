@@ -703,4 +703,3 @@ class ApplicationKnowledgeManagementService:
 
     async def aclose(self) -> None:
         """Repositories own no persistent connection resources."""
-

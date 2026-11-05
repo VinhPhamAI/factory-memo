@@ -105,4 +105,3 @@ class PdfTextConverter:
             converter="pdf_text",
             details=details,
         )
-

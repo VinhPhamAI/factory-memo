@@ -34,4 +34,3 @@ class TextConverter:
                 "không thể chuyển đổi."
             )
         return Conversion(text=text, segments=[], converter="text", details={"encoding": encoding})
-

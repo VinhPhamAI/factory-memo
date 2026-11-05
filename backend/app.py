@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.api.auth import (
     AuthHttpSettings,
@@ -42,7 +43,7 @@ from backend.src.storage.app_database import (
 from backend.src.storage.auth import AuthStorageUnavailable, AuthStore
 from backend.src.storage.conversations import ConversationStore
 from backend.src.storage.document_uploads import DocumentUploadStore
-from backend.src.storage.embeddings import verify_embedding_dimension
+from backend.src.storage.embeddings import EmbeddingMismatch, verify_embedding_dimension
 from backend.src.storage.file_library import FileBlobStore, FileRecordStore
 from backend.src.services.auth import AuthService
 from backend.src.services.file_library import FileLibraryService
@@ -98,10 +99,14 @@ def create_app(
     AGENT_BASE_URL and AGENT_API_TOKEN; the database services share one
     connection pool with the knowledge repositories. Without APP_DATABASE_URL,
     database-backed routes remain unavailable while the API can still start.
+    Incompatible KB embeddings disable knowledge routes without disabling chat
+    or the personal file library; fixing that configuration requires a restart.
     """
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """Wire shared services and close resources owned by this application."""
+
         if knowledge_agents is not None or voice_capture is not None or kb_catalog is not None or knowledge_management is not None:
             app.state.knowledge_agents = KnowledgeAgentPool({}, agents=knowledge_agents or {})
             app.state.voice_capture = voice_capture or VoiceCaptureService({})
@@ -134,15 +139,23 @@ def create_app(
         url = app_database_url_from_env()
         needs_database = auth_service is None or conversation_store is None or file_library is None
         sessions = None
+        knowledge_ready = False
         if url:
-            # Connects lazily; an unreachable database fails requests with 503.
+            # Keep the shared pool available even when KB validation fails below.
             app_engine = create_app_engine(url)
             sessions = create_session_factory(app_engine)
             try:
                 await verify_embedding_dimension(sessions)
+            except (EmbeddingMismatch, ValueError, SQLAlchemyError, OSError) as exc:
+                logging.getLogger(__name__).warning(
+                    "Knowledge storage is unavailable; chat and file services remain configured: %s",
+                    type(exc).__name__,
+                )
             except BaseException:
                 await app_engine.dispose()
                 raise
+            else:
+                knowledge_ready = True
             app.state.auth_service = auth_service or AuthService(AuthStore(sessions))
             app.state.conversation_store = conversation_store or ConversationStore(sessions)
             app.state.file_library = file_library or FileLibraryService(
@@ -171,7 +184,7 @@ def create_app(
         manager = None
         app.state.sources = sources
         app.state.chunk_search = chunk_search
-        if sessions is not None:
+        if sessions is not None and knowledge_ready:
             source_repository = sources or SourceRepository(sessions)
             app.state.sources = source_repository
             app.state.chunk_search = chunk_search or ChunkSearchService(

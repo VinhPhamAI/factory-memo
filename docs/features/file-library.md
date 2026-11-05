@@ -7,7 +7,18 @@ page (`/files`, live mode only).
 Not implemented: in-browser preview, adding library files to a knowledge base,
 OCR or extraction, and access by citations or inquiries. To make uploaded documents
 searchable, use the separate [document uploads](document-uploads.md) flow on the
-Capture page. That flow and its `/v1/documents/{kb}/uploads` API are unchanged.
+Capture page through `/v1/documents/{kb}/uploads`.
+
+Both flows use the application `files` table. Personal files have flat,
+32-character hexadecimal storage keys under `FILE_LIBRARY_DIR`; KB originals
+have nested keys under `DOCUMENT_UPLOAD_DIR`. `/v1/files` lists, reads and deletes
+only personal-library keys. KB originals stay available through source endpoints
+and cannot be deleted through the personal library.
+
+The API can start without `APP_DATABASE_URL`; database-backed endpoints then
+return unavailable responses. A missing or incompatible KB embedding setting
+disables KB routes while authentication, conversations and the personal library
+remain configured. Correct the KB setting and restart the API to enable KB routes.
 
 Owners: routes in `backend/api/files.py`, rules in `backend/src/services/file_library.py`,
 type checks in `backend/src/services/file_types.py`, storage in

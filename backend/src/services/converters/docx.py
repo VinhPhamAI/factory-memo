@@ -99,4 +99,3 @@ def _column_name(index: int) -> str:
         index, remainder = divmod(index - 1, 26)
         result = chr(65 + remainder) + result
     return result
-

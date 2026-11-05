@@ -172,4 +172,3 @@ def _looks_like_text(head: bytes) -> bool:
         except UnicodeError:
             continue
     return False
-

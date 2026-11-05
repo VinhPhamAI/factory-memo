@@ -90,4 +90,3 @@ class XlsxConverter:
             converter="xlsx",
             details={"sheet_count": rendered_sheets},
         )
-
