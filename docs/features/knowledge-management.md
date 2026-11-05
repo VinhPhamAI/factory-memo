@@ -195,6 +195,7 @@ All endpoints below are under `/v1/knowledge-management/{kb}`:
 | POST | `/sources/{kind}/{id}/extract` | `{"mode":"knowledge"}` or `{"mode":"documents"}`; queues convert → extract for a raw upload (202 `{status, mode, job}`) |
 | POST | `/knowledge/{record_id}/review` | Knowledge decision and optional note |
 | POST | `/sources/{kind}/{id}/review-chunk` | Source-scoped chunk decision, chunk ID and optional note |
+| POST | `/search` | Ranked chunk search with evidence; see [Search](#search) |
 
 Kinds are `upload`, `conversation` (existing evidence-table IDs) and `document`
 (URL-safe token for an indexed document ID). The legacy voice review endpoints
@@ -208,6 +209,61 @@ next stages, attempts, error and retry time). Extract also returns 409 with
 or `detail.code = "near_duplicate"` (with `matches`) when the content nearly
 matches an extracted source and the request has no `confirm_overlap: true`
 (see below).
+
+## Search
+
+`POST /v1/knowledge-management/{kb}/search` ranks the searchable chunks of one
+knowledge base and returns each with its active evidence. Any signed-in user can
+call it. The **Tìm kiếm** tab on the management page uses it.
+
+Hybrid search combines vector and full-text ranks using reciprocal rank fusion.
+When the requested kinds include `knowledge`, confident hits rank first using
+the same similarity and term overlap rules as the agent's knowledge search.
+
+Request:
+
+| Field | Default | Rule |
+| --- | --- | --- |
+| `query` | required | 1–2000 characters after trimming |
+| `mode` | `hybrid` | `hybrid`, `dense` (vector only) or `keyword` (full text only) |
+| `kinds` | both | `knowledge`, `document_passage` |
+| `statuses` | both | `draft`, `approved`; `deprecated` returns 422 |
+| `context` | `{}` | Context keys and values; chunks without a key still match it, as for the agent |
+| `limit` | 10 | 1–50 |
+
+Response: `query`, `mode`, `embedding_model` (`null` for `keyword`) and `results`.
+Each result has `rank`, `chunk_id`, `citation` (`[K:<chunk id>]` or `[D:<doc id>]`),
+`kind`, `status`, `title`, `content`, `scores` and `evidence`.
+
+- `scores.fused`, `scores.dense` and `scores.keyword` name the rankings that produced
+  the chunk; a component that did not is `null`, not `0`. `fused` exists only in
+  `hybrid` mode.
+- `evidence` lists only active sources: `source_id`, `source_title`, `source_kind`,
+  `references` (page, paragraph, cell range or source location) and `original_url`
+  (`null` when the source has no stored file).
+- Never returned: embeddings, `search_text`, raw transcripts beyond the chunk's own
+  content, reviewer notes.
+- Drafts are returned with `status: "draft"`; the UI marks them as unreviewed.
+  Search rechecks chunk status and source visibility when it loads the final
+  results and evidence together. Deleted, deprecated (including rejected) and
+  superseded chunks and chunks without an active source are excluded.
+
+Errors:
+
+| Status | Cause |
+| --- | --- |
+| 401 | Missing or invalid token |
+| 404 | Unknown or deleted knowledge base |
+| 409 | `dense` or `hybrid` with an `EMBEDDING_MODEL` that differs from the model that embedded the knowledge base; the message names both models |
+| 422 | Invalid field, including a `deprecated` status |
+| 503 | Database unreachable, or the embedding provider is missing or unreachable (`dense`, `hybrid`) |
+
+`keyword` needs no embedding provider and no model check, so it still works when the
+provider is down or the model changed. Each search logs the knowledge base, mode,
+result count and latency; the query text is not logged.
+
+In the UI, an evidence chip opens the source page and, when the reference has a
+location, the located evidence preview.
 
 ## Duplicate content
 

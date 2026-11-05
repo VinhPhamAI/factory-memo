@@ -28,6 +28,7 @@ from backend.api.knowledge_agent import router as knowledge_agent_router
 from backend.api.knowledge_bases import KnowledgeBaseCatalog
 from backend.api.knowledge_bases import router as knowledge_bases_router
 from backend.api.knowledge_management import router as knowledge_management_router
+from backend.api.knowledge_search import router as knowledge_search_router
 from backend.api.voice_capture import VoiceCaptureService
 from backend.api.voice_capture import router as voice_capture_router
 from backend.knowledge_bases import KNOWLEDGE_BASES
@@ -54,6 +55,7 @@ from backend.src.storage.repositories.sources import SourceRepository
 from backend.src.services.application_knowledge_management import (
     ApplicationKnowledgeManagementService,
 )
+from backend.src.services.chunk_search import ChunkSearchService
 from backend.src.services.knowledge_management import KnowledgeManagementService
 
 
@@ -85,6 +87,7 @@ def create_app(
     chat_speech: Any | None = None,
     file_library: FileLibraryService | None = None,
     sources: SourceRepository | None = None,
+    chunk_search: ChunkSearchService | None = None,
 ) -> FastAPI:
     """Build the API; injected agents and services keep HTTP tests dependency-free.
 
@@ -105,6 +108,7 @@ def create_app(
             app.state.kb_catalog = kb_catalog
             app.state.document_uploads = document_uploads or DocumentUploadStore()
             app.state.sources = sources
+            app.state.chunk_search = chunk_search
             manager = knowledge_management or KnowledgeManagementService(
                 KNOWLEDGE_BASES, app.state.document_uploads, app.state.voice_capture,
             )
@@ -166,9 +170,13 @@ def create_app(
         capture = VoiceCaptureService({})
         manager = None
         app.state.sources = sources
+        app.state.chunk_search = chunk_search
         if sessions is not None:
             source_repository = sources or SourceRepository(sessions)
             app.state.sources = source_repository
+            app.state.chunk_search = chunk_search or ChunkSearchService(
+                sessions, ChunkRepository(sessions), source_repository
+            )
             catalog = KnowledgeBaseCatalog(KnowledgeBaseRepository(sessions))
             pool = KnowledgeAgentPool({}, sessions=sessions, catalog=catalog)
             capture = VoiceCaptureService(
@@ -239,6 +247,7 @@ def create_app(
     api.include_router(document_uploads_router)
     api.include_router(files_router)
     api.include_router(knowledge_management_router)
+    api.include_router(knowledge_search_router)
 
     @api.get("/healthz")
     async def healthcheck() -> dict[str, str]:

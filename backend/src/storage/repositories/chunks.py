@@ -12,6 +12,7 @@ import json
 import math
 import re
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -68,6 +69,83 @@ _DETAIL_FIELDS = (
     "supported_by", "contradicted_by", "revision",
 )
 _CONTEXT_KEY = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+# Statuses a chunk search may request; deprecated chunks are never searchable.
+SEARCHABLE_STATUSES = (KnowledgeStatus.DRAFT.value, KnowledgeStatus.APPROVED.value)
+MAX_CHUNK_SEARCH_LIMIT = 50
+_LIVE_SOURCE = (KnowledgeSource.deleted_at.is_(None), File.deleted_at.is_(None))
+
+
+@dataclass(frozen=True)
+class ChunkEvidence:
+    """An active source of a chunk and its evidence locations."""
+
+    source_id: UUID
+    source_title: str
+    source_kind: str
+    references: list[dict[str, Any]]
+    has_file: bool
+
+
+@dataclass(frozen=True)
+class ChunkSearchHit:
+    """One chunk of a chunk search with the scores that produced its rank.
+
+    A score is None when its ranking did not produce the chunk: `fused` exists
+    only in hybrid mode, `dense` is the cosine similarity of a vector hit and
+    `keyword` the full-text rank score of a keyword hit.
+    """
+
+    chunk_id: UUID
+    kind: str
+    status: str
+    title: str
+    content: str
+    doc_id: str | None
+    fused: float | None
+    dense: float | None
+    keyword: float | None
+    vector_rank: int | None
+    lexical_rank: int | None
+    confident: bool
+    evidence: list[ChunkEvidence]
+
+    @property
+    def citation(self) -> str:
+        """Citation marker as in answers: `[D:<doc id>]` for passages, else `[K:<chunk id>]`."""
+
+        if self.kind == DOCUMENT_PASSAGE_KIND:
+            return f"[D:{self.doc_id}]"
+        return f"[K:{self.chunk_id}]"
+
+
+@dataclass(frozen=True)
+class _RankedChunk:
+    """A ranked candidate and its score components before content and evidence load."""
+
+    chunk_id: UUID
+    fused_score: float
+    vector_rank: int | None
+    lexical_rank: int | None
+    vector_distance: float | None
+    lexical_score: float | None
+    lexical_matched_terms: int | None
+    confident: bool
+
+    def order_key(self) -> tuple[bool, float, int, int, int, float, str]:
+        """Sort by confidence, fused score, channel ranks, distance and ID."""
+
+        missing_rank = 2**31 - 1
+        vector_rank = self.vector_rank or missing_rank
+        lexical_rank = self.lexical_rank or missing_rank
+        return (
+            not self.confident,
+            -self.fused_score,
+            -((self.vector_rank is not None) + (self.lexical_rank is not None)),
+            min(vector_rank, lexical_rank),
+            lexical_rank,
+            math.inf if self.vector_distance is None else self.vector_distance,
+            str(self.chunk_id),
+        )
 
 
 def chunk_row(
@@ -437,7 +515,7 @@ class ChunkRepository(Repository):
             raise ValueError("The query record has no embedding")
         distance = KnowledgeChunk.embedding.cosine_distance(record.embedding)
         similarity = (1 - distance).label("similarity")
-        conditions = _record_conditions(knowledge_base_id, filters)
+        conditions = _current_chunk_conditions(knowledge_base_id, filters)
         if types:
             conditions.append(
                 KnowledgeChunk.details["type"].astext.in_(
@@ -478,7 +556,7 @@ class ChunkRepository(Repository):
             return []
         parsed = func.websearch_to_tsquery("simple", lexical)
         score = func.ts_rank_cd(KnowledgeChunk.search_vector, parsed).label("score")
-        conditions = _record_conditions(knowledge_base_id, filters)
+        conditions = _current_chunk_conditions(knowledge_base_id, filters)
         if types:
             conditions.append(
                 KnowledgeChunk.details["type"].astext.in_(
@@ -670,46 +748,29 @@ class ChunkRepository(Repository):
         """
 
         result_k = max(1, min(k, MAX_SEARCH_K))
-        candidate_k = min(
-            MAX_SEARCH_CANDIDATES,
-            max(MIN_SEARCH_CANDIDATES, result_k * SEARCH_CANDIDATE_MULTIPLIER),
-        )
-        conditions = _record_conditions(knowledge_base_id, filters)
+        conditions = _current_chunk_conditions(knowledge_base_id, filters)
         async with self._transaction() as session:
-            dense = await _dense_candidates(session, conditions, query_embedding, candidate_k)
-            lexical, terms = await _lexical_candidates(session, conditions, query, candidate_k)
-            matched = await _matched_terms(session, query, [row_id for row_id, _ in lexical])
-            rows = await _chunks_by_id(session, [*dense, *(row_id for row_id, _ in lexical)])
+            candidates = await _ranked_candidates(
+                session, conditions, query, query_embedding,
+                mode=SearchMode.HYBRID, limit=result_k,
+                min_vector_similarity=min_vector_similarity,
+            )
+            top = candidates[:result_k]
+            rows = await _chunks_by_id(session, [hit.chunk_id for hit in top])
             evidence = await _first_sources(session, list(rows))
-        vector_ranks = {row_id: rank for rank, row_id in enumerate(dense, start=1)}
-        lexical_ranks = {row_id: rank for rank, (row_id, _) in enumerate(lexical, start=1)}
-        lexical_scores = dict(lexical)
-        max_distance = 1.0 - min_vector_similarity
-        required = max(
-            min(LEXICAL_CONFIDENT_MIN_TERMS, terms),
-            math.ceil(LEXICAL_CONFIDENT_TERM_FRACTION * terms),
-        )
-        hits = []
-        for row_id in rows:
-            vector_rank, lexical_rank = vector_ranks.get(row_id), lexical_ranks.get(row_id)
-            distance = dense.get(row_id)
-            shared = matched.get(row_id)
-            hits.append(KnowledgeSearchHit(
-                record=chunk_record(rows[row_id], evidence.get(row_id)),
-                hybrid_score=sum(
-                    1.0 / (RRF_RANK_CONSTANT + rank)
-                    for rank in (vector_rank, lexical_rank) if rank is not None
-                ),
-                vector_rank=vector_rank,
-                lexical_rank=lexical_rank,
-                vector_distance=distance,
-                lexical_score=lexical_scores.get(row_id),
-                lexical_matched_terms=shared,
-                confident=(distance is not None and distance <= max_distance)
-                or (shared is not None and shared >= required),
-            ))
-        hits.sort(key=_hit_order)
-        return hits[:result_k]
+        return [
+            KnowledgeSearchHit(
+                record=chunk_record(rows[hit.chunk_id], evidence.get(hit.chunk_id)),
+                hybrid_score=hit.fused_score,
+                vector_rank=hit.vector_rank,
+                lexical_rank=hit.lexical_rank,
+                vector_distance=hit.vector_distance,
+                lexical_score=hit.lexical_score,
+                lexical_matched_terms=hit.lexical_matched_terms,
+                confident=hit.confident,
+            )
+            for hit in top
+        ]
 
     async def search_passages(
         self,
@@ -765,6 +826,98 @@ class ChunkRepository(Repository):
         if mode is SearchMode.KEYWORD:
             return lexical_hits[:k]
         return rrf_fuse(vector_hits, lexical_hits)[:k]
+
+    async def search_chunks(
+        self,
+        knowledge_base_id: UUID,
+        query: str,
+        query_embedding: Sequence[float] | None,
+        *,
+        mode: SearchMode = SearchMode.HYBRID,
+        kinds: Collection[str] = (KNOWLEDGE_CHUNK_KIND, DOCUMENT_PASSAGE_KIND),
+        statuses: Collection[KnowledgeStatus | str] = SEARCHABLE_STATUSES,
+        filters: dict[str, Any] | None = None,
+        limit: int = 10,
+        min_vector_similarity: float = DEFAULT_MIN_VECTOR_SIMILARITY,
+    ) -> list[ChunkSearchHit]:
+        """Rank searchable chunks of the requested kinds and statuses.
+
+        Hybrid searches that include knowledge use the agent's confidence-first
+        ordering, then reciprocal rank fusion. Content and evidence are loaded
+        together after rechecking eligibility against the current database state.
+
+        Args:
+            knowledge_base_id: Knowledge base to search.
+            query: Query text for the keyword and hybrid modes.
+            query_embedding: Embedding of the query; required unless `mode` is keyword.
+            mode: Ranking to use: vector (`SEMANTIC`), full-text (`KEYWORD`) or fused.
+            kinds: Chunk kinds to search: `knowledge`, `document_passage`.
+            statuses: Review statuses to include, `draft` and/or `approved`.
+            filters: Knowledge filter grammar from `build_knowledge_filter`; chunks
+                that do not carry the filtered field are matched by its rules.
+            limit: Number of chunks to return, at most `MAX_CHUNK_SEARCH_LIMIT`.
+            min_vector_similarity: Cosine similarity that makes a hybrid hit confident.
+
+        Returns:
+            Chunks with active evidence, best first.
+
+        Raises:
+            ValueError: `limit` is not positive, a kind or status is unknown or
+                deprecated, an embedding is needed and missing, or the filter is invalid.
+        """
+
+        mode = SearchMode(mode)
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if mode is not SearchMode.KEYWORD and query_embedding is None:
+            raise ValueError("A query embedding is required for vector search")
+        kind_values = sorted({str(kind) for kind in kinds})
+        if not kind_values or not set(kind_values) <= {KNOWLEDGE_CHUNK_KIND, DOCUMENT_PASSAGE_KIND}:
+            raise ValueError("kinds must be knowledge and/or document_passage")
+        status_values = sorted({KnowledgeStatus(status).value for status in statuses})
+        if not status_values or not set(status_values) <= set(SEARCHABLE_STATUSES):
+            raise ValueError("statuses must be draft and/or approved")
+        result_k = min(limit, MAX_CHUNK_SEARCH_LIMIT)
+        conditions = _current_chunk_conditions(
+            knowledge_base_id, filters, kinds=kind_values, statuses=status_values
+        )
+        use_confidence = mode is SearchMode.HYBRID and KNOWLEDGE_CHUNK_KIND in kind_values
+        async with self._transaction() as session:
+            candidates = await _ranked_candidates(
+                session, conditions, query, query_embedding,
+                mode=mode, limit=result_k,
+                min_vector_similarity=min_vector_similarity if use_confidence else None,
+            )
+            rows = await _chunks_with_evidence(
+                session, [hit.chunk_id for hit in candidates], conditions
+            )
+        hits = []
+        for candidate in candidates:
+            row_id = candidate.chunk_id
+            if row_id not in rows:
+                continue
+            row, evidence = rows[row_id]
+            distance = candidate.vector_distance
+            details = row.details or {}
+            kind = details.get("chunk_kind")
+            hits.append(ChunkSearchHit(
+                chunk_id=row_id,
+                kind=kind,
+                status=row.status,
+                title=row.title,
+                content=row.content,
+                doc_id=str(details.get("doc_id") or row_id) if kind == DOCUMENT_PASSAGE_KIND else None,
+                fused=candidate.fused_score if mode is SearchMode.HYBRID else None,
+                dense=None if distance is None else 1.0 - distance,
+                keyword=candidate.lexical_score,
+                vector_rank=candidate.vector_rank,
+                lexical_rank=candidate.lexical_rank,
+                confident=candidate.confident,
+                evidence=evidence,
+            ))
+            if len(hits) == result_k:
+                break
+        return hits
 
     async def get_document(self, knowledge_base_id: UUID, doc_id: str) -> list[ChunkHit]:
         """Return a document's searchable passages in order; consecutive ones may overlap."""
@@ -844,12 +997,22 @@ class ChunkRepository(Repository):
         return updated
 
 
-def _searchable_conditions(knowledge_base_id: UUID, kind: str) -> list[Any]:
-    """Build the inclusion predicate of every search over one kind of chunk.
+def _searchable_conditions(
+    knowledge_base_id: UUID,
+    kind: str | Collection[str],
+    statuses: Collection[str] | None = None,
+) -> list[Any]:
+    """Build the inclusion predicate of every search over chunks.
 
     A chunk is searchable when it and its knowledge base are not deleted, it is
     not deprecated, and at least one linked source and that source's file (if
     any) are not deleted.
+
+    Args:
+        knowledge_base_id: Knowledge base the chunk belongs to.
+        kind: One chunk kind, or the kinds to search.
+        statuses: Statuses to keep besides the always-excluded deprecated one;
+            None keeps every non-deprecated chunk.
     """
 
     live_source = (
@@ -859,9 +1022,9 @@ def _searchable_conditions(knowledge_base_id: UUID, kind: str) -> list[Any]:
         .outerjoin(File, File.id == KnowledgeSource.file_id)
         .where(
             KnowledgeChunkSource.chunk_id == KnowledgeChunk.id,
-            KnowledgeSource.deleted_at.is_(None),
-            File.deleted_at.is_(None),
+            *_LIVE_SOURCE,
         )
+        .correlate(KnowledgeChunk)
         .exists()
     )
     live_base = (
@@ -872,14 +1035,18 @@ def _searchable_conditions(knowledge_base_id: UUID, kind: str) -> list[Any]:
         )
         .exists()
     )
-    return [
+    chunk_kind = KnowledgeChunk.details["chunk_kind"].astext
+    conditions = [
         KnowledgeChunk.knowledge_base_id == knowledge_base_id,
         KnowledgeChunk.deleted_at.is_(None),
         KnowledgeChunk.status != KnowledgeStatus.DEPRECATED.value,
-        KnowledgeChunk.details["chunk_kind"].astext == kind,
+        chunk_kind == kind if isinstance(kind, str) else chunk_kind.in_(list(kind)),
         live_base,
         live_source,
     ]
+    if statuses is not None:
+        conditions.append(KnowledgeChunk.status.in_(list(statuses)))
+    return conditions
 
 
 def _passage_conditions(knowledge_base_id: UUID) -> list[Any]:
@@ -888,16 +1055,85 @@ def _passage_conditions(knowledge_base_id: UUID) -> list[Any]:
     return _searchable_conditions(knowledge_base_id, DOCUMENT_PASSAGE_KIND)
 
 
-def _record_conditions(
-    knowledge_base_id: UUID, filters: dict[str, Any] | None
+def _current_chunk_conditions(
+    knowledge_base_id: UUID,
+    filters: dict[str, Any] | None,
+    *,
+    kinds: str | Collection[str] = KNOWLEDGE_CHUNK_KIND,
+    statuses: Collection[str] | None = None,
 ) -> list[Any]:
-    """Build the knowledge inclusion predicate and optional filter grammar."""
+    """Restrict search to eligible chunks that match the filters and have no successor."""
 
-    conditions = _searchable_conditions(knowledge_base_id, KNOWLEDGE_CHUNK_KIND)
+    conditions = _searchable_conditions(knowledge_base_id, kinds, statuses)
     conditions.append(KnowledgeChunk.superseded_by.is_(None))
     if filters is not None:
         conditions.append(_filter_expression(filters))
     return conditions
+
+
+async def _ranked_candidates(
+    session: AsyncSession,
+    conditions: Sequence[Any],
+    query: str,
+    query_embedding: Sequence[float] | None,
+    *,
+    mode: SearchMode,
+    limit: int,
+    min_vector_similarity: float | None,
+) -> list[_RankedChunk]:
+    """Collect and order candidates for the agent's knowledge search and the search API.
+
+    Args:
+        session: Open search transaction for candidate queries.
+        conditions: SQL filters that define eligible candidates.
+        query: Text for full-text search and term overlap.
+        query_embedding: Vector for dense search, omitted in keyword mode.
+        mode: Channels to run and whether to fuse their ranks.
+        limit: Requested result count, expanded to a candidate pool in hybrid mode.
+        min_vector_similarity: Similarity threshold for confidence, or None to
+            rank without a confidence check.
+
+    Returns:
+        Ranked candidates before evidence loading and the final result limit.
+    """
+
+    candidate_k = limit if mode is not SearchMode.HYBRID else min(
+        MAX_SEARCH_CANDIDATES,
+        max(MIN_SEARCH_CANDIDATES, limit * SEARCH_CANDIDATE_MULTIPLIER),
+    )
+    dense: dict[UUID, float] = {}
+    lexical: list[tuple[UUID, float]] = []
+    terms = 0
+    if mode is not SearchMode.KEYWORD:
+        dense = await _dense_candidates(session, conditions, query_embedding, candidate_k)
+    if mode is not SearchMode.SEMANTIC:
+        lexical, terms = await _lexical_candidates(session, conditions, query, candidate_k)
+
+    lexical_scores = dict(lexical)
+    matched = {}
+    if min_vector_similarity is not None:
+        matched = await _matched_terms(session, query, list(lexical_scores))
+    vector_ranks = {chunk_id: rank for rank, chunk_id in enumerate(dense, start=1)}
+    lexical_ranks = {chunk_id: rank for rank, chunk_id in enumerate(lexical_scores, start=1)}
+    candidates = []
+    for chunk_id in dense.keys() | lexical_scores.keys():
+        vector_rank = vector_ranks.get(chunk_id)
+        lexical_rank = lexical_ranks.get(chunk_id)
+        distance = dense.get(chunk_id)
+        shared = matched.get(chunk_id)
+        candidates.append(_RankedChunk(
+            chunk_id=chunk_id,
+            fused_score=_rrf_score(vector_rank, lexical_rank) if mode is SearchMode.HYBRID else 0.0,
+            vector_rank=vector_rank,
+            lexical_rank=lexical_rank,
+            vector_distance=distance,
+            lexical_score=lexical_scores.get(chunk_id),
+            lexical_matched_terms=shared,
+            confident=min_vector_similarity is not None and _confident_hit(
+                distance, shared, terms, min_vector_similarity
+            ),
+        ))
+    return sorted(candidates, key=_RankedChunk.order_key)
 
 
 async def _dense_candidates(
@@ -980,18 +1216,66 @@ async def _chunks_by_id(
     return {chunk_id: rows[chunk_id] for chunk_id in wanted}
 
 
-def _hit_order(hit: KnowledgeSearchHit) -> tuple[Any, ...]:
-    """Sort key: confident first, then fused score, channels, best rank and ID."""
+async def _chunks_with_evidence(
+    session: AsyncSession, chunk_ids: Sequence[UUID], conditions: Sequence[Any],
+) -> dict[UUID, tuple[KnowledgeChunk, list[ChunkEvidence]]]:
+    """Load still-searchable candidates and active evidence in one statement snapshot."""
 
-    big = 2**31 - 1
-    return (
-        not hit.confident,
-        -hit.hybrid_score,
-        -((hit.vector_rank is not None) + (hit.lexical_rank is not None)),
-        min(hit.vector_rank or big, hit.lexical_rank or big),
-        hit.lexical_rank or big,
-        big if hit.vector_distance is None else hit.vector_distance,
-        str(hit.record.id),
+    if not chunk_ids:
+        return {}
+    rows = await session.execute(
+        select(
+            KnowledgeChunk,
+            KnowledgeSource.id,
+            KnowledgeSource.title,
+            KnowledgeSource.kind,
+            KnowledgeSource.file_id,
+            KnowledgeChunkSource.references,
+        )
+        .join(KnowledgeChunkSource, KnowledgeChunkSource.chunk_id == KnowledgeChunk.id)
+        .join(KnowledgeSource, KnowledgeSource.id == KnowledgeChunkSource.source_id)
+        .outerjoin(File, File.id == KnowledgeSource.file_id)
+        .where(
+            KnowledgeChunk.id.in_(list(dict.fromkeys(chunk_ids))),
+            KnowledgeSource.knowledge_base_id == KnowledgeChunk.knowledge_base_id,
+            *conditions,
+            *_LIVE_SOURCE,
+        )
+        .order_by(KnowledgeChunk.id, KnowledgeSource.id)
+    )
+    chunks: dict[UUID, tuple[KnowledgeChunk, list[ChunkEvidence]]] = {}
+    for chunk, source_id, title, kind, file_id, references in rows:
+        _, evidence = chunks.setdefault(chunk.id, (chunk, []))
+        evidence.append(ChunkEvidence(
+            source_id=source_id,
+            source_title=title,
+            source_kind=kind,
+            references=list(references),
+            has_file=file_id is not None,
+        ))
+    return chunks
+
+
+def _rrf_score(vector_rank: int | None, lexical_rank: int | None) -> float:
+    """Sum reciprocal ranks from the channels that found a chunk."""
+
+    return sum(
+        1.0 / (RRF_RANK_CONSTANT + rank)
+        for rank in (vector_rank, lexical_rank) if rank is not None
+    )
+
+
+def _confident_hit(
+    distance: float | None, shared_terms: int | None, query_terms: int, min_similarity: float,
+) -> bool:
+    """Check whether the vector distance or lexical overlap meets the confidence threshold."""
+
+    required = max(
+        min(LEXICAL_CONFIDENT_MIN_TERMS, query_terms),
+        math.ceil(LEXICAL_CONFIDENT_TERM_FRACTION * query_terms),
+    )
+    return (distance is not None and distance <= 1.0 - min_similarity) or (
+        shared_terms is not None and shared_terms >= required
     )
 
 

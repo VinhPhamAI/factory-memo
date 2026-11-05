@@ -4,14 +4,21 @@ Depends on phases 1–4 and proposed decision D11. It uses phase 6 evidence refe
 when they are present. Today retrieval only runs inside the agent tools and the
 Industrial QA pipeline; no endpoint returns ranked chunks, and the UI cannot search them.
 
+Status: implemented. Code: `backend/api/knowledge_search.py`,
+`backend/src/services/chunk_search.py`, `ChunkRepository.search_chunks`,
+and `frontend/src/components/knowledge/chunk-search.tsx`.
+Tests: `backend/tests/test_chunk_search_api.py`,
+`frontend/src/pages/knowledge-search.test.tsx`. The evidence chip opens the source
+page with its first located reference; phase 6's viewer is not a separate surface yet.
+
 ## Goal
 
 - An endpoint returns ranked chunks with their evidence for one KB.
 - It excludes deleted, rejected (`deprecated`) and superseded-and-deprecated chunks,
   and chunks without an active source.
 - The knowledge management page can search chunks and open their evidence.
-- One ranking implementation: the endpoint calls the phase 4 repository search used by
-  the agent tools. No endpoint-only scoring or filters.
+- Share the agent's candidate queries and confidence-first ordering for hybrid
+  knowledge search. Apply the requested kinds, statuses and context to chunk search.
 
 ## Contract
 
@@ -75,16 +82,16 @@ async def search_chunks(kb: str, request: SearchRequest,
     hits = await chunks.search(target.id, request.query, mode=request.mode, kinds=request.kinds,
                                statuses=request.statuses, context=request.context,
                                limit=request.limit)
-    return SearchResponse.from_hits(request, hits, await sources.evidence_for(target.id, hits))
+    return SearchResponse.from_hits(request, hits)
 ```
 
 ## Search implementation
 
-- Extend the phase 4 search in `backend/src/storage/repositories/chunks.py` with
-  `kinds`, `statuses` and `mode`. Agent tools keep calling it with their current
-  arguments, so their results do not change.
-- Evidence is loaded in one query for all hits (`knowledge_chunk_sources` joined with
-  active sources and files), not per hit.
+- Search chunks by `kinds`, `statuses` and `mode` in
+  `backend/src/storage/repositories/chunks.py`. Hybrid searches that include
+  knowledge use the agent's confidence rule before sorting by fused score.
+- Load chunks and their evidence in one query after ranking candidates. Recheck
+  eligibility and join only active sources and files in that query.
 - Log the KB, mode, result count and latency; do not log the query text.
 
 ## UI (`frontend/src/pages/knowledge-management.tsx`)

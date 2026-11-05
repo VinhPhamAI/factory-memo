@@ -8,7 +8,7 @@ repositories define which chunks are searchable.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -20,18 +20,24 @@ from backend.src.agents.rag.store import (
     SearchMode,
     best_chunk_per_document,
 )
-from backend.src.storage.embeddings import check_embedding_model
+from backend.src.storage.embeddings import EmbeddingUnavailable, check_embedding_model
 from backend.src.storage.knowledge_store import DEFAULT_MIN_VECTOR_SIMILARITY, DEFAULT_SEARCH_K, StorageError
 from backend.src.storage.models import (
     ConversationStatus,
     KnowledgeRecord,
     KnowledgeSearchHit,
+    KnowledgeStatus,
     RawConversation,
 )
 from backend.src.storage.repositories import (
     ChunkRepository,
     ExtractionRunRepository,
     SourceRepository,
+)
+from backend.src.storage.repositories.chunks import (
+    DOCUMENT_PASSAGE_KIND,
+    KNOWLEDGE_CHUNK_KIND,
+    ChunkSearchHit,
 )
 
 
@@ -45,7 +51,7 @@ class ChunkRetrieval:
         chunks: ChunkRepository,
         sources: SourceRepository,
         runs: ExtractionRunRepository,
-        embeddings: Embeddings,
+        embeddings: Embeddings | None,
         *,
         vector_size: int,
         embedding_model: str | None = None,
@@ -59,7 +65,7 @@ class ChunkRetrieval:
             chunks: Repository that runs the searches.
             sources: Repository that reads source text for evidence.
             runs: Extraction runs of the knowledge base, for the embedding model check.
-            embeddings: Client that embeds queries.
+            embeddings: Client that embeds queries; None for keyword-only searches.
             vector_size: Expected size of every query embedding.
             embedding_model: Configured `EMBEDDING_MODEL`; None skips the model check.
             min_vector_similarity: Cosine similarity that makes a knowledge hit confident.
@@ -83,6 +89,7 @@ class ChunkRetrieval:
 
         Raises:
             EmbeddingMismatch: The knowledge base was embedded with another model.
+            EmbeddingUnavailable: There is no embedding client, or it failed.
             StorageError: The embedding has an unexpected size.
         """
 
@@ -91,7 +98,12 @@ class ChunkRetrieval:
             configured=self._embedding_model,
             recorded=await self._runs.embedding_models(),
         )
-        vector = list(await self._embeddings.aembed_query(query))
+        if self._embeddings is None:
+            raise EmbeddingUnavailable("No embedding client is configured")
+        try:
+            vector = list(await self._embeddings.aembed_query(query))
+        except Exception as exc:
+            raise EmbeddingUnavailable("The embedding provider could not be reached") from exc
         if len(vector) != self._vector_size:
             raise StorageError(
                 f"Query embedding has {len(vector)} dimensions, expected {self._vector_size}"
@@ -119,6 +131,41 @@ class ChunkRetrieval:
                 if min_vector_similarity is None
                 else min_vector_similarity
             ),
+        )
+
+    async def search_chunks(
+        self,
+        query: str,
+        *,
+        mode: SearchMode = SearchMode.HYBRID,
+        kinds: Collection[str] = (KNOWLEDGE_CHUNK_KIND, DOCUMENT_PASSAGE_KIND),
+        statuses: Collection[KnowledgeStatus | str] = (
+            KnowledgeStatus.DRAFT, KnowledgeStatus.APPROVED,
+        ),
+        filters: dict[str, Any] | None = None,
+        limit: int = 10,
+    ) -> list[ChunkSearchHit]:
+        """Rank searchable chunks of both kinds; see `ChunkRepository.search_chunks`.
+
+        Keyword searches skip the embedding model check and the embedding client.
+
+        Raises:
+            EmbeddingMismatch: A vector search met a knowledge base embedded with another model.
+            EmbeddingUnavailable: A vector search could not embed the query.
+            ValueError: An argument or filter is not valid.
+        """
+
+        mode = SearchMode(mode)
+        return await self._chunks.search_chunks(
+            self._knowledge_base_id,
+            query,
+            None if mode is SearchMode.KEYWORD else await self._query_embedding(query),
+            mode=mode,
+            kinds=kinds,
+            statuses=statuses,
+            filters=filters,
+            limit=limit,
+            min_vector_similarity=self._min_vector_similarity,
         )
 
     async def get_knowledge(self, ids: Sequence[UUID]) -> list[KnowledgeRecord]:

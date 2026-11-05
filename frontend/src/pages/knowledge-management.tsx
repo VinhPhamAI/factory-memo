@@ -15,11 +15,13 @@ import {
   Mic,
   Plus,
   RefreshCw,
+  Search,
   Undo2,
   X,
 } from "lucide-react";
 import type { KnowledgeBase, LocatedReference } from "@/types";
 import { Button } from "@/components/ui/button";
+import { ChunkSearchPanel } from "@/components/knowledge/chunk-search";
 import { CreateKnowledgeBaseDialog } from "@/components/knowledge/create-kb-dialog";
 import { KnowledgeBaseSettings } from "@/components/knowledge/knowledge-base-settings";
 import { DocumentUpload } from "@/components/voice/document-upload";
@@ -589,7 +591,10 @@ export function KnowledgeManagementPage() {
   const canManage = user?.role === "admin" || user?.role === "expert";
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab");
-  const view = tab === "knowledge-bases" || tab === "conflicts" ? tab : "sources";
+  const view =
+    tab === "knowledge-bases" || tab === "conflicts" || tab === "search"
+      ? tab
+      : "sources";
   const [creatingKb, setCreatingKb] = useState(false);
   const [catalogError, setCatalogError] = useState("");
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
@@ -817,6 +822,9 @@ export function KnowledgeManagementPage() {
           <Tabs.Trigger className="km-tab" value="sources">
             <Files aria-hidden="true" /> Nguồn dữ liệu
           </Tabs.Trigger>
+          <Tabs.Trigger className="km-tab" value="search" disabled={uploading}>
+            <Search aria-hidden="true" /> Tìm kiếm
+          </Tabs.Trigger>
           <Tabs.Trigger className="km-tab" value="conflicts" disabled={uploading}>
             <GitCompareArrows aria-hidden="true" /> Mâu thuẫn
           </Tabs.Trigger>
@@ -875,6 +883,14 @@ export function KnowledgeManagementPage() {
                   refresh();
                 }}
               />
+            )}
+          </Tabs.Content>
+
+          <Tabs.Content value="search" className="km-tab-panel">
+            {kb ? (
+              <ChunkSearchPanel key={kb} kb={kb} />
+            ) : (
+              !loading && <p className="vc-muted">Chọn knowledge base để tìm kiếm.</p>
             )}
           </Tabs.Content>
 
@@ -1092,7 +1108,13 @@ export function KnowledgeSourcePage() {
   const { kb = "", kind = "", sourceId = "" } = useParams();
   const validKind = ["upload", "conversation", "document"].includes(kind);
   // A capture that saved the source but could not queue Auto processing.
-  const notice = (useLocation().state as { notice?: string } | null)?.notice;
+  const state = useLocation().state as {
+    notice?: string;
+    located?: LocatedReference;
+  } | null;
+  const notice = state?.notice;
+  // A search result's evidence chip carries the location to show first.
+  const startLocated = state?.located;
   const [source, setSource] = useState<ManagedSourceDetail>();
   const [mode, setMode] = useState<ExtractionMode>("knowledge");
   const [error, setError] = useState("");
@@ -1117,8 +1139,9 @@ export function KnowledgeSourcePage() {
   useEffect(() => {
     setSource(undefined);
     setError("");
-    setLocated(undefined);
-  }, [kb, kind, sourceId]);
+    setLocated(startLocated);
+    setQuote(startLocated?.quote ?? "");
+  }, [kb, kind, sourceId, startLocated]);
 
   useEffect(() => {
     if (!audioConversationId || !audioAvailable) {

@@ -5,7 +5,7 @@ raises `KnowledgeStorageUnavailable` when the database cannot be reached.
 """
 
 from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
-from backend.src.storage.repositories.chunks import ChunkRepository
+from backend.src.storage.repositories.chunks import ChunkRepository, ChunkSearchHit
 from backend.src.storage.repositories.content_signatures import ContentSignatureRepository
 from backend.src.storage.repositories.extraction_runs import (
     ExtractionRun,
@@ -29,6 +29,7 @@ from backend.src.storage.repositories.sources import (
 
 __all__ = [
     "ChunkRepository",
+    "ChunkSearchHit",
     "ConflictRepository",
     "ContentSignatureRepository",
     "ExtractionRun",

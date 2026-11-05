@@ -132,6 +132,10 @@ class EmbeddingMismatch(StorageError):
     """Stored vectors do not match the configured embedding size or model."""
 
 
+class EmbeddingUnavailable(StorageError):
+    """A query could not be embedded: the provider is missing or unreachable."""
+
+
 async def stored_embedding_dim(sessions: async_sessionmaker[AsyncSession]) -> int | None:
     """Read the vector size of `knowledge_chunks.embedding` from the catalog.
 
