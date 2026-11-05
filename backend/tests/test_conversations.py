@@ -258,8 +258,8 @@ class ConversationCrudTest(ConversationTestCase):
         owner_id = self.sql("SELECT owner_id FROM conversations WHERE id = :id", id=conversation).scalar_one()
         inquiry = uuid4()
         self.sql(
-            "INSERT INTO inquiries (id, conversation_id, requested_by, assigned_to, title, context) "
-            "VALUES (:id, :conversation, :owner, :owner, 'E12', '{}'::jsonb)",
+            "INSERT INTO inquiries (id, conversation_id, requested_by, assigned_to, title, context, status) "
+            "VALUES (:id, :conversation, :owner, :owner, 'E12', '{}'::jsonb, 'open')",
             id=inquiry, conversation=conversation, owner=owner_id,
         )
 

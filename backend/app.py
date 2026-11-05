@@ -24,6 +24,7 @@ from backend.api.conversations import router as conversations_router
 from backend.api.speech import router as speech_router
 from backend.api.document_uploads import router as document_uploads_router
 from backend.api.files import router as files_router
+from backend.api.inquiries import experts_router, router as inquiries_router
 from backend.api.knowledge_agent import KnowledgeAgentPool
 from backend.api.knowledge_agent import router as knowledge_agent_router
 from backend.api.knowledge_bases import KnowledgeBaseCatalog
@@ -41,7 +42,9 @@ from backend.src.storage.app_database import (
     create_session_factory,
 )
 from backend.src.storage.auth import AuthStorageUnavailable, AuthStore
+from backend.src.services.inquiries import InquiryService
 from backend.src.storage.conversations import ConversationStore
+from backend.src.storage.inquiries import InquiryStore
 from backend.src.storage.document_uploads import DocumentUploadStore
 from backend.src.storage.embeddings import EmbeddingMismatch, verify_embedding_dimension
 from backend.src.storage.file_library import FileBlobStore, FileRecordStore
@@ -87,14 +90,15 @@ def create_app(
     agent_client: Any | None = None,
     chat_speech: Any | None = None,
     file_library: FileLibraryService | None = None,
+    inquiry_service: InquiryService | None = None,
     sources: SourceRepository | None = None,
     chunk_search: ChunkSearchService | None = None,
 ) -> FastAPI:
     """Build the API; injected agents and services keep HTTP tests dependency-free.
 
     With injected knowledge services, auth, conversations and the file library
-    use only the injected `auth_service`, `conversation_store`, `agent_client`
-    and `file_library` (routes return 503 without them) and never open the
+    use only the injected `auth_service`, `conversation_store`, `agent_client`,
+    `file_library` and `inquiry_service` (routes return 503 without them) and never open the
     application database or the agent. Otherwise they use APP_DATABASE_URL,
     AGENT_BASE_URL and AGENT_API_TOKEN; the database services share one
     connection pool with the knowledge repositories. Without APP_DATABASE_URL,
@@ -124,6 +128,7 @@ def create_app(
             app.state.agent_client = agent_client
             app.state.chat_speech = chat_speech
             app.state.file_library = file_library
+            app.state.inquiry_service = inquiry_service
             try:
                 yield
             finally:
@@ -136,8 +141,12 @@ def create_app(
         app.state.auth_service = auth_service
         app.state.conversation_store = conversation_store
         app.state.file_library = file_library
+        app.state.inquiry_service = inquiry_service
         url = app_database_url_from_env()
-        needs_database = auth_service is None or conversation_store is None or file_library is None
+        needs_database = (
+            auth_service is None or conversation_store is None or file_library is None
+            or inquiry_service is None
+        )
         sessions = None
         knowledge_ready = False
         if url:
@@ -160,6 +169,9 @@ def create_app(
             app.state.conversation_store = conversation_store or ConversationStore(sessions)
             app.state.file_library = file_library or FileLibraryService(
                 FileRecordStore(sessions), FileBlobStore()
+            )
+            app.state.inquiry_service = inquiry_service or InquiryService(
+                InquiryStore(sessions), app.state.conversation_store, app.state.file_library
             )
         elif not url and needs_database:
             logging.getLogger(__name__).warning(
@@ -259,6 +271,8 @@ def create_app(
     api.include_router(voice_capture_router)
     api.include_router(document_uploads_router)
     api.include_router(files_router)
+    api.include_router(inquiries_router)
+    api.include_router(experts_router)
     api.include_router(knowledge_management_router)
     api.include_router(knowledge_search_router)
 

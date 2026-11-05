@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT_SECONDS = 5.0
 HISTORY_TIMEOUT_SECONDS = 15.0
+# One model call; the agent's own deadline (120 s by default) ends it first.
+DRAFT_TIMEOUT_SECONDS = 150.0
 # Longest silence between stream chunks; the agent's own request deadline
 # (AGENT_REQUEST_TIMEOUT_SECONDS, 120 s by default) ends a turn first.
 STREAM_READ_TIMEOUT_SECONDS = 180.0
@@ -121,6 +123,24 @@ class AgentHistory(BaseModel):
     truncated: bool
 
 
+class DraftFields(BaseModel):
+    """Model-written text of an inquiry draft."""
+
+    title: str
+    situation: str
+    observations: str
+    attempted_actions: str
+    proposed_fix: str
+
+
+class AgentInquiryDraft(BaseModel):
+    """The agent's draft: text fields, cited evidence and photo references."""
+
+    fields: DraftFields
+    citations: list[Citation] = []
+    attachments: list[AttachmentRef] = []
+
+
 @dataclass(frozen=True)
 class AgentSettings:
     """Where the agent listens and the service token it requires."""
@@ -199,6 +219,44 @@ class AgentClient:
             return AgentHistory.model_validate_json(response.content)
         except ValidationError as exc:
             raise AgentUnavailable("history response is invalid") from exc
+
+    async def create_inquiry_draft(self, conversation_id: UUID) -> AgentInquiryDraft:
+        """Ask the agent to draft an inquiry from a conversation the caller authorized.
+
+        Returns:
+            The validated draft; nothing is saved by the agent.
+
+        Raises:
+            AgentRejected: HTTP 409, 422 (empty conversation), 429 or 502 (draft failed).
+            AgentUnavailable: Unreachable, 503, 401, or an invalid response.
+        """
+
+        try:
+            response = await self._http.post(
+                f"/v1/agent/conversations/{conversation_id}/inquiry-draft",
+                headers=self._headers,
+                timeout=httpx.Timeout(DRAFT_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
+            )
+        except httpx.HTTPError as exc:
+            raise AgentUnavailable(type(exc).__name__) from exc
+        if response.status_code == 200:
+            try:
+                return AgentInquiryDraft.model_validate_json(response.content)
+            except ValidationError as exc:
+                raise AgentUnavailable("inquiry draft response is invalid") from exc
+        if response.status_code in (409, 422, 429, 502):
+            try:
+                detail = response.json().get("error", {})
+            except (ValueError, AttributeError):
+                detail = {}
+            if not isinstance(detail, dict):
+                detail = {}
+            raise AgentRejected(
+                response.status_code,
+                str(detail.get("code", "rejected")),
+                str(detail.get("message", "The agent could not draft this inquiry.")),
+            )
+        raise AgentUnavailable(f"inquiry draft returned HTTP {response.status_code}")
 
     async def open_stream(
         self, conversation_id: UUID, message: str, *, employee_access: SecretStr | None = None,
