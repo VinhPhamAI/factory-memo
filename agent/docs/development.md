@@ -12,9 +12,10 @@
 | `api/` | Authentication, validation, request limits, public events. |
 | `schemas/` | Define request, error, and event fields. |
 | `runtime/` | One-node graph, recent context, request limits. |
-| `clients/modelark.py` | Call ModelArk through `AsyncOpenAI`; close streams; private tool routing. |
+| `clients/modelark.py` | Call ModelArk through `AsyncOpenAI`; close streams; route knowledge and inquiry draft tool calls. |
 | `clients/knowledge.py` | Read the backend catalog and search with the employee access token. |
 | `runtime/knowledge.py` | Validate KB tool arguments and run bounded operations within the current turn. |
+| `runtime/inquiry_draft.py`, `schemas/inquiry_draft.py` | Inquiry draft prompt, evidence copied from history, draft fields and errors. |
 | `runtime/retrieval.py` | Bound evidence and validate citations. |
 | `clients/checkpoints.py` | Own the runtime PostgreSQL pool and saver. |
 | `setup_database.py` | Create database/roles, update tables, assign permissions. |

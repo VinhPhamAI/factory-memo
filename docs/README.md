@@ -17,7 +17,7 @@ Start with [product requirements](features/project-overview.md),
 - [Earlier system diagram](architecture/architecture.html)
 - [Earlier architecture](architecture/architecture-v0.html)
 - [Knowledge flow](architecture/knowledge-flow.html)
-- [Database schema proposal](architecture/database-schema.md) — target tables, relationships, permissions, and migration requirements; tables created by Alembic migrations in a separate database; only `users` (with `auth_sessions`) and `conversations` are used, by authentication and agent chat.
+- [Database schema proposal](architecture/database-schema.md) — target tables, relationships, permissions, and migration requirements; tables created by Alembic migrations in a separate database; the serving API uses them for authentication, agent chat, the file library, knowledge bases and inquiries.
 
 ## Features
 
@@ -31,6 +31,7 @@ Start with [product requirements](features/project-overview.md),
 - [Voice capture](features/voice-capture.md)
 - [Authentication](features/authentication.md) — `/auth` API contract, sessions, settings, and deployment.
 - [Agent conversations](features/conversations.md) — `/v1/conversations` API, agent history and streaming, settings.
+- [Expert inquiries](features/inquiries.md) — `/v1/inquiries` drafts, submission, expert review, and evidence.
 
 ## Development
 

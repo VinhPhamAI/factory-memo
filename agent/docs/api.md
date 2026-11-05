@@ -135,6 +135,29 @@ enable the backend connection.
 | Limit | Newest messages within `AGENT_HISTORY_MAX_MESSAGES` (200) and `AGENT_HISTORY_MAX_CHARACTERS` (400000); `truncated` is true when older messages were left out. |
 | Errors | 401 `unauthorized`, 422 `invalid_request` (not a UUID), 503 `unavailable` (runtime or checkpoint read failed; never an empty list). |
 
+## Draft an inquiry
+
+`POST /v1/agent/conversations/{conversation_id}/inquiry-draft` with the same service
+token and no body. The backend calls it only after it confirms the user owns the
+conversation. The agent makes one model call, which must call `write_inquiry_draft`,
+then returns the draft. It saves nothing.
+
+```json
+{"fields":{"title":"Pump vibrates","situation":"Cooling pump vibrates at start-up.","observations":"","attempted_actions":"","proposed_fix":""},"citations":[],"attachments":[{"file_id":"22222222-2222-4222-8222-222222222222","media_type":"image/jpeg"}]}
+```
+
+| Rule | Behavior |
+|---|---|
+| Fields | `title` (up to 200 characters, may be empty), and `situation`, `observations`, `attempted_actions`, `proposed_fix` (each up to 4000 characters, may be empty). |
+| Evidence | `citations` and `attachments` are copied from the saved history, first seen first. The model does not write them. |
+| Concurrency | The conversation is reserved like a chat turn. A running turn or draft gives 409; a full agent gives 429. |
+| History | Same window as the history endpoint. Older messages are not sent to the model. |
+| Model failure | 502 `draft_failed` for a provider error or timeout, no tool call, invalid arguments, or fields out of range. |
+| Errors | 401 `unauthorized`; 409 `conversation_busy`; 422 `empty_conversation` (no model call) or `invalid_request` (not a UUID); 429 `capacity_exceeded`; 502 `draft_failed`; 503 `unavailable` (no provider, or history read failed). |
+
+The forced tool choice is verified in unit tests with a fake provider only. Confirm it
+against the configured model before relying on drafts.
+
 ## Check health
 
 | Endpoint | Authentication | Result |

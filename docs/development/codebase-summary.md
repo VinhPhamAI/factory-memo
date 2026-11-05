@@ -11,6 +11,10 @@ copy every existing pattern. Use [engineering standards](code-standards.md) for 
 | `agent/src/denso_agent/` | Agent API, graph/runtime, provider client, checkpoint access, setup commands |
 | `backend/app.py`, `backend/api/` | Existing backend HTTP APIs |
 | `backend/api/files.py`, `backend/src/services/file_*.py`, `backend/src/storage/file_library.py` | Personal file library: `/v1/files` routes, rules, type checks, and disk/`files` table storage |
+| `backend/api/inquiries.py`, `backend/src/services/inquiries.py`, `backend/src/storage/inquiries.py`, `backend/src/storage/orm/inquiries.py` | Expert inquiries: `/v1/inquiries` and `/v1/experts` routes, rules, transitions, storage and models |
+| `backend/api/conversations.py` (`inquiry-draft` route), `backend/src/clients/agent.py` | Draft an inquiry from a chat: owner check, agent call, copy of evidence |
+| `agent/src/denso_agent/runtime/inquiry_draft.py`, `agent/src/denso_agent/schemas/inquiry_draft.py` | Agent inquiry draft: prompt, history evidence and the draft schema |
+| `frontend/src/pages/inquiries.tsx`, `frontend/src/pages/inquiry.tsx`, `frontend/src/components/inquiry/` | Expert inquiry list (`/inquiries`) and detail (`/inquiries/:id`) pages |
 | `backend/src/services/` | Knowledge processing, extraction, and source handling |
 | `backend/src/storage/` | Current database access and knowledge/search records |
 | `backend/src/agents/rag/` | Existing original-document indexing and search |
@@ -40,8 +44,8 @@ Paths in this table are relative to the repository root.
 - [System responsibilities](../architecture/system-architecture.md) separate current and intended boundaries.
 - [Database proposal](../architecture/database-schema.md) has tables created by
   [migrations](database-migrations.md) (`backend/src/storage/orm/`, `backend/migrations/`)
-  in the `APP_DATABASE_URL` database. Authentication, agent conversations and
-  the file library use their application tables. The serving API and worker use
+  in the `APP_DATABASE_URL` database. Authentication, agent conversations, the
+  file library and expert inquiries use their application tables. The serving API and worker use
   the knowledge base, source, chunk, processing and review tables. Legacy CLI,
   benchmark and Industrial QA snapshot paths still use their per-KB databases.
 - [Project guidance](../../AGENTS.md) preserves knowledge integrity and evaluation rules.

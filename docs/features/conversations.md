@@ -11,7 +11,8 @@ Owners: routes in `backend/api/conversations.py`, queries in
 browser client in `frontend/src/services/conversations-api.ts`, live `/ask` page in
 `frontend/src/pages/conversations.tsx`. Tests: `backend/tests/test_conversations.py`
 (PostgreSQL), `backend/tests/test_conversation_streaming.py` (real HTTP), the
-frontend tests next to those files and `frontend/e2e/qa.spec.ts`.
+frontend tests next to those files and `frontend/e2e/qa.spec.ts`. The draft route is
+tested in `backend/tests/test_inquiry_draft_route.py`.
 
 ## Call sequence
 
@@ -37,6 +38,7 @@ Every route requires a bearer access token (`401` without one).
 | `DELETE /v1/conversations/{id}` | — | `204`; soft delete |
 | `GET /v1/conversations/{id}/history` | — | `200` `{conversation_id, messages, truncated}` with saved citations and tool summaries |
 | `POST /v1/conversations/{id}/stream` | `{message}` | `200` `text/event-stream` |
+| `POST /v1/conversations/{id}/inquiry-draft` | — | `201` Inquiry in status `draft`; see [draft an inquiry](#draft-an-inquiry) |
 | `POST /v1/speech/transcriptions` | multipart `file` (PCM16 WAV, at most 120 s and 16 MB) | `200` `{text}` for the composer; nothing is stored |
 
 `Conversation` is `{id, title, created_at, updated_at}`. A message the agent accepts, or
@@ -93,6 +95,24 @@ renaming moves `updated_at`.
 | `429` | `{"detail": {"code": "capacity_exceeded", ...}}`: the agent is at `AGENT_MAX_CONCURRENT_REQUESTS`. |
 | `422` | Invalid ID or body. |
 | `503` | Application database, agent or agent configuration unavailable. Details are logged by error class only. |
+
+## Draft an inquiry
+
+`POST /v1/conversations/{id}/inquiry-draft` asks the agent to draft an expert
+inquiry from this conversation and saves it at once as a `draft`. Nothing is saved
+when the draft fails. The steps, the copied evidence and the limits are in
+[expert inquiries](inquiries.md#draft-from-chat).
+
+| Status | Body code | Meaning |
+|---|---|---|
+| `404` | — | Unknown, deleted or another user's conversation. The agent is not called. |
+| `409` | `conversation_busy` | An answer or draft is already running here. |
+| `422` | `empty_conversation` | The conversation has no messages. |
+| `429` | `capacity_exceeded` | The agent is at capacity. |
+| `502` | `draft_failed` | The model call failed, or the draft exceeds inquiry limits. |
+| `503` | — | The agent is unreachable or returned an unusable response. |
+
+Agent errors keep their status and body `{"detail": {"code", "message"}}`.
 
 ## Settings
 

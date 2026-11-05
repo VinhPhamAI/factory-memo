@@ -130,7 +130,12 @@ Current implementation: the personal file library and knowledge-source uploads
 write these rows with distinct storage-key namespaces. The library allows owner
 access to its non-deleted files (`FileLibraryService.can_read`); it excludes KB
 originals from listing, download and deletion. KB originals are read through the
-authenticated source API. Inquiry access is not implemented. See
+authenticated source API.
+
+Inquiry access is implemented separately: the requester, and the assignee of a
+submitted inquiry, can download a file attached to that inquiry even after the owner
+deleted it from the library. Other users get `404`. See
+[inquiries](../features/inquiries.md#evidence-after-the-library-file-is-deleted),
 [file library](../features/file-library.md) and
 [document uploads](../features/document-uploads.md).
 
@@ -251,20 +256,22 @@ agent finished an answer.
 ### 9. `inquiries`
 
 A request that gives a remote expert enough information to understand the fault
-without reading the whole conversation. It is composed from the conversation when
-the employee triggers Inquiry Creation. The system may suggest that action.
+without reading the whole conversation. A requester creates a `draft` from a chat
+or directly, edits it, then submits it to an expert. Behavior and endpoints are in
+[expert inquiries](../features/inquiries.md).
 
 | Column | Type | Rules and purpose |
 |---|---|---|
 | `id` | `uuid` | Primary key |
-| `conversation_id` | `uuid` | References `conversations.id` |
+| `conversation_id` | `uuid` | References `conversations.id`; with `requested_by`, a composite foreign key to `conversations (id, owner_id)` |
 | `requested_by` | `uuid` | References `users.id`; must own the originating conversation |
-| `assigned_to` | `uuid` | References an enabled expert/admin in `users.id` |
-| `machine_id` | `uuid`, optional | References `machines.id` |
-| `title` | `text` | Short issue description |
-| `context` | `jsonb` | Submitted situation, proposed fix, and evidence; fields below |
-| `status` | `text` | `open`, `in_review`, `needs_info`, `answered`, `closed`; default `open` |
-| Record dates | See conventions | Includes optional `deleted_at` |
+| `assigned_to` | `uuid`, optional | References `users.id`. `NULL` only while `draft` (check `draft_or_assigned`). Otherwise an active, undeleted account with role `expert`; checked at submission. Admins are not eligible. |
+| `machine_id` | `uuid`, optional | References `machines.id`. Not set by the current code. |
+| `title` | `text` | Short issue description; may be empty in a draft, required to submit |
+| `context` | `jsonb` | Situation, observations, attempted actions, proposed fix, and evidence; fields below |
+| `status` | `text` | `draft`, `open`, `in_review`, `needs_info`, `answered`, `closed` (check `ck_inquiries_status_allowed`); default `draft`. `in_review` is unused. |
+| `submitted_at` | `timestamptz`, optional | Set when the draft is submitted; `NULL` while `draft` |
+| Record dates | See conventions | Includes optional `deleted_at`; a deleted draft is hidden, not removed |
 
 The backend checks these fields in `context`:
 
@@ -290,7 +297,7 @@ Permanent expert decisions, questions, revised solutions, and employee replies.
 | `id` | `uuid` | Primary key |
 | `inquiry_id` | `uuid` | References `inquiries.id` |
 | `actor_id` | `uuid` | References `users.id` |
-| `kind` | `text` | `accepted`, `edited`, `denied`, `question`, `reply`, `closed` |
+| `kind` | `text` | `accepted`, `edited`, `denied`, `question`, `reply`, `closed`. The API accepts the first five; no action writes `closed` yet. |
 | `content` | `text`, optional | Revised solution, question, reply, or decision explanation |
 | `created_at` | `timestamptz` | Default `now()` |
 
@@ -343,7 +350,8 @@ One signed-in device: the current access and refresh credentials of a login.
 - A user can own many conversations, upload many files, and submit many sources.
 - A user can have many auth sessions. Each auth session belongs to one user.
 - A user can create many inquiries; experts can create their own inquiries too.
-- An expert can receive many inquiries. Each inquiry has one assigned expert.
+- An expert can receive many inquiries. Each submitted inquiry has one assigned
+  expert; a draft has none.
 - A knowledge base can contain many sources and many chunks.
 - A source can support many chunks. A chunk can use many sources through
   `knowledge_chunk_sources`.
@@ -361,28 +369,31 @@ One signed-in device: the current access and refresh credentials of a login.
 | Ask questions and submit own inquiries | Yes | Yes | Yes |
 | Read active knowledge collections | Yes | Yes | Yes |
 | Create/edit collections and review knowledge | No | Yes | Yes |
-| Respond as assigned reviewer | No | Yes | Yes |
+| Respond as assigned reviewer | No | Yes, if assigned | No |
 | Manage users and roles | No | No | Yes |
 
-- Users see inquiries they created. Experts also see those assigned to them;
-  admins can administer all inquiries.
+- Requesters see their inquiries; drafts only to the requester. Assignees see
+  submitted inquiries assigned to them. No role has access to other inquiries,
+  including admins.
 - Receiving an inquiry does not grant access to the full conversation. Normal
   conversation access remains limited to its owner for every role.
 - Restricting individual collections to selected users and automatically choosing
   an expert are left for later.
 
+Implemented transitions (see [expert inquiries](../features/inquiries.md#transitions)):
+
 | Action | Inquiry status |
 |---|---|
-| Employee submits | `open` |
-| Assigned reviewer starts review | `in_review` |
-| Reviewer asks a question | `needs_info` |
-| Requester replies | `in_review` |
-| Reviewer accepts, edits, or denies | `answered` |
-| Requester closes after a response | `closed` |
+| Employee creates a draft | `draft` |
+| Employee submits to an eligible expert | `open` |
+| Assigned expert asks a question | `needs_info` |
+| Requester replies to the question | `open` |
+| Assigned expert accepts or edits the solution | `answered` |
+| Assigned expert denies | `closed` |
 
-A closing event can record the employee's reported repair outcome. Expert
-confirmation alone is not proof that a repair was performed. Reassignment and
-reopening need further rules and are left for later.
+`answered` and `closed` accept no further actions. Expert confirmation alone is not
+proof that a repair was performed. Recording the employee's repair outcome after
+`answered`, reassignment, and reopening are later work.
 
 ## How the backend gets conversation history
 
