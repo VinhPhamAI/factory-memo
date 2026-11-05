@@ -1,15 +1,17 @@
 # Database schema proposal
 
-**Status: tables created; only `users`, `auth_sessions`, `conversations` and `files` are used.** This document defines
-the target tables, relationships, and the work handled by each service. The models in
-`backend/src/storage/orm/` and the Alembic revisions create these tables, the updated processing
-tables and the database rules in a separate database (`APP_DATABASE_URL`). Authentication
-reads and writes `users` and `auth_sessions`; agent chat reads and writes `conversations`
-([agent conversations](../features/conversations.md)); the file library reads and writes `files`
-([file library](../features/file-library.md)). No other API, worker or agent uses these tables
-yet, and existing data has not been moved. See
-[database migrations](../development/database-migrations.md) for commands and enforced rules,
-and [authentication](../features/authentication.md) for login behavior.
+**Status: application tables are in use for authentication, conversations,
+personal files and knowledge processing.** Models in `backend/src/storage/orm/`
+and Alembic revisions create the tables and database rules in `APP_DATABASE_URL`.
+The API uses `users`, `auth_sessions`, `conversations` and `files`; the serving
+knowledge API and worker use the knowledge base, source, chunk, job, run,
+signature and conflict tables. Existing per-KB data has not been imported.
+
+See [database migrations](../development/database-migrations.md),
+[authentication](../features/authentication.md),
+[agent conversations](../features/conversations.md),
+[file library](../features/file-library.md) and
+[knowledge management](../features/knowledge-management.md) for implemented behavior.
 
 ## Purpose and scope
 
@@ -124,9 +126,13 @@ Information about uploaded files. Actual file contents are not stored here.
 File permissions follow the related source or inquiry. A file ID alone does not
 grant download access. Processing status belongs to sources and processing jobs.
 
-Current implementation: the file library writes these rows. Its only read rule is
-owner access to a non-deleted file (`FileLibraryService.can_read`). Source and inquiry
-access is not implemented. See [file library](../features/file-library.md).
+Current implementation: the personal file library and knowledge-source uploads
+write these rows with distinct storage-key namespaces. The library allows owner
+access to its non-deleted files (`FileLibraryService.can_read`); it excludes KB
+originals from listing, download and deletion. KB originals are read through the
+authenticated source API. Inquiry access is not implemented. See
+[file library](../features/file-library.md) and
+[document uploads](../features/document-uploads.md).
 
 ### 4. `knowledge_bases`
 
@@ -138,6 +144,7 @@ Descriptions of knowledge collections. Their actual content lives in sources and
 | `name` | `text` | Unique stable name; retained after deletion |
 | `title` | `text` | Display name |
 | `description` | `text`, optional | Collection purpose |
+| `template` | `text` | Built-in knowledge base whose extraction and retrieval policy the collection copies, such as `general` |
 | `created_by` | `uuid` | References `users.id` |
 | Record dates | See conventions | Includes optional `deleted_at` |
 
@@ -151,6 +158,7 @@ or pasted text. Employee-agent chats are not knowledge sources.
 | `id` | `uuid` | Primary key |
 | `knowledge_base_id` | `uuid` | References `knowledge_bases.id` |
 | `file_id` | `uuid`, optional | References `files.id`; required for document/image sources |
+| `original_sha256` | `text`, optional | SHA-256 copied from the original file for document and image sources |
 | `title` | `text` | Source name |
 | `kind` | `text` | `document`, `image`, or `text` |
 | `extracted_text` | `text`, optional | Text read from the source; `NULL` before conversion |
@@ -162,6 +170,19 @@ or pasted text. Employee-agent chats are not knowledge sources.
 Do not store embeddings here. A source can finish processing without producing
 chunks if no usable knowledge is found. Keep original files and the evidence used
 by existing chunks when processing again. Record attempts and errors separately.
+
+A partial unique index on `(knowledge_base_id, original_sha256)` applies to
+sources with a hash and no `deleted_at`. Typed text and audio-backed transcripts
+leave the hash empty. Removing a source soft-deletes its file row when no other
+active source references that file. The bytes and evidence links remain stored.
+
+Before upgrading to revision `095bca4b489d`, stop the API and workers against the
+target application database. The revision backfills hashes from existing file
+records. If duplicate active sources exist, it keeps the one with the most
+non-deprecated, non-deleted linked chunks, breaking ties by earliest creation
+time and then ID. Other copies are soft-deleted, and their queued jobs fail with
+`SOURCE_REMOVED`. Chunks linked exclusively to those copies leave search. A
+schema downgrade removes the hash and index and preserves these removal records.
 
 ### 6. `knowledge_chunks`
 

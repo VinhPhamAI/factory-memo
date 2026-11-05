@@ -1,34 +1,46 @@
 """Shared source lifecycle and human review API."""
 
-from typing import Literal
+from pathlib import Path
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from backend.api.knowledge_bases import refresh_catalog
+from backend.api.auth import require_current_user
+from backend.api.knowledge_bases import require_expert
 from backend.api.voice_capture import ReviewRequest
+from backend.src.services.auth import Account
+from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
 from backend.src.storage import StorageError
 
 
-router = APIRouter(prefix="/v1/knowledge-management", tags=["knowledge-management"])
+router = APIRouter(
+    prefix="/v1/knowledge-management",
+    tags=["knowledge-management"],
+    dependencies=[Depends(require_current_user)],
+)
 Kind = Literal["upload", "conversation", "document"]
 
 
 def normalized_id(kind: Kind, value: str) -> str:
-    if kind == "document":
-        return value
     try:
         identifier = UUID(value)
     except ValueError as exc:
         raise HTTPException(422, "Invalid source ID") from exc
-    return identifier.hex if kind == "upload" else str(identifier)
+    return str(identifier)
 
 
 async def service(request: Request, kb: str):
+    """Resolve management for an active KB or report unavailable storage."""
+
     await refresh_catalog(request)
     manager = request.app.state.knowledge_management
+    if manager is None:
+        raise HTTPException(503, "Knowledge management is not configured")
     manager.spec(kb)
     return manager
 
@@ -40,14 +52,30 @@ async def result(awaitable):
         raise HTTPException(404, "Source file not found") from exc
     except (ValueError, UnicodeError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    except (OSError, StorageError) as exc:
+    except (OSError, StorageError, KnowledgeStorageUnavailable) as exc:
         raise HTTPException(503, "Source storage is unavailable") from exc
 
 
 @router.get("/{kb}/sources")
-async def sources(request: Request, kb: str, offset: int = Query(0, ge=0)):
+async def sources(
+    request: Request, kb: str, offset: int = Query(0, ge=0), include_removed: bool = False,
+):
+    """List active sources and optionally include removed entries."""
+
     manager = await service(request, kb)
-    return await result(manager.inventory(kb, offset))
+    return await result(manager.inventory(kb, offset, include_removed=include_removed))
+
+
+@router.delete("/{kb}/sources/{kind}/{source_id}", status_code=204)
+async def remove_source(
+    request: Request, kb: str, kind: Kind, source_id: UUID,
+    account: Annotated[Account, Depends(require_current_user)],
+) -> Response:
+    """Remove a source by its ID across any of the supported URL aliases."""
+
+    manager = await service(request, kb)
+    await result(manager.remove_source(kb, source_id, actor_id=account.id, role=account.role))
+    return Response(status_code=204)
 
 
 @router.get("/{kb}/sources/{kind}/{source_id}")
@@ -59,12 +87,59 @@ async def source(request: Request, kb: str, kind: Kind, source_id: str):
 @router.get("/{kb}/sources/upload/{source_id}/original")
 async def original(request: Request, kb: str, source_id: UUID):
     manager = await service(request, kb)
+    knowledge_base_id, _spec = manager.spec(kb)
+    source = await manager.sources.get(knowledge_base_id, source_id)
+    if source is None or source.file is None:
+        raise HTTPException(404, "Source file not found")
+    path = request.app.state.document_uploads.content_path(source.file.storage_key)
+    if not path.is_file():
+        raise HTTPException(404, "Source file not found")
+    return FileResponse(path, filename=source.file.filename, media_type=source.file.content_type)
+
+
+@router.get("/{kb}/sources/upload/{source_id}/pages/{page_number}")
+async def original_pdf_page(
+    request: Request,
+    kb: str,
+    source_id: UUID,
+    page_number: int,
+):
+    """Render one original PDF page for an authenticated evidence highlight."""
+
+    if page_number < 1:
+        raise HTTPException(422, "Page number must be positive")
+    manager = await service(request, kb)
+    knowledge_base_id, _spec = manager.spec(kb)
+    source = await manager.sources.get(knowledge_base_id, source_id)
+    if source is None or source.file is None:
+        raise HTTPException(404, "Source file not found")
+    path = request.app.state.document_uploads.content_path(source.file.storage_key)
+    if not path.is_file():
+        raise HTTPException(404, "Source file not found")
     try:
-        document = manager.uploads.get(kb, source_id.hex)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, "Source file not found") from exc
-    return FileResponse(manager.uploads.object_dir(kb, source_id.hex) / "content",
-                        filename=document.filename, media_type="application/octet-stream")
+        content = await run_in_threadpool(_render_pdf_page, path, page_number)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(content, media_type="image/png")
+
+
+def _render_pdf_page(path: Path, page_number: int) -> bytes:
+    """Render one 1-based PDF page to PNG without retaining document bytes."""
+
+    import pymupdf
+
+    try:
+        with pymupdf.open(path) as document:
+            if page_number > document.page_count:
+                raise ValueError(f"PDF has only {document.page_count} pages")
+            pixmap = document[page_number - 1].get_pixmap(
+                matrix=pymupdf.Matrix(2, 2), alpha=False
+            )
+            return pixmap.tobytes("png")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Source is not a readable PDF") from exc
 
 
 @router.post("/{kb}/sources/upload/{source_id}/convert", status_code=202)
@@ -92,9 +167,15 @@ async def extract(request: Request, kb: str, kind: Kind, source_id: str, body: E
 
 
 @router.post("/{kb}/knowledge/{record_id}/review")
-async def review(request: Request, kb: str, record_id: UUID, body: ReviewRequest):
+async def review(
+    request: Request,
+    kb: str,
+    record_id: UUID,
+    body: ReviewRequest,
+    account: Annotated[Account, Depends(require_expert)],
+):
     manager = await service(request, kb)
-    return await result(manager.review_record(kb, record_id, body.decision, body.note))
+    return await result(manager.review_record(kb, record_id, body.decision, body.note, account.id))
 
 
 class ChunkReviewRequest(ReviewRequest):
@@ -102,9 +183,16 @@ class ChunkReviewRequest(ReviewRequest):
 
 
 @router.post("/{kb}/sources/{kind}/{source_id}/review-chunk")
-async def review_chunk(request: Request, kb: str, kind: Kind, source_id: str, body: ChunkReviewRequest):
+async def review_chunk(
+    request: Request,
+    kb: str,
+    kind: Kind,
+    source_id: str,
+    body: ChunkReviewRequest,
+    account: Annotated[Account, Depends(require_expert)],
+):
     manager = await service(request, kb)
-    return await result(manager.review_chunk(kb, kind, normalized_id(kind, source_id), body.chunk_id, body.decision, body.note))
+    return await result(manager.review_chunk(kb, kind, normalized_id(kind, source_id), body.chunk_id, body.decision, body.note, account.id))
 
 
 @router.get("/{kb}/conflicts")
@@ -135,7 +223,24 @@ async def recheck_conflicts(request: Request, kb: str, body: ConflictRecheckRequ
     return await result(manager.recheck_conflicts(kb, body.record_ids))
 
 
-@router.post("/{kb}/conflicts/{conflict_id}/review")
-async def review_conflict(request: Request, kb: str, conflict_id: UUID, body: ConflictReviewRequest):
+@router.post(
+    "/{kb}/conflicts/{conflict_id}/review",
+)
+async def review_conflict(
+    request: Request,
+    kb: str,
+    conflict_id: UUID,
+    body: ConflictReviewRequest,
+    account: Annotated[Account, Depends(require_expert)],
+):
     manager = await service(request, kb)
-    return await result(manager.review_conflict(kb, conflict_id, body.decision, body.note, body.keep_id))
+    return await result(
+        manager.review_conflict(
+            kb,
+            conflict_id,
+            body.decision,
+            body.note,
+            body.keep_id,
+            account.id,
+        )
+    )

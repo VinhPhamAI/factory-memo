@@ -40,8 +40,10 @@ Paths in this table are relative to the repository root.
 - [System responsibilities](../architecture/system-architecture.md) separate current and intended boundaries.
 - [Database proposal](../architecture/database-schema.md) has tables created by
   [migrations](database-migrations.md) (`backend/src/storage/orm/`, `backend/migrations/`)
-  in the `APP_DATABASE_URL` database; only the authentication and file library
-  code use them so far.
+  in the `APP_DATABASE_URL` database. Authentication, agent conversations and
+  the file library use their application tables. The serving API and worker use
+  the knowledge base, source, chunk, processing and review tables. Legacy CLI,
+  benchmark and Industrial QA snapshot paths still use their per-KB databases.
 - [Project guidance](../../AGENTS.md) preserves knowledge integrity and evaluation rules.
 
 Check the current code and configuration before reporting implementation status.

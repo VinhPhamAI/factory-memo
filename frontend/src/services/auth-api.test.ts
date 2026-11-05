@@ -92,6 +92,21 @@ describe("AuthClient", () => {
     expect(urls).toEqual(["/auth/refresh", "/auth/me"]);
   });
 
+  it("returns a protected 401 without refreshing or retrying", async () => {
+    const fetch = stubFetch(
+      () => json(tokens("access-1")),
+      () => json(user),
+      () => json({ detail: "Not authenticated" }, 401),
+    );
+    const client = newClient();
+    await client.login("an", "correct horse battery");
+
+    const response = await client.authorizedFetch("/v1/protected");
+
+    expect(response.status).toBe(401);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
   it("refreshes before the access token expires", async () => {
     vi.useFakeTimers();
     const fetch = stubFetch(

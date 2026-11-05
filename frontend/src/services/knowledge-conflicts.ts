@@ -1,4 +1,5 @@
 import { apiBaseUrl } from "./config";
+import { sessionClient } from "./auth-api";
 import type { VoiceRecord } from "./voice-api";
 import type { SourceJob } from "./knowledge-management";
 
@@ -95,7 +96,7 @@ const base = (kb: string) =>
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(path, init);
+    response = await sessionClient.authorizedFetch(path, init);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;
@@ -111,6 +112,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Not JSON: use the status message.
     }
+    if (response.status === 403)
+      throw new Error("Bạn không có quyền lưu quyết định mâu thuẫn.");
     if (response.status === 404)
       throw new Error(
         detail === "Conflict not found"

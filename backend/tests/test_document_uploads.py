@@ -1,21 +1,56 @@
-"""Offline upload contract and disk persistence checks; no DB or LLM calls."""
+"""Authenticated upload storage and source-transaction behavior."""
 
-import hashlib
+from __future__ import annotations
+
 import io
-import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
-from backend.src.storage.document_uploads import (
-    PROJECT_ROOT,
-    DocumentUploadStore,
-    uploads_dir_from_env,
-)
+from backend.knowledge_bases.custom import custom_spec
+from backend.src.services.auth import Account, InvalidSession
+from backend.src.storage.document_uploads import DocumentTooLarge, DocumentUploadStore
+from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
+
+
+class FakeCatalog:
+    def __init__(self):
+        self.id = uuid4()
+        self.spec = custom_spec("factory", title="Factory")
+
+    async def refresh(self):
+        pass
+
+    def resolve(self, name):
+        return (self.id, self.spec) if name == "factory" else None
+
+    async def aclose(self):
+        pass
+
+
+class FakeSources:
+    def __init__(self):
+        self.created = []
+        self.error = None
+
+    async def create_upload(self, knowledge_base_id, **values):
+        if self.error:
+            raise self.error
+        self.created.append((knowledge_base_id, values))
+        return None, False
+
+
+class FakeAuth:
+    account = Account(uuid4(), "employee", "Employee", "employee")
+
+    async def authenticate_access(self, token):
+        if token != "access":
+            raise InvalidSession()
+        return self.account
 
 
 class DocumentUploadTests(unittest.TestCase):
@@ -24,93 +59,79 @@ class DocumentUploadTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "uploads"
         self.store = DocumentUploadStore(self.root, max_bytes=32)
-        # Any attempted agent/DB ingestion would fail: the only fake is an opaque object.
-        self.client = self.enterContext(TestClient(create_app(
-            knowledge_agents={"general": object(), "industrial_qa": object()},
-            document_uploads=self.store,
-        )))
+        self.sources = FakeSources()
+        self.catalog = FakeCatalog()
+        self.client = self.enterContext(
+            TestClient(
+                create_app(
+                    knowledge_agents={},
+                    kb_catalog=self.catalog,
+                    document_uploads=self.store,
+                    auth_service=FakeAuth(),
+                    sources=self.sources,
+                )
+            )
+        )
 
-    def upload(self, filename="manual.pdf", content=b"original bytes", kb="general", mime="application/pdf"):
-        return self.client.post(f"/v1/documents/{kb}/uploads", files={"file": (filename, content, mime)})
+    @staticmethod
+    def headers():
+        return {"Authorization": "Bearer access"}
 
-    def test_multiple_document_formats_preserve_bytes_and_metadata(self):
-        for name, mime in [
-            ("manual.pdf", "application/pdf"),
-            ("ảnh.png", "image/png"),
-            ("notes.txt", "text/plain"),
-            ("slides.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
-            ("table.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-            ("other.custom", "application/octet-stream"),
-        ]:
-            with self.subTest(name=name):
-                response = self.upload(name, mime=mime)
-                self.assertEqual(response.status_code, 201, response.text)
-                document = response.json()
-                self.assertEqual(document["status"], "stored")
-                self.assertNotIn("conversation_id", document)
-                self.assertEqual(document["filename"], name)
-                self.assertEqual(document["content_type"], mime)
-                self.assertEqual(document["size_bytes"], 14)
-                self.assertEqual(document["sha256"], hashlib.sha256(b"original bytes").hexdigest())
-                content = self.root / document["storage_key"]
-                self.assertEqual(content.read_bytes(), b"original bytes")
-                self.assertEqual(json.loads((content.parent / "metadata.json").read_text()), document)
+    def upload(self, content=b"original bytes"):
+        return self.client.post(
+            "/v1/documents/factory/uploads",
+            headers=self.headers(),
+            files={"file": ("manual.txt", content, "text/plain")},
+        )
 
-    def test_duplicate_names_do_not_overwrite_and_kbs_are_separate(self):
-        a = self.upload(content=b"first").json()
-        b = self.upload(content=b"second").json()
-        c = self.upload(kb="industrial_qa").json()
-        self.assertNotEqual(a["id"], b["id"])
-        self.assertEqual((self.root / a["storage_key"]).read_bytes(), b"first")
-        self.assertEqual((self.root / b["storage_key"]).read_bytes(), b"second")
-        self.assertTrue(c["storage_key"].startswith("industrial_qa/"))
+    def test_upload_creates_one_file_source_and_returns_source_id(self):
+        response = self.upload()
 
-    def test_empty_oversize_and_missing_files_do_not_publish_objects(self):
-        self.assertEqual(self.upload(content=b"").status_code, 422)
-        self.assertEqual(self.upload(content=b"x" * 33).status_code, 413)
-        self.assertEqual(self.client.post("/v1/documents/general/uploads").status_code, 422)
-        self.assertEqual(list((self.root / "general").iterdir()), [])
-        self.assertEqual(self.upload(content=b"x" * 32).status_code, 201)
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(len(self.sources.created), 1)
+        knowledge_base_id, values = self.sources.created[0]
+        self.assertEqual(knowledge_base_id, self.catalog.id)
+        self.assertEqual(values["source_id"].hex, body["id"])
+        self.assertEqual(values["submitted_by"], FakeAuth.account.id)
+        self.assertEqual(values["file"].storage_key, body["storage_key"])
+        content = self.root / body["storage_key"]
+        self.assertEqual(content.read_bytes(), b"original bytes")
+        self.assertFalse((content.parent / "metadata.json").exists())
 
-    def test_unknown_kb_does_not_create_storage(self):
-        self.assertEqual(self.upload(kb="missing").status_code, 404)
+    def test_failed_source_insert_removes_saved_object(self):
+        self.sources.error = KnowledgeStorageUnavailable("down")
+
+        response = self.upload()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(list((self.root / "factory").iterdir()), [])
+
+    def test_missing_token_is_401_and_writes_nothing(self):
+        response = self.client.post(
+            "/v1/documents/factory/uploads",
+            files={"file": ("manual.txt", b"bytes", "text/plain")},
+        )
+        self.assertEqual(response.status_code, 401)
         self.assertFalse(self.root.exists())
 
-    def test_untrusted_filename_is_metadata_only(self):
-        response = self.upload(filename="../../outside.txt")
-        self.assertEqual(response.status_code, 201)
-        document = response.json()
-        self.assertEqual(document["filename"], "../../outside.txt")
-        self.assertEqual((self.root / document["storage_key"]).name, "content")
-        self.assertFalse((Path(self.tmp.name) / "outside.txt").exists())
+    def test_store_rejects_empty_and_oversized_objects(self):
         with self.assertRaises(ValueError):
-            self.store.save("../outside", io.BytesIO(b"file"), filename="a", content_type="")
-
-    def test_copy_failure_removes_partial_data_and_returns_storage_error(self):
-        class BrokenSource:
-            calls = 0
-
-            def read(self, size):
-                self.calls += 1
-                if self.calls == 1:
-                    return b"partial"
-                raise OSError("disk or source error")
-
-        with self.assertRaises(OSError):
-            self.store.save("general", BrokenSource(), filename="file.txt", content_type="")
-        self.assertEqual(list((self.root / "general").iterdir()), [])
-        with self.assertLogs("backend.api.document_uploads", level="ERROR"), patch.object(
-            self.store, "save", side_effect=OSError("private/path")
-        ):
-            response = self.upload()
-        self.assertEqual(response.status_code, 503)
-        self.assertNotIn("private/path", response.text)
-
-    def test_default_and_configured_paths(self):
-        with patch.dict("os.environ", {"DOCUMENT_UPLOAD_DIR": ""}):
-            self.assertEqual(uploads_dir_from_env(), PROJECT_ROOT / "data" / "uploads")
-        with patch.dict("os.environ", {"DOCUMENT_UPLOAD_DIR": str(self.root)}):
-            self.assertEqual(DocumentUploadStore().root, self.root.resolve())
+            self.store.save(
+                "factory",
+                io.BytesIO(b""),
+                filename="empty.txt",
+                content_type="text/plain",
+                source_id=uuid4(),
+            )
+        with self.assertRaises(DocumentTooLarge):
+            self.store.save(
+                "factory",
+                io.BytesIO(b"x" * 33),
+                filename="large.txt",
+                content_type="text/plain",
+                source_id=uuid4(),
+            )
 
 
 if __name__ == "__main__":

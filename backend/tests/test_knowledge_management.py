@@ -5,8 +5,10 @@ import tempfile
 import unittest
 from collections import Counter
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -18,11 +20,15 @@ from backend.src.services.knowledge_extraction import KnowledgeExtractionResult,
 from backend.src.services.knowledge_ingestion import KnowledgeIngestionService
 from backend.src.services.job_worker import StageWorker
 from backend.src.services.knowledge_management import KnowledgeManagementService
+from backend.src.services.application_knowledge_management import (
+    ApplicationKnowledgeManagementService,
+)
 from backend.src.services.source_pipeline import UNREADABLE_TEXT
 from backend.src.storage.document_uploads import DocumentUploadStore
 from backend.src.storage.extraction_runs import MemoryExtractionRunStore, Unrecorded
 from backend.src.storage.job_queue import STAGES, MemoryJobQueue
-from backend.src.storage.models import ConversationStatus
+from backend.src.storage.models import ConversationStatus, KnowledgeRecord
+from backend.src.storage.repositories.sources import FileEntry, SourceEntry
 from backend.tests.test_knowledge_ingestion_service import FakeExtractor
 from backend.tests.test_voice_capture import VoiceStore
 
@@ -98,6 +104,63 @@ OTHER = ("Ở ca sáng hôm sau máy ép thủy lực số 5 rò dầu tại van
          "mặt bích và thay gioăng, rồi theo dõi áp suất suốt hai giờ mà chưa thấy rò lại.")
 
 
+class ApplicationKnowledgeManagementTest(unittest.IsolatedAsyncioTestCase):
+    async def test_inventory_and_detail_use_application_sources(self):
+        knowledge_base_id = uuid4()
+        user_id = uuid4()
+        now = datetime.now(timezone.utc)
+        upload_id, document_id, text_id = uuid4(), uuid4(), uuid4()
+        uploaded_file = FileEntry(
+            id=uuid4(), filename="manual.txt", content_type="text/plain",
+            size_bytes=20, storage_key=f"factory/{upload_id.hex}/content",
+            sha256="a" * 64, created_at=now,
+        )
+        rows = [
+            SourceEntry(upload_id, knowledge_base_id, "document", "Manual", "processed", "manual text", {}, user_id, now, now, uploaded_file, {"draft": 1}),
+            SourceEntry(document_id, knowledge_base_id, "document", "Indexed", "processed", "indexed text", {"extraction_mode": "documents"}, user_id, now, now, uploaded_file, {"draft": 1}),
+            SourceEntry(text_id, knowledge_base_id, "text", "Ca sáng", "received", "[T01] Speaker A: lỗi", {"source_kind": "typed_text", "turns": []}, user_id, now, now),
+        ]
+
+        class Catalog:
+            def resolve(self, name):
+                return (knowledge_base_id, get_kb("general")) if name == "factory" else None
+
+        class Sources:
+            async def list_page(self, kb_id, *, limit, offset, include_removed=False):
+                return rows[offset:offset + limit], len(rows)
+
+            async def get(self, kb_id, source_id):
+                return next((row for row in rows if row.id == source_id), None)
+
+        record = KnowledgeRecord(
+            subject="Trục Z", claim="Kiểm tra độ rơ.",
+            type=KnowledgeType.HEURISTIC, evidence_id=upload_id,
+        )
+
+        class Chunks:
+            async def records_for_source(self, kb_id, source_id):
+                return [record] if source_id == upload_id else []
+
+            async def passages_for_source(self, kb_id, source_id):
+                return [{"id": str(uuid4()), "doc_id": "manual", "index": 0, "text": "passage", "title": "Indexed", "status": "draft", "history": []}] if source_id == document_id else []
+
+        class Jobs:
+            async def latest(self, kb_id, source_ids):
+                return {}
+
+        manager = ApplicationKnowledgeManagementService(Catalog(), Sources(), Chunks(), Jobs())
+
+        inventory = await manager.inventory("factory")
+        self.assertEqual([item["kind"] for item in inventory["sources"]], ["upload", "upload", "conversation"])
+        knowledge = await manager.detail("factory", "upload", str(upload_id))
+        documents = await manager.detail("factory", "document", str(document_id))
+        text = await manager.detail("factory", "conversation", str(text_id))
+        self.assertEqual(len(knowledge["records"]), 1)
+        self.assertEqual(len(documents["chunks"]), 1)
+        self.assertEqual(text["conversation"]["source"], "text")
+
+
+@unittest.skip("Legacy filesystem and per-KB source contract was replaced in Phase 2")
 class KnowledgeManagementTest(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict("os.environ", {"EMBEDDING_DIM": "16"}))

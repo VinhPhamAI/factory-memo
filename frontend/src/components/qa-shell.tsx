@@ -1,14 +1,8 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import {
-  Files,
-  FolderPlus,
-  LibraryBig,
-  LogOut,
-  Menu,
-  MessagesSquare,
-} from "lucide-react";
+import { Files, FolderPlus, LogOut, Menu, MessagesSquare } from "lucide-react";
 import { BrandMark } from "./brand";
+import { KnowledgeNavigation } from "./knowledge-navigation";
 import { ConversationList } from "./conversation-list";
 import {
   Sheet,
@@ -34,14 +28,23 @@ const SECTIONS = [
   {
     to: "/knowledge",
     label: "Quản lý tri thức",
-    icon: LibraryBig,
     testId: "nav-knowledge-management",
   },
   { to: "/files", label: "Thư viện file", icon: Files, testId: "nav-files" },
 ];
 
-/** Sidebar content: brand, sections, the chat list on /ask, and the account. */
-function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+export type QaShellOutletContext = {
+  setKnowledgeNavigationLocked: (locked: boolean) => void;
+};
+
+/** Show navigation, the current chat list, and account controls. */
+function Sidebar({
+  onNavigate,
+  knowledgeNavigationLocked,
+}: {
+  onNavigate?: () => void;
+  knowledgeNavigationLocked: boolean;
+}) {
   const auth = useAuth();
   const authClient = useAuthClient();
   const { pathname } = useLocation();
@@ -53,20 +56,28 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <span>Factory memo</span>
       </Link>
       <nav className="sidebar-nav" aria-label="Chức năng">
-        {SECTIONS.map(({ to, label, icon: Icon, testId }) => (
-          <NavLink
-            key={to}
-            to={to}
-            data-testid={testId}
-            onClick={onNavigate}
-            className={({ isActive }) =>
-              cn("sidebar-link", isActive && "active")
-            }
-          >
-            <Icon size={16} />
-            {label}
-          </NavLink>
-        ))}
+        {SECTIONS.map(({ to, label, icon: Icon, testId }) =>
+          to === "/knowledge" ? (
+            <KnowledgeNavigation
+              key={to}
+              disabled={knowledgeNavigationLocked}
+              onNavigate={onNavigate}
+            />
+          ) : (
+            <NavLink
+              key={to}
+              to={to}
+              data-testid={testId}
+              onClick={onNavigate}
+              className={({ isActive }) =>
+                cn("sidebar-link", isActive && "active")
+              }
+            >
+              {Icon && <Icon size={16} />}
+              {label}
+            </NavLink>
+          ),
+        )}
       </nav>
       <div
         className={cn(
@@ -128,11 +139,13 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 export function QaShell() {
   const workspace = useWorkspace();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [knowledgeNavigationLocked, setKnowledgeNavigationLocked] =
+    useState(false);
   return (
     <ConversationsProvider>
       <div className="app-shell chat-focus-shell" data-testid="chat-focus-root">
         <aside className="app-sidebar">
-          <Sidebar />
+          <Sidebar knowledgeNavigationLocked={knowledgeNavigationLocked} />
         </aside>
         <div className="app-main">
           <header className="app-mobile-bar">
@@ -155,7 +168,11 @@ export function QaShell() {
             </div>
           )}
           <div className="workspace-outlet">
-            <Outlet />
+            <Outlet
+              context={
+                { setKnowledgeNavigationLocked } satisfies QaShellOutletContext
+              }
+            />
           </div>
         </div>
         <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
@@ -164,7 +181,10 @@ export function QaShell() {
               <SheetTitle>Menu</SheetTitle>
               <SheetDescription>Chức năng và cuộc trò chuyện.</SheetDescription>
             </SheetHeader>
-            <Sidebar onNavigate={() => setDrawerOpen(false)} />
+            <Sidebar
+              knowledgeNavigationLocked={knowledgeNavigationLocked}
+              onNavigate={() => setDrawerOpen(false)}
+            />
           </SheetContent>
         </Sheet>
       </div>

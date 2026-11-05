@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Download, FileText, Mic } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Citation, Source } from "@/types";
+import type { Citation, LocatedReference, Source } from "@/types";
 import { timestamp } from "@/services/capture";
 import { Button } from "@/components/ui/button";
 
@@ -27,10 +27,12 @@ export function SampleBadge() {
 export function SourcePreview({
   source,
   citation,
+  location,
   compact = false,
 }: {
   source: Source;
   citation?: Pick<Citation, "turnId" | "page" | "excerpt">;
+  location?: LocatedReference;
   compact?: boolean;
 }) {
   const [url, setUrl] = useState("");
@@ -104,7 +106,13 @@ export function SourcePreview({
           </span>
         )}
       </div>
-      {source.fileType === "application/pdf" && url ? (
+      {location ? (
+        <LocatedEvidencePreview
+          reference={location}
+          url={url}
+          contentType={source.fileType}
+        />
+      ) : source.fileType === "application/pdf" && url ? (
         <iframe
           title={`Xem trước ${source.fileName}`}
           className="pdf-preview"
@@ -138,6 +146,84 @@ export function SourcePreview({
           </a>
         </Button>
       )}
+    </div>
+  );
+}
+
+export function LocatedEvidencePreview({
+  reference,
+  url,
+  contentType,
+  renderedPage = false,
+}: {
+  reference: LocatedReference;
+  url?: string;
+  contentType?: string;
+  renderedPage?: boolean;
+}) {
+  if (reference.type === "source" && reference.location_missing)
+    return (
+      <div className="located-evidence missing" role="status">
+        <strong>Không xác định được vị trí</strong>
+        {reference.quote && <p>{reference.quote}</p>}
+      </div>
+    );
+  if (reference.type === "paragraph")
+    return (
+      <div className="located-evidence">
+        <strong>
+          {reference.table && reference.cell
+            ? `Bảng ${reference.table}, ô ${reference.cell}`
+            : `Đoạn ${reference.index}`}
+        </strong>
+        {reference.quote && <p>{reference.quote}</p>}
+      </div>
+    );
+  if (reference.type === "cells")
+    return (
+      <div className="located-evidence">
+        <strong>{reference.sheet} · {reference.range}</strong>
+        {reference.quote && <p>{reference.quote}</p>}
+      </div>
+    );
+  if ((reference.type === "page" || reference.type === "image") && url) {
+    if (contentType === "application/pdf" && !renderedPage)
+      return (
+        <div className="located-evidence">
+          <strong>Trang {reference.page}</strong>
+          <iframe
+            title={`Bằng chứng trang ${reference.page}`}
+            className="pdf-preview"
+            src={`${url}#page=${reference.page}`}
+          />
+          {reference.bbox && (
+            <p className="field-note">Vùng: {reference.bbox.join(", ")}</p>
+          )}
+        </div>
+      );
+    const box = reference.bbox;
+    const width = reference.page_width;
+    const height = reference.page_height;
+    const style = box && width && height ? {
+      left: `${(box[0] / width) * 100}%`,
+      top: `${(box[1] / height) * 100}%`,
+      width: `${((box[2] - box[0]) / width) * 100}%`,
+      height: `${((box[3] - box[1]) / height) * 100}%`,
+    } : undefined;
+    return (
+      <div className="located-evidence">
+        <strong>Vùng ảnh</strong>
+        <div className="located-image-frame">
+          <img src={url} alt="Bằng chứng trong file gốc" />
+          {style && <span className="located-image-box" style={style} />}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="located-evidence">
+      {"page" in reference && <strong>Trang {reference.page}</strong>}
+      {reference.quote && <p>{reference.quote}</p>}
     </div>
   );
 }

@@ -44,25 +44,47 @@ def _configure_logging() -> None:
 
 async def _serve(stage: str) -> None:
     from backend.api.knowledge_bases import KnowledgeBaseCatalog
-    from backend.knowledge_bases import KNOWLEDGE_BASES
+    from backend.src.services.application_source_pipeline import ApplicationSourcePipeline
     from backend.src.services.job_worker import StageWorker
-    from backend.src.services.source_pipeline import SourcePipeline
+    from backend.src.storage.app_database import (
+        app_database_url_from_env,
+        create_app_engine,
+        create_session_factory,
+    )
     from backend.src.storage.document_uploads import DocumentUploadStore
-    from backend.src.storage.job_queue import JobQueue
+    from backend.src.storage.embeddings import verify_embedding_dimension
+    from backend.src.storage.repositories.chunks import ChunkRepository
+    from backend.src.storage.repositories.ingestion_jobs import IngestionJobRepository
+    from backend.src.storage.repositories.knowledge_bases import KnowledgeBaseRepository
+    from backend.src.storage.repositories.sources import SourceRepository
 
-    class CatalogPipeline(SourcePipeline):
-        """Resolves knowledge bases created in the UI after this process started."""
+    if stage == "convert":
+        from backend.src.services.converters.ocr import warn_ocr_configuration
 
-        async def run(self, job):
-            if job.kb not in self.specs:
-                try:
-                    await KnowledgeBaseCatalog(KNOWLEDGE_BASES, listeners=[self]).ensure_loaded()
-                except Exception:
-                    logger.warning("Could not read the knowledge base registry", exc_info=True)
-            return await super().run(job)
+        warn_ocr_configuration()
 
-    queue = JobQueue()
-    pipeline = CatalogPipeline(KNOWLEDGE_BASES, DocumentUploadStore())
+    url = app_database_url_from_env()
+    if not url:
+        raise RuntimeError("APP_DATABASE_URL is required to start a worker")
+    engine = create_app_engine(url)
+    sessions = create_session_factory(engine)
+    try:
+        await verify_embedding_dimension(sessions)
+    except Exception:
+        await engine.dispose()
+        raise
+    catalog = KnowledgeBaseCatalog(KnowledgeBaseRepository(sessions))
+    await catalog.ensure_loaded()
+    sources = SourceRepository(sessions)
+    chunks = ChunkRepository(sessions)
+    queue = IngestionJobRepository(sessions, database_url=url)
+    pipeline = ApplicationSourcePipeline(
+        catalog,
+        sources,
+        chunks,
+        DocumentUploadStore(),
+        sessions,
+    )
     worker = StageWorker(
         queue, pipeline, [stage],
         poll_s=_env_float("WORKER_POLL_S", 15), heartbeat_s=_env_float("WORKER_HEARTBEAT_S", 15),
@@ -76,7 +98,8 @@ async def _serve(stage: str) -> None:
         await worker.run(stop)
     finally:
         await pipeline.aclose()
-        await queue.aclose()
+        await catalog.aclose()
+        await engine.dispose()
 
 
 def run_stage(stage: str) -> None:

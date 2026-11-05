@@ -6,7 +6,11 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { AuthClient, type AuthState } from "@/services/auth-api";
+import {
+  AuthClient,
+  sessionClient,
+  type AuthState,
+} from "@/services/auth-api";
 import { SignInScreen } from "@/components/sign-in";
 
 const Context = createContext<AuthClient | null>(null);
@@ -19,7 +23,7 @@ export function AuthProvider({
   children: ReactNode;
   client?: AuthClient;
 }) {
-  const [client] = useState(() => injected ?? new AuthClient());
+  const [client] = useState(() => injected ?? sessionClient);
   useEffect(() => {
     // The client lives as long as the tab; StrictMode's second call joins the
     // first refresh instead of sending another.

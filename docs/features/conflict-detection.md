@@ -1,4 +1,22 @@
-# Phát hiện conflict cho KB `industrial_qa`
+# Conflict detection
+
+## Application knowledge bases
+
+The API and worker use `APP_DATABASE_URL` for General-template KBs. The conflict
+stage reads `knowledge_chunks` and stores each verdict in `knowledge_conflicts`
+with its `ingestion_jobs` ID. The review API uses the same table. Chunk links and
+review history commit with the corresponding verdict or decision.
+
+General uses the shared listwise judge with pairwise confirmation, a
+[General prompt](../../backend/knowledge_bases/general/prompts/conflict.md), and
+`applies_to` and `condition` as ranking signals. The judge uses
+`CONSOLIDATION_*` provider settings with `OPENROUTER_*` fallbacks for the model,
+API key and base URL. Run `uv run python -m backend.worker --stage conflict`
+from the repo root when running stage workers individually.
+See [conflict review](knowledge-management.md#conflict-review) for the UI and
+how to queue a check for existing application records.
+
+## Industrial QA
 
 > **Trạng thái:** giai đoạn 1 đã triển khai (2026-10-23): stage `conflict`, bảng
 > `knowledge_conflicts`, judge `list` + xác nhận và `pair`, cấu hình, unit test

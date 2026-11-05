@@ -8,13 +8,15 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from backend.api.auth import require_current_user
 from backend.api.knowledge_bases import refresh_catalog
 from backend.knowledge_bases import KnowledgeBaseSpec
-from backend.knowledge_bases.stores import open_store
+from backend.knowledge_bases.base import AnswerPipeline
+from backend.knowledge_bases.stores import open_application_store, open_store
 from backend.src.agents.agent.service import (
     STREAM_EVENT_VERSION,
     AgentStreamEvent,
@@ -23,6 +25,7 @@ from backend.src.agents.agent.service import (
 )
 from backend.src.agents.rag.store import DocumentStore
 from backend.src.storage import KnowledgeStore, StorageError
+from backend.src.storage.chunk_retrieval import ChunkRetrieval
 from backend.src.storage.databases import DatabaseAdminError
 
 
@@ -30,24 +33,39 @@ router = APIRouter(prefix="/v1/knowledge-agent", tags=["knowledge-agent"])
 
 
 class KnowledgeAgentPool:
-    """One agent per knowledge base, opened on its first request."""
+    """One agent per knowledge base, opened on its first request.
+
+    With `sessions` and `catalog`, catalog knowledge bases search the
+    application database through the shared engine; others, such as Industrial
+    QA, keep their own stores.
+    """
 
     def __init__(
         self,
         specs: Mapping[str, KnowledgeBaseSpec],
         *,
         agents: Mapping[str, Any] | None = None,
+        sessions: Any = None,
+        catalog: Any = None,
     ) -> None:
+        self._sessions = sessions
+        self._catalog = catalog
         self._specs = dict(specs)
         # Pre-built agents, e.g. fakes in HTTP tests.
         self._agents: dict[str, Any] = dict(agents or {})
-        self._stores: list[KnowledgeStore | DocumentStore] = []
+        self._stores: list[KnowledgeStore | DocumentStore | ChunkRetrieval] = []
         self._lock = asyncio.Lock()
 
     def add(self, spec: KnowledgeBaseSpec) -> None:
         """Serves a knowledge base created while the API runs."""
 
         self._specs[spec.name] = spec
+
+    def remove(self, name: str) -> None:
+        """Stop serving a deleted KB and release its in-memory chat service."""
+
+        self._specs.pop(name, None)
+        self._agents.pop(name, None)
 
     def names(self) -> list[str]:
         return sorted({*self._specs, *self._agents})
@@ -63,12 +81,15 @@ class KnowledgeAgentPool:
     async def get(self, name: str) -> Any:
         if name in self._agents:
             return self._agents[name]
-        spec = self._specs.get(name)
-        if spec is None:
-            raise KeyError(name)
         async with self._lock:
             if name not in self._agents:
-                store = await open_store(spec)
+                spec = self._specs.get(name)
+                if spec is None:
+                    raise KeyError(name)
+                store = await self._open(name, spec)
+                if name not in self._specs:
+                    await store.aclose()
+                    raise KeyError(name)
                 try:
                     agent = KnowledgeAgentService.from_kb(spec, store)
                 except Exception:
@@ -77,6 +98,20 @@ class KnowledgeAgentPool:
                 self._stores.append(store)
                 self._agents[name] = agent
         return self._agents[name]
+
+    async def _open(
+        self, name: str, spec: KnowledgeBaseSpec
+    ) -> KnowledgeStore | DocumentStore | ChunkRetrieval:
+        """Open the application-database store of a catalog KB, else its own store."""
+
+        resolved = self._catalog.resolve(name) if self._catalog is not None else None
+        if (
+            self._sessions is None
+            or resolved is None
+            or spec.answer_pipeline is AnswerPipeline.INDUSTRIAL_QA
+        ):
+            return await open_store(spec)
+        return open_application_store(resolved[0], spec, sessions=self._sessions)
 
     async def aclose(self) -> None:
         for agent in self._agents.values():
@@ -166,7 +201,7 @@ async def _service(request: Request, kb: str) -> KnowledgeAgentService:
         ) from exc
 
 
-@router.get("/knowledge-bases")
+@router.get("/knowledge-bases", dependencies=[Depends(require_current_user)])
 async def list_knowledge_bases(request: Request) -> dict[str, list[dict[str, str]]]:
     await refresh_catalog(request)
     pool = _pool(request)
@@ -178,23 +213,33 @@ async def list_knowledge_bases(request: Request) -> dict[str, list[dict[str, str
     }
 
 
-@router.post("/stream", response_class=StreamingResponse)
+@router.post(
+    "/stream",
+    response_class=StreamingResponse,
+    dependencies=[Depends(require_current_user)],
+)
 async def stream_knowledge_agent(
     request: Request,
     payload: Annotated[KnowledgeAgentStreamRequest, Body(...)],
 ) -> StreamingResponse:
     """Compatibility endpoint: select a knowledge base in the JSON body."""
+    await refresh_catalog(request)
     service = await _service(request, payload.kb)
     return _stream_response(service, payload)
 
 
-@router.post("/{kb}/stream", response_class=StreamingResponse)
+@router.post(
+    "/{kb}/stream",
+    response_class=StreamingResponse,
+    dependencies=[Depends(require_current_user)],
+)
 async def stream_scoped_knowledge_agent(
     kb: str,
     request: Request,
     payload: Annotated[ScopedAgentQueryRequest, Body(...)],
 ) -> StreamingResponse:
     """Stream a KB's agent, including /enterprise_rag/stream, with its own history."""
+    await refresh_catalog(request)
     service = await _service(request, kb)
     return _stream_response(service, payload)
 

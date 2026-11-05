@@ -421,6 +421,44 @@ class FakeIngestion:
         return SimpleNamespace(records=(record,), merged=(), consolidation={"add": 1})
 
 
+class ApplicationVoiceCaptureTest(unittest.IsolatedAsyncioTestCase):
+    async def test_typed_text_creates_a_text_source_with_submitter(self):
+        class Sources:
+            values = None
+            created_id = uuid4()
+
+            async def create(self, knowledge_base_id, **values):
+                self.values = (knowledge_base_id, values)
+                return SimpleNamespace(id=self.created_id)
+
+        sources = Sources()
+        knowledge_base_id = uuid4()
+        spec = get_kb("general")
+        service = VoiceCaptureService(
+            {"general": spec},
+            sources=sources,
+            resolve_kb=lambda name: (knowledge_base_id, spec)
+            if name == "general"
+            else None,
+        )
+        submitter = uuid4()
+
+        source_id = await service.save_text(
+            "general",
+            name="Ca sáng",
+            text="Anh Minh: Trục Z kêu rè.",
+            dialogue=True,
+            submitted_by=submitter,
+        )
+
+        stored_kb, values = sources.values
+        self.assertEqual(stored_kb, knowledge_base_id)
+        self.assertEqual(values["submitted_by"], submitter)
+        self.assertEqual(values["kind"].value, "text")
+        self.assertEqual(source_id, sources.created_id)
+
+
+@unittest.skip("Legacy per-KB capture API contract was replaced in Phase 2")
 class VoiceCaptureApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, Navigate, useLocation, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -9,12 +9,20 @@ import {
   FolderOpen,
   Loader2,
   Mic,
+  Plus,
   RefreshCw,
   Undo2,
   X,
 } from "lucide-react";
-import type { KnowledgeBase } from "@/types";
+import type { QaShellOutletContext } from "@/components/qa-shell";
+import type { KnowledgeBase, LocatedReference } from "@/types";
 import { Button } from "@/components/ui/button";
+import { ChunkSearchPanel } from "@/components/knowledge/chunk-search";
+import { CreateKnowledgeBaseDialog } from "@/components/knowledge/create-kb-dialog";
+import { KnowledgeBaseSettings } from "@/components/knowledge/knowledge-base-settings";
+import { DocumentUpload } from "@/components/voice/document-upload";
+import { useAuth } from "@/hooks/auth";
+import { LocatedEvidencePreview } from "@/components/source-preview";
 import {
   Dialog,
   DialogContent,
@@ -34,7 +42,7 @@ import {
 } from "@/components/knowledge/conflict-review";
 import { listKnowledgeBases } from "@/services/knowledge-api";
 import {
-  audioUrl,
+  fetchAudio,
   type VoiceConversation,
   type VoiceRecord,
 } from "@/services/voice-api";
@@ -48,11 +56,14 @@ import {
   convertManagedSource,
   DuplicateContentError,
   extractManagedSource,
+  fetchOriginalDocument,
+  fetchOriginalPdfPage,
   getManagedSource,
   listManagedSources,
   NearDuplicateError,
-  originalDocumentUrl,
+  downloadOriginalDocument,
   reviewManagedChunk,
+  removeManagedSource,
   sourceLink,
   withJob,
   type DuplicateOf,
@@ -571,7 +582,19 @@ function BulkNotice({ kb, result }: { kb: string; result: BulkResult }) {
 }
 
 export function KnowledgeManagementPage() {
-  const [view, setView] = useState<"sources" | "conflicts">("sources");
+  const auth = useAuth();
+  const user = auth.status === "signed-in" ? auth.user : undefined;
+  const canManage = user?.role === "admin" || user?.role === "expert";
+  const [params] = useSearchParams();
+  const shell = useOutletContext<QaShellOutletContext | undefined>();
+  const setNavigationLocked = shell?.setKnowledgeNavigationLocked;
+  const tab = params.get("tab");
+  const view =
+    tab === "knowledge-bases" || tab === "conflicts" || tab === "search"
+      ? tab
+      : "sources";
+  const [creatingKb, setCreatingKb] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
   const [kb, setKb] = useState("");
   const [sources, setSources] = useState<ManagedSource[]>([]);
@@ -585,12 +608,38 @@ export function KnowledgeManagementPage() {
   const [reload, setReload] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkResult, setBulkResult] = useState<BulkResult>();
+  const [uploading, setUploading] = useState(false);
+  const [removing, setRemoving] = useState<ManagedSource>();
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState("");
+  const refresh = () => setReload((value) => value + 1);
+
+  useEffect(() => {
+    setNavigationLocked?.(uploading);
+    return () => setNavigationLocked?.(false);
+  }, [uploading, setNavigationLocked]);
+
+  async function confirmRemove() {
+    if (!removing) return;
+    setRemoveBusy(true);
+    setRemoveError("");
+    try {
+      await removeManagedSource(removing);
+      setRemoving(undefined);
+      refresh();
+    } catch (error) {
+      setRemoveError(errorText(error));
+    } finally {
+      setRemoveBusy(false);
+    }
+  }
 
   useEffect(() => {
     const abort = new AbortController();
     listKnowledgeBases(abort.signal)
       .then((items) => {
         setKbs(items);
+        setCatalogError("");
         let saved = "";
         try {
           saved = localStorage.getItem("voice-capture:kb") ?? "";
@@ -599,16 +648,23 @@ export function KnowledgeManagementPage() {
         }
         setKb(
           (current) =>
-            current ||
-            (items.some((item) => item.name === saved)
-              ? saved
-              : (items[0]?.name ?? "")),
+            items.some((item) => item.name === current)
+              ? current
+              : items.some((item) => item.name === saved)
+                ? saved
+                : (items[0]?.name ?? ""),
         );
-        if (!items.length) setLoading(false);
+        if (!items.length) {
+          setLoading(false);
+          setSources([]);
+          setWarnings([]);
+          setNext(null);
+          setError("");
+        }
       })
       .catch((reason) => {
         if (!abort.signal.aborted) {
-          setError(errorText(reason));
+          setCatalogError(errorText(reason));
           setLoading(false);
         }
       });
@@ -744,223 +800,285 @@ export function KnowledgeManagementPage() {
         </div>
         <Button
           variant="outline"
-          onClick={() => setReload((value) => value + 1)}
-          disabled={loading}
+          onClick={refresh}
+          disabled={loading || uploading}
         >
           <RefreshCw /> Làm mới
         </Button>
       </header>
-      <div className="km-toolbar">
-        <label className="vc-field">
-          <span>Knowledge base</span>
-          <select
-            value={kb}
-            onChange={(event) => setKb(event.target.value)}
-            disabled={!kbs.length}
-            data-testid="management-kb"
-          >
-            {!kbs.length && <option value="">Chưa có knowledge base</option>}
-            {kbs.map((item) => (
-              <option key={item.name} value={item.name}>
-                {item.title || item.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {view === "sources" && (
-          <label className="vc-field">
-            <span>Tìm nguồn dữ liệu</span>
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Tên file hoặc bản ghi…"
-            />
-          </label>
-        )}
-      </div>
-      <div
-        className="vc-filter km-filters"
-        role="tablist"
-        aria-label="Nội dung quản lý tri thức"
-      >
-        <button
-          id="km-sources-tab"
-          role="tab"
-          aria-controls="km-sources-panel"
-          aria-selected={view === "sources"}
-          onClick={() => setView("sources")}
-        >
-          Nguồn dữ liệu
-        </button>
-        <button
-          id="km-conflicts-tab"
-          role="tab"
-          aria-controls="km-conflicts-panel"
-          aria-selected={view === "conflicts"}
-          disabled={!kb}
-          onClick={() => setView("conflicts")}
-        >
-          Mâu thuẫn
-        </button>
-      </div>
-      {view === "conflicts" ? (
-        <div
-          id="km-conflicts-panel"
-          role="tabpanel"
-          aria-labelledby="km-conflicts-tab"
-        >
-          {kb && (
-            <ConflictReviewPanel
-              key={kb}
-              kb={kb}
-              refreshKey={`${reload}:${sources.map((source) => `${source.processing.conflict_job?.id}:${source.processing.conflict_job?.status}`).join(",")}`}
-              activeJobs={polling}
-              onChanged={() => setReload((value) => value + 1)}
-            />
-          )}
-        </div>
-      ) : (
-        <div
-          id="km-sources-panel"
-          role="tabpanel"
-          aria-labelledby="km-sources-tab"
-        >
-          <div
-            className="vc-filter km-filters"
-            role="tablist"
-            aria-label="Lọc nguồn dữ liệu"
-          >
-            {[
-              ["all", "Tất cả"],
-              ["raw", "Raw"],
-              ["converted", "Converted"],
-              ["extracted", "Extracted"],
-              ["pending", "Chờ duyệt"],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                role="tab"
-                aria-selected={filter === key}
-                onClick={() => setFilter(key)}
+      <div className="km-workspace">
+        <div className="km-workspace-content">
+          <div className="km-workspace-bar">
+            <label className="vc-field km-kb-picker">
+              <span>Knowledge base</span>
+              <select
+                value={kb}
+                onChange={(event) => setKb(event.target.value)}
+                disabled={!kbs.length || uploading}
+                data-testid="management-kb"
               >
-                {label}
-              </button>
-            ))}
+                {!kbs.length && <option value="">Chưa có knowledge base</option>}
+                {kbs.map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.title || item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {view === "knowledge-bases" && canManage && (
+              <Button onClick={() => setCreatingKb(true)}>
+                <Plus /> Tạo knowledge base
+              </Button>
+            )}
           </div>
-          {error && (
-            <p className="vc-notice error" role="alert">
-              {error}
-            </p>
+          {catalogError && (
+            <p className="vc-notice error" role="alert">{catalogError}</p>
           )}
-          {warnings.map((warning) => (
-            <p className="vc-notice warn" key={warning} role="status">
-              {warning}
-            </p>
-          ))}
-          {bulkResult && <BulkNotice kb={kb} result={bulkResult} />}
-          {!!visible.length && (
-            <BulkActions
-              key={qaMode}
-              sources={checked}
-              selectable={selectable.length}
-              defaultMode={qaMode}
-              allSelected={allSelected}
-              onToggleAll={toggleAll}
-              onQueued={queued}
-            />
-          )}
-          {loading && !sources.length ? (
-            <p className="vc-muted">
-              <Loader2 className="animate-spin" size={16} /> Đang tải dữ liệu…
-            </p>
-          ) : !visible.length ? (
-            <div className="km-empty">
-              <FolderOpen size={32} />
-              <h2>
-                {sources.length
-                  ? "Không có nguồn phù hợp bộ lọc"
-                  : "Chưa có nguồn dữ liệu"}
-              </h2>
-              <Link to="/capture">Thêm dữ liệu</Link>
+
+          {view === "knowledge-bases" && (
+            <div className="km-tab-panel">
+              {kb && (
+                <KnowledgeBaseSettings
+                  key={kb}
+                  name={kb}
+                  role={user?.role}
+                  revision={reload}
+                  onChanged={refresh}
+                />
+              )}
+              {!kb && !loading && !catalogError && (
+                <p className="vc-muted">Chưa có knowledge base để quản lý.</p>
+              )}
+              {canManage && (
+                <CreateKnowledgeBaseDialog
+                  open={creatingKb}
+                  taken={kbs.map((item) => item.name)}
+                  onClose={() => setCreatingKb(false)}
+                  onCreated={(created) => {
+                    setKbs((items) => [...items, created]);
+                    setKb(created.name);
+                    setCreatingKb(false);
+                    refresh();
+                  }}
+                />
+              )}
             </div>
-          ) : (
-            <ul className="km-source-list">
-              {visible.map((source) => (
-                <li key={key(source)} data-testid="managed-source">
-                  <input
-                    type="checkbox"
-                    className="km-select"
-                    aria-label={`Chọn ${source.name}`}
-                    checked={isSelectable(source) && selected.has(key(source))}
-                    disabled={!isSelectable(source)}
-                    title={
-                      isSelectable(source)
-                        ? undefined
-                        : isRunning(source)
-                          ? "Đang xử lý"
-                          : "Không có bước Convert/Extract cho nguồn này"
-                    }
-                    onChange={() => toggle(source)}
-                    data-testid="select-source"
-                  />
-                  <div className="km-source-icon">
-                    {source.source_kind === "voice_recording" ? (
-                      <Mic />
-                    ) : (
-                      <FileText />
-                    )}
-                  </div>
-                  <div className="km-source-main">
-                    <Link to={sourceLink(source)} className="km-source-name">
-                      {source.name}
-                    </Link>
-                    <p className="vc-muted">
-                      {source.content_type} ·{" "}
-                      {source.created_at
-                        ? dateTime(source.created_at)
-                        : "Không có thời gian nguồn"}
-                      {source.mode ? ` · ${MODES[source.mode]}` : ""}
-                    </p>
-                    <SourceStatus source={source} />
-                    {source.conversion_note && (
-                      <p className="vc-muted">{source.conversion_note}</p>
-                    )}
-                    <JobNote processing={source.processing} />
-                    <ConflictJobNote processing={source.processing} />
-                    {source.review === "pending" && (
-                      <small>{source.counts.draft ?? 0} mục chờ duyệt</small>
-                    )}
-                  </div>
-                  <Button variant="outline" size="sm" asChild>
-                    <Link to={sourceLink(source)}>
-                      {source.review === "pending"
-                        ? "Duyệt kết quả"
-                        : "Xem / xử lý"}
-                      <ArrowRight />
-                    </Link>
-                  </Button>
-                </li>
+          )}
+
+          {view === "search" && (
+            <div className="km-tab-panel">
+              {kb ? (
+                <ChunkSearchPanel key={kb} kb={kb} />
+              ) : (
+                !loading && <p className="vc-muted">Chọn knowledge base để tìm kiếm.</p>
+              )}
+            </div>
+          )}
+
+          {view === "conflicts" && (
+            <div className="km-tab-panel">
+              {kb ? (
+                <ConflictReviewPanel
+                  key={kb}
+                  kb={kb}
+                  refreshKey={`${reload}:${sources.map((source) => `${source.processing.conflict_job?.id}:${source.processing.conflict_job?.status}`).join(",")}`}
+                  activeJobs={polling}
+                  onChanged={refresh}
+                />
+              ) : (
+                !loading && <p className="vc-muted">Chọn knowledge base để xem mâu thuẫn.</p>
+              )}
+            </div>
+          )}
+
+          {view === "sources" && (
+            <div className="km-tab-panel">
+              <label className="vc-field km-source-search">
+                <span>Tìm nguồn dữ liệu</span>
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Tên file hoặc bản ghi…"
+                />
+              </label>
+              {kb && (
+                <details className="km-add-documents">
+                  <summary>Thêm tài liệu</summary>
+                  <DocumentUpload key={kb} kb={kb} disabled={loading} onBusy={setUploading}
+                    onStored={refresh} />
+                </details>
+              )}
+              <div
+                className="vc-filter km-filters"
+                role="tablist"
+                aria-label="Lọc nguồn dữ liệu"
+              >
+                {[
+                  ["all", "Tất cả"],
+                  ["raw", "Raw"],
+                  ["converted", "Converted"],
+                  ["extracted", "Extracted"],
+                  ["pending", "Chờ duyệt"],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    role="tab"
+                    aria-selected={filter === key}
+                    onClick={() => setFilter(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {error && (
+                <p className="vc-notice error" role="alert">
+                  {error}
+                </p>
+              )}
+              {warnings.map((warning) => (
+                <p className="vc-notice warn" key={warning} role="status">
+                  {warning}
+                </p>
               ))}
-            </ul>
+              {bulkResult && <BulkNotice kb={kb} result={bulkResult} />}
+              {!!visible.length && (
+                <BulkActions
+                  key={qaMode}
+                  sources={checked}
+                  selectable={selectable.length}
+                  defaultMode={qaMode}
+                  allSelected={allSelected}
+                  onToggleAll={toggleAll}
+                  onQueued={queued}
+                />
+              )}
+              {loading && !sources.length ? (
+                <p className="vc-muted">
+                  <Loader2 className="animate-spin" size={16} /> Đang tải dữ liệu…
+                </p>
+              ) : !visible.length ? (
+                <div className="km-empty">
+                  <FolderOpen size={32} />
+                  <h2>
+                    {sources.length
+                      ? "Không có nguồn phù hợp bộ lọc"
+                      : "Chưa có nguồn dữ liệu"}
+                  </h2>
+                  <Link to="/capture">Thêm dữ liệu</Link>
+                </div>
+              ) : (
+                <ul className="km-source-list">
+                  {visible.map((source) => (
+                    <li key={key(source)} data-testid="managed-source">
+                      <input
+                        type="checkbox"
+                        className="km-select"
+                        aria-label={`Chọn ${source.name}`}
+                        checked={isSelectable(source) && selected.has(key(source))}
+                        disabled={!isSelectable(source)}
+                        title={
+                          isSelectable(source)
+                            ? undefined
+                            : isRunning(source)
+                              ? "Đang xử lý"
+                              : "Không có bước Convert/Extract cho nguồn này"
+                        }
+                        onChange={() => toggle(source)}
+                        data-testid="select-source"
+                      />
+                      <div className="km-source-icon">
+                        {source.source_kind === "voice_recording" ? (
+                          <Mic />
+                        ) : (
+                          <FileText />
+                        )}
+                      </div>
+                      <div className="km-source-main">
+                        <Link to={sourceLink(source)} className="km-source-name">
+                          {source.name}
+                        </Link>
+                        <p className="vc-muted">
+                          {source.content_type} ·{" "}
+                          {source.created_at
+                            ? dateTime(source.created_at)
+                            : "Không có thời gian nguồn"}
+                          {source.mode ? ` · ${MODES[source.mode]}` : ""}
+                        </p>
+                        <SourceStatus source={source} />
+                        {source.conversion_note && (
+                          <p className="vc-muted">{source.conversion_note}</p>
+                        )}
+                        <JobNote processing={source.processing} />
+                        <ConflictJobNote processing={source.processing} />
+                        {source.review === "pending" && (
+                          <small>{source.counts.draft ?? 0} mục chờ duyệt</small>
+                        )}
+                      </div>
+                      <Button variant="outline" size="sm" asChild>
+                        <Link to={sourceLink(source)}>
+                          {source.review === "pending"
+                            ? "Duyệt kết quả"
+                            : "Xem / xử lý"}
+                          <ArrowRight />
+                        </Link>
+                      </Button>
+                      {user && (canManage || user.id === source.submitted_by) && (
+                        <Button variant="outline" size="sm"
+                          disabled={
+                            source.processing.job?.status === "running" ||
+                            source.processing.conflict_job?.status === "running" ||
+                            source.processing.status === "running"
+                          }
+                          onClick={() => {
+                            setRemoveError("");
+                            setRemoving(source);
+                          }}>
+                          Gỡ nguồn
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {next !== null && (
+                <Button
+                  variant="outline"
+                  disabled={loading}
+                  onClick={() => void loadMore()}
+                >
+                  Tải thêm nguồn dữ liệu
+                </Button>
+              )}
+              <p className="vc-muted km-footnote">
+                Chọn các nguồn rồi bấm Convert hoặc Extract ở đầu danh sách; hai nút
+                chỉ xếp job, worker chạy nền theo thứ tự chuyển đổi → trích xuất
+                (Extract trên Raw tự chuyển đổi trước). Trạng thái xử lý và trạng
+                thái duyệt được lưu riêng. “Extracted” chưa có nghĩa là đã được
+                chuyên gia duyệt.
+              </p>
+            </div>
           )}
-          {next !== null && (
-            <Button
-              variant="outline"
-              disabled={loading}
-              onClick={() => void loadMore()}
-            >
-              Tải thêm nguồn dữ liệu
-            </Button>
-          )}
-          <p className="vc-muted km-footnote">
-            Chọn các nguồn rồi bấm Convert hoặc Extract ở đầu danh sách; hai nút
-            chỉ xếp job, worker chạy nền theo thứ tự chuyển đổi → trích xuất
-            (Extract trên Raw tự chuyển đổi trước). Trạng thái xử lý và trạng
-            thái duyệt được lưu riêng. “Extracted” chưa có nghĩa là đã được
-            chuyên gia duyệt.
-          </p>
         </div>
-      )}
+      </div>
+      <Dialog open={!!removing} onOpenChange={(open) => {
+        if (!open && !removeBusy) setRemoving(undefined);
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Gỡ nguồn dữ liệu</DialogTitle>
+            <DialogDescription>
+              Gỡ “{removing?.name}” khỏi knowledge base này?
+            </DialogDescription>
+          </DialogHeader>
+          {removeError && <p className="vc-notice error" role="alert">{removeError}</p>}
+          <DialogFooter>
+            <Button variant="outline" disabled={removeBusy}
+              onClick={() => setRemoving(undefined)}>Hủy</Button>
+            <Button variant="destructive" disabled={removeBusy}
+              onClick={() => void confirmRemove()}>Xác nhận gỡ</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
@@ -979,27 +1097,94 @@ export function KnowledgeSourcePage() {
   const { kb = "", kind = "", sourceId = "" } = useParams();
   const validKind = ["upload", "conversation", "document"].includes(kind);
   // A capture that saved the source but could not queue Auto processing.
-  const notice = (useLocation().state as { notice?: string } | null)?.notice;
+  const state = useLocation().state as {
+    notice?: string;
+    located?: LocatedReference;
+  } | null;
+  const notice = state?.notice;
+  // A search result's evidence chip carries the location to show first.
+  const startLocated = state?.located;
   const [source, setSource] = useState<ManagedSourceDetail>();
   const [mode, setMode] = useState<ExtractionMode>("knowledge");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
   const [quote, setQuote] = useState("");
+  const [located, setLocated] = useState<LocatedReference>();
+  const [originalObjectUrl, setOriginalObjectUrl] = useState<string>();
   const [focus, setFocus] = useState<{
     turnId: string;
     quote?: string;
     nonce: number;
   }>();
   const [mobileTab, setMobileTab] = useState("knowledge");
+  const [audioObjectUrl, setAudioObjectUrl] = useState<string>();
   const audio = useRef<HTMLAudioElement>(null);
   const preview = useRef<HTMLPreElement>(null);
   const refresh = useCallback(() => setReload((value) => value + 1), []);
+  const audioConversationId = source?.conversation?.id;
+  const audioAvailable = source?.conversation?.audio.available;
 
   useEffect(() => {
     setSource(undefined);
     setError("");
-  }, [kb, kind, sourceId]);
+    setLocated(startLocated);
+    setQuote(startLocated?.quote ?? "");
+  }, [kb, kind, sourceId, startLocated]);
+
+  useEffect(() => {
+    if (!audioConversationId || !audioAvailable) {
+      setAudioObjectUrl(undefined);
+      return;
+    }
+    const abort = new AbortController();
+    let objectUrl: string | undefined;
+    void fetchAudio(kb, audioConversationId, abort.signal)
+      .then((blob) => {
+        if (abort.signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setAudioObjectUrl(objectUrl);
+      })
+      .catch((reason) => {
+        if (!abort.signal.aborted) setError(errorText(reason));
+      });
+    return () => {
+      abort.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [audioAvailable, audioConversationId, kb]);
+
+  useEffect(() => {
+    if (!source || source.kind !== "upload" || !located) {
+      setOriginalObjectUrl(undefined);
+      return;
+    }
+    setOriginalObjectUrl(undefined);
+    const abort = new AbortController();
+    let objectUrl: string | undefined;
+    const pageWithBox =
+      source.content_type === "application/pdf" &&
+      (located.type === "page" || located.type === "image") &&
+      located.bbox
+        ? located.page
+        : undefined;
+    const load = pageWithBox
+      ? fetchOriginalPdfPage(source, pageWithBox, abort.signal)
+      : fetchOriginalDocument(source, abort.signal);
+    void load
+      .then((blob) => {
+        if (abort.signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setOriginalObjectUrl(objectUrl);
+      })
+      .catch((reason) => {
+        if (!abort.signal.aborted) setError(errorText(reason));
+      });
+    return () => {
+      abort.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [located, source]);
 
   useEffect(() => {
     if (!validKind) return;
@@ -1083,7 +1268,9 @@ export function KnowledgeSourcePage() {
     setSource((current) => {
       if (!current) return current;
       const records = current.records.map((item) =>
-        item.id === record.id ? record : item,
+        item.id === record.id
+          ? { ...record, references: item.references ?? [] }
+          : item,
       );
       const items = [...records, ...current.chunks];
       const review = items.some((item) => item.status === "draft")
@@ -1113,6 +1300,13 @@ export function KnowledgeSourcePage() {
         nonce: Date.now(),
       });
     setQuote(evidence.quote);
+    setMobileTab("transcript");
+    preview.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function showLocated(reference: LocatedReference) {
+    setLocated(reference);
+    setQuote(reference.quote ?? "");
     setMobileTab("transcript");
     preview.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
@@ -1187,10 +1381,15 @@ export function KnowledgeSourcePage() {
         </div>
         <div className="km-actions">
           {source.kind === "upload" && (
-            <Button variant="outline" asChild>
-              <a href={originalDocumentUrl(source)} download>
-                <Download /> File gốc
-              </a>
+            <Button
+              variant="outline"
+              onClick={() =>
+                void downloadOriginalDocument(source).catch((reason) =>
+                  setError(errorText(reason)),
+                )
+              }
+            >
+              <Download /> File gốc
             </Button>
           )}
           <Button variant="outline" onClick={refresh} disabled={busy}>
@@ -1237,9 +1436,9 @@ export function KnowledgeSourcePage() {
               <p>{source.conversion_note}</p>
             ) : source.stage === "raw" ? (
               <p>
-                File TXT đã là văn bản: Trích xuất sẽ tự chuyển thành text rồi
-                trích xuất, không cần bước Convert. Convert chỉ tạo bản text để
-                xem trước. File gốc được giữ nguyên.
+                Trích xuất sẽ tự chọn bộ chuyển đổi theo nội dung file rồi chạy
+                bước Extract, không cần Convert thủ công. Convert chỉ tạo bản
+                text để xem trước. File gốc được giữ nguyên.
               </p>
             ) : null}
             {canExtract(source) && (
@@ -1348,12 +1547,12 @@ export function KnowledgeSourcePage() {
           {error}
         </p>
       )}
-      {source.conversation?.audio.available && (
+      {source.conversation?.audio.available && audioObjectUrl && (
         <audio
           ref={audio}
           className="vc-audio"
           controls
-          src={audioUrl(kb, source.conversation.id)}
+          src={audioObjectUrl}
         />
       )}
       {source.stage !== "raw" && (
@@ -1403,6 +1602,18 @@ export function KnowledgeSourcePage() {
                     </p>
                   </div>
                 </header>
+                {located && (
+                  <LocatedEvidencePreview
+                    reference={located}
+                    url={originalObjectUrl}
+                    contentType={source.content_type}
+                    renderedPage={
+                      source.content_type === "application/pdf" &&
+                      (located.type === "page" || located.type === "image") &&
+                      !!located.bbox
+                    }
+                  />
+                )}
                 <pre className="km-text" ref={preview}>
                   {source.text === null ? (
                     source.conversion_note
@@ -1445,6 +1656,7 @@ export function KnowledgeSourcePage() {
                       source={source}
                       chunk={chunk}
                       onChanged={setSource}
+                      onLocated={showLocated}
                     />
                   ))}
                 </ul>
@@ -1454,6 +1666,7 @@ export function KnowledgeSourcePage() {
                 conversation={conversation}
                 counts={counts}
                 onEvidence={showEvidence}
+                onLocated={showLocated}
                 onRecord={updateRecord}
               />
             )}
@@ -1468,10 +1681,12 @@ function ChunkCard({
   source,
   chunk,
   onChanged,
+  onLocated,
 }: {
   source: ManagedSourceDetail;
   chunk: ManagedChunk;
   onChanged(source: ManagedSourceDetail): void;
+  onLocated(reference: LocatedReference): void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1506,6 +1721,21 @@ function ChunkCard({
         [D:{chunk.doc_id}] · {chunk.id}
       </small>
       <p className="km-chunk-text">{chunk.text}</p>
+      {!!chunk.references?.length && (
+        <div className="vc-evidence" data-testid="located-references">
+          <span className="vc-evidence-label">Vị trí trong file gốc</span>
+          {chunk.references.map((reference, index) => (
+            <button
+              key={index}
+              type="button"
+              className="vc-quote"
+              onClick={() => onLocated(reference)}
+            >
+              {referenceTitle(reference)}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="vc-record-actions">
         {chunk.status === "draft" && !rejecting ? (
           <>
@@ -1584,4 +1814,17 @@ function ChunkCard({
       )}
     </li>
   );
+}
+
+function referenceTitle(reference: LocatedReference) {
+  if (reference.type === "page") return `Trang ${reference.page}`;
+  if (reference.type === "image") return "Vùng ảnh";
+  if (reference.type === "paragraph")
+    return reference.table && reference.cell
+      ? `Bảng ${reference.table}, ô ${reference.cell}`
+      : `Đoạn ${reference.index}`;
+  if (reference.type === "cells") return `${reference.sheet} · ${reference.range}`;
+  if (reference.type === "source" && reference.location_missing)
+    return "Không xác định được vị trí";
+  return "Toàn bộ đoạn";
 }

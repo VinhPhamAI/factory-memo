@@ -15,6 +15,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
+from backend.src.storage.file_library import FileBlobStore
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
@@ -46,11 +48,16 @@ class DocumentUploadStore:
 
     Docker mounts a named volume at the root; host-run APIs use data/uploads.
     Client filenames are metadata only and never participate in filesystem paths.
+    Source readers also resolve flat library keys under the separate library root.
     """
 
-    def __init__(self, root: Path | None = None, *, max_bytes: int = MAX_DOCUMENT_BYTES):
+    def __init__(self, root: Path | None = None, *, max_bytes: int = MAX_DOCUMENT_BYTES,
+                 library_root: Path | None = None):
+        """Configure legacy upload storage and the library used by linked sources."""
+
         self.root = (root if root is not None else uploads_dir_from_env()).resolve()
         self.max_bytes = max_bytes
+        self.library = FileBlobStore(library_root)
 
     def object_dir(self, kb: str, document_id: str) -> Path:
         if not re.fullmatch(r"[a-z][a-z0-9_]{0,59}", kb):
@@ -123,12 +130,27 @@ class DocumentUploadStore:
         self.update_processing(kb, document_id, state)
         return state
 
-    def save(self, kb: str, source: BinaryIO, *, filename: str, content_type: str) -> StoredDocument:
+    def save(
+        self,
+        kb: str,
+        source: BinaryIO,
+        *,
+        filename: str,
+        content_type: str,
+        source_id: UUID | None = None,
+    ) -> StoredDocument:
+        """Stream original bytes into their final source-keyed object.
+
+        Passing `source_id` uses the application-database layout and writes no
+        metadata sidecar. Omitting it preserves the legacy object format used
+        by benchmark and pre-cutover code.
+        """
+
         if not re.fullmatch(r"[a-z][a-z0-9_]{0,59}", kb):
             raise ValueError("Invalid knowledge base name")
         if not filename.strip() or len(filename) > 1024 or "\x00" in filename:
             raise ValueError("A filename of 1-1024 characters is required")
-        document_id = uuid4().hex
+        document_id = (source_id or uuid4()).hex
         parent = self.root / kb
         parent.mkdir(parents=True, exist_ok=True)
         pending = Path(tempfile.mkdtemp(prefix=".upload-", dir=parent))
@@ -151,13 +173,43 @@ class DocumentUploadStore:
                 storage_key=f"{kb}/{document_id}/content",
                 uploaded_at=datetime.now(timezone.utc),
             )
-            (pending / "metadata.json").write_text(document.model_dump_json(indent=2), encoding="utf-8")
+            if source_id is None:
+                (pending / "metadata.json").write_text(
+                    document.model_dump_json(indent=2), encoding="utf-8"
+                )
             pending.rename(parent / document_id)
             return document
         finally:
             # Also removes partial files after disk errors or an interrupted copy.
             if pending.exists():
                 shutil.rmtree(pending)
+
+    def remove(self, storage_key: str) -> None:
+        """Remove one source object after its database transaction failed."""
+
+        parts = Path(storage_key).parts
+        if len(parts) != 3 or parts[2] != "content":
+            raise ValueError("Invalid document storage key")
+        directory = self.object_dir(parts[0], parts[1])
+        if directory.exists():
+            shutil.rmtree(directory)
+
+    def content_path(self, storage_key: str) -> Path:
+        """Resolve legacy or library source keys without moving original bytes.
+
+        Returns:
+            A path under the configured upload or library root, without checking existence.
+
+        Raises:
+            ValueError: The key does not match either store's layout.
+        """
+
+        if re.fullmatch(r"[0-9a-f]{32}", storage_key):
+            return self.library.path(storage_key)
+        parts = Path(storage_key).parts
+        if len(parts) != 3 or parts[2] != "content":
+            raise ValueError("Invalid document storage key")
+        return self.object_dir(parts[0], parts[1]) / "content"
 
 
 def text_convertible(document: StoredDocument) -> bool:

@@ -1,6 +1,7 @@
 import type { AnswerEvent, Citation, KnowledgeBase, Source } from "@/types";
 import type { KnowledgeClient } from "./chat";
 import { apiBaseUrl } from "./config";
+import { sessionClient } from "./auth-api";
 import { parseCaseCard, parseScope } from "./case-card";
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -9,7 +10,7 @@ const object = (value: unknown): value is Record<string, unknown> =>
 export async function listKnowledgeBases(
   signal: AbortSignal,
 ): Promise<KnowledgeBase[]> {
-  const response = await fetch(
+  const response = await sessionClient.authorizedFetch(
     `${apiBaseUrl}/v1/knowledge-agent/knowledge-bases`,
     { signal },
   );
@@ -135,7 +136,7 @@ export class ApiKnowledgeClient implements KnowledgeClient {
   ): AsyncIterable<AnswerEvent> {
     if (!context?.kb || !context.threadId)
       throw new Error("Hãy chọn knowledge base trước khi hỏi.");
-    const response = await fetch(
+    const response = await sessionClient.authorizedFetch(
       `${apiBaseUrl}/v1/knowledge-agent/${encodeURIComponent(context.kb)}/stream`,
       {
         method: "POST",

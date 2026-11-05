@@ -185,9 +185,8 @@ docker compose -f deployments/docker-compose.yml logs -f api
 This also starts PostgreSQL and waits for it to be healthy. The API is available
 at **http://localhost:8005** (`/healthz` for health, `/docs` for API documentation).
 Set `API_PORT` in `.env` to change the host port. Recordings and other runtime
-data persist in the host's `data/` directory across container recreation.
-Document uploads use the separate Docker-managed `document_uploads` volume,
-mounted at `/app/data/uploads/`; host-run APIs default to `data/uploads/`.
+data, including document uploads (`data/uploads/`), persist in the host's `data/`
+directory across container recreation, so host-run and containerised services share them.
 Rebuild with the same command after changing backend code or dependencies.
 
 **Job workers** run Convert/Extract jobs (Auto uploads and recordings, and the
@@ -204,10 +203,11 @@ each). See [job queue and workers](docs/features/knowledge-management.md#job-que
 
 Inside Compose, the API connects to `postgres:5432` and `ai-services-api:8080`;
 `API_DATABASE_URL` and `API_SPEECH_API_URL` override these defaults. Sign-in
-uses the migrated application database (`APP_DATABASE_URL`; in Compose,
-`API_APP_DATABASE_URL`) and `AUTH_ALLOWED_ORIGINS`; agent chat needs `AGENT_API_TOKEN`
-and reaches the agent at `host.docker.internal:8010` (`API_AGENT_BASE_URL` overrides;
-see [agent conversations](docs/features/conversations.md)). Authentication: see
+and the served knowledge source/job pipeline use the migrated application
+database (`APP_DATABASE_URL`; in Compose, `API_APP_DATABASE_URL`). The worker
+requires the same URL. `AUTH_ALLOWED_ORIGINS` configures browser access; agent
+chat needs `AGENT_API_TOKEN` and reaches the agent at `host.docker.internal:8010`
+(`API_AGENT_BASE_URL` overrides; see [agent conversations](docs/features/conversations.md)). See
 [authentication](docs/features/authentication.md). For chat or embedding
 endpoints running on the Docker host, replace `localhost` in the corresponding
 `*_BASE_URL` with `host.docker.internal`. `VOICE_AUDIO_DIR` inside the API
@@ -248,8 +248,8 @@ default `VITE_DATA_MODE=api` connects QA to FastAPI through the Vite `/v1` proxy
 If you already have `.env.local`, set its data mode to `api` and restart Vite.
 The **Ghi âm** tab records a conversation (needs the speech service and HTTPS or
 localhost for the microphone); after Stop it shows the transcript next to the
-extracted knowledge for approval. **Tải lên tài liệu** stores original documents
-without creating a conversation or extracting content; see [document uploads](docs/features/document-uploads.md).
+extracted knowledge for approval. **Tải lên tài liệu** stores originals in the personal file library and attaches them
+to the selected KB, with optional Auto conversion/extraction; see [document uploads](docs/features/document-uploads.md).
 **Thư viện file** keeps each signed-in user's own PDF, XLSX, DOCX, JPEG and PNG files;
 see [file library](docs/features/file-library.md). See the
 [frontend guide](frontend/README.md) for configuration, tests and optional mock demo.

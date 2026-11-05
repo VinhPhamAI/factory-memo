@@ -8,8 +8,8 @@ Extract** is selected: the recording then sends `extract_mode` and, once saved,
 an extraction job is queued for the [job workers](knowledge-management.md#job-queue-and-workers).
 Legacy API clients without `extract_mode` still extract in the API process by
 default unless they send `extract=false`. The
-same page offers **Tải lên tài liệu** for storage-only document uploads, independent
-of conversations; see [document uploads](document-uploads.md). The typed-text API
+same page offers **Tải lên tài liệu** to save personal library files and attach them
+to a KB for manual or Auto processing, independently of conversations; see [document uploads](document-uploads.md). The typed-text API
 remains available to existing clients (see [Typed text](#typed-text)).
 
 ```text
@@ -141,8 +141,8 @@ the quote highlighted. A cleaned turn that loses a number keeps its raw text
 Records start as `draft` and stay searchable. **Duyệt** sets `approved`,
 **Loại bỏ** sets `deprecated` (excluded from search), **Hoàn tác** returns to
 `draft`; each decision is appended to `revision.history` with an optional note.
-Content is never edited. There is no authentication: the actor is recorded as
-the unauthenticated review UI.
+Content is never edited. Review requires an expert or administrator, and the
+actor is recorded as that signed-in account.
 
 ## API
 
@@ -159,6 +159,9 @@ the unauthenticated review UI.
 | POST | `/v1/voice/{kb}/conversations/{id}/extract` | Retry failed/interrupted extraction |
 | POST | `/v1/voice/{kb}/conversations/{id}/clean` | Start (or retry) cleaning |
 | POST | `/v1/voice/{kb}/knowledge/{record_id}/review` | `{"decision": "approve" \| "reject" \| "reset", "note": "…"}` |
+
+Every HTTP route requires a bearer access token. The WebSocket `start` message
+includes `access_token`; the server authenticates it before accepting audio.
 
 WebSocket events from the server: `ready`, `partial` (text appended to the
 utterance in progress), `turns` (finished turns; recorded turns have no speaker letter),

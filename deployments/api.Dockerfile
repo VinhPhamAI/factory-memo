@@ -15,8 +15,10 @@ RUN apt-get update \
 # uv.lock is currently ignored by Git; resolve from the committed manifest.
 # Speech inference runs in speech-api; the API needs no CUDA packages.
 COPY pyproject.toml README.md ./
-RUN uv venv \
-    && uv pip install --no-cache --torch-backend cpu -r pyproject.toml
+ARG UV_HTTP_TIMEOUT=120
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv \
+    && UV_LINK_MODE=copy uv pip install --torch-backend cpu -r pyproject.toml
 
 COPY backend/ ./backend/
 RUN mkdir -p /app/data/audio

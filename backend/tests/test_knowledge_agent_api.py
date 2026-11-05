@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -14,6 +15,8 @@ from backend.src.agents.agent.service import (
     AgentStreamSession,
     KnowledgeAgentUpstreamError,
 )
+
+from backend.src.services.auth import Account, InvalidSession
 
 
 def _event(sequence: int, event: str, data: dict) -> AgentStreamEvent:
@@ -55,12 +58,32 @@ class FakeAgent:
         )
 
 
+class FakeAuth:
+    """Accept the fixture bearer token without opening a database."""
+
+    async def authenticate_access(self, token: str) -> Account:
+        """Return an employee account for a valid test token."""
+
+        if token != "qa-test":
+            raise InvalidSession()
+        return Account(uuid4(), "employee", "Employee", "employee")
+
+
+def client_for(agents: dict[str, FakeAgent]) -> TestClient:
+    """Exercise the authenticated QA routes with controlled agents."""
+
+    return TestClient(
+        create_app(knowledge_agents=agents, auth_service=FakeAuth()),
+        headers={"Authorization": "Bearer qa-test"},
+    )
+
+
 class KnowledgeAgentApiTest(unittest.TestCase):
     def test_enterprise_endpoint_selects_its_agent_without_body_kb(self) -> None:
         enterprise, general = FakeAgent(), FakeAgent()
-        with TestClient(create_app(knowledge_agents={
+        with client_for({
             "enterprise_rag": enterprise, "general": general,
-        })) as client:
+        }) as client:
             response = client.post(
                 "/v1/knowledge-agent/enterprise_rag/stream",
                 json={"query": "  Who owns ENG-4825?  ", "thread_id": "thread-1"},
@@ -75,7 +98,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
 
     def test_scoped_endpoint_validates_body_and_unknown_kb(self) -> None:
         agent = FakeAgent()
-        with TestClient(create_app(knowledge_agents={"enterprise_rag": agent})) as client:
+        with client_for({"enterprise_rag": agent}) as client:
             for body in (
                 {"query": " ", "thread_id": "t"},
                 {"query": "hi", "thread_id": " "},
@@ -93,7 +116,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertEqual(agent.calls, [])
 
     def test_enterprise_stream_reports_agent_failure(self) -> None:
-        with TestClient(create_app(knowledge_agents={"enterprise_rag": FakeAgent(fail=True)})) as client:
+        with client_for({"enterprise_rag": FakeAgent(fail=True)}) as client:
             response = client.post(
                 "/v1/knowledge-agent/enterprise_rag/stream",
                 json={"query": "question", "thread_id": "t"},
@@ -104,7 +127,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
 
     def test_streams_versioned_sse_events(self) -> None:
         agent = FakeAgent()
-        with TestClient(create_app(knowledge_agents={"general": agent})) as client:
+        with client_for({"general": agent}) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
                 json={"kb": "general", "query": "  sensor?  ", "thread_id": "thread-1"},
@@ -120,7 +143,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertIn("id: request-1:4", response.text)
 
     def test_converts_stream_errors_to_run_failed(self) -> None:
-        with TestClient(create_app(knowledge_agents={"general": FakeAgent(fail=True)})) as client:
+        with client_for({"general": FakeAgent(fail=True)}) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
                 json={"kb": "general", "query": "sensor?", "thread_id": "thread-1"},
@@ -132,7 +155,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertIn('"error_type":"FakeFailure"', response.text)
 
     def test_rejects_blank_queries_before_starting_stream(self) -> None:
-        with TestClient(create_app(knowledge_agents={"general": FakeAgent()})) as client:
+        with client_for({"general": FakeAgent()}) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
                 json={"kb": "general", "query": "   ", "thread_id": "thread-1"},
@@ -143,7 +166,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
     def test_routes_to_the_requested_knowledge_base(self) -> None:
         general, other = FakeAgent(), FakeAgent()
         agents = {"general": general, "other": other}
-        with TestClient(create_app(knowledge_agents=agents)) as client:
+        with client_for(agents) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
                 json={"kb": "other", "query": "sensor?", "thread_id": "thread-1"},
@@ -154,7 +177,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertEqual(other.calls, [("sensor?", "thread-1")])
 
     def test_rejects_unknown_knowledge_base(self) -> None:
-        with TestClient(create_app(knowledge_agents={"general": FakeAgent()})) as client:
+        with client_for({"general": FakeAgent()}) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
                 json={"kb": "missing", "query": "sensor?", "thread_id": "thread-1"},
@@ -163,7 +186,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_requires_a_knowledge_base(self) -> None:
-        with TestClient(create_app(knowledge_agents={"general": FakeAgent()})) as client:
+        with client_for({"general": FakeAgent()}) as client:
             response = client.post(
                 "/v1/knowledge-agent/stream",
                 json={"query": "sensor?", "thread_id": "thread-1"},
@@ -173,7 +196,7 @@ class KnowledgeAgentApiTest(unittest.TestCase):
 
     def test_lists_knowledge_bases(self) -> None:
         agents = {"other": FakeAgent(), "general": FakeAgent()}
-        with TestClient(create_app(knowledge_agents=agents)) as client:
+        with client_for(agents) as client:
             response = client.get("/v1/knowledge-agent/knowledge-bases")
 
         self.assertEqual(response.status_code, 200)

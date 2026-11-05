@@ -356,6 +356,35 @@ class FileLibraryApiTest(PostgresAuthTest):
         self.assertEqual(self.client.get("/v1/files", headers=self.bob).json()["files"][0]["filename"],
                          "bob.pdf")
 
+    def test_knowledge_uploads_stay_out_of_the_personal_library(self) -> None:
+        """Keep KB evidence outside personal listing, downloads and deletion."""
+
+        personal = self.uploaded(self.alice)
+        owner = self.sql("SELECT uploaded_by FROM files WHERE id = :id",
+                         id=UUID(personal["id"])).scalar_one()
+        file_id = uuid4()
+        storage_key = f"line_a/{uuid4().hex}/content"
+        self.sql(
+            "INSERT INTO files (id, filename, content_type, size_bytes, storage_key, "
+            "sha256, uploaded_by) VALUES (:id, 'evidence.pdf', 'application/pdf', "
+            ":size, :key, :sha, :owner)",
+            id=file_id, size=len(PDF), key=storage_key,
+            sha=hashlib.sha256(PDF).hexdigest(), owner=owner,
+        )
+        listing = self.client.get("/v1/files", headers=self.alice)
+        self.assertEqual([item["id"] for item in listing.json()["files"]], [personal["id"]])
+        for method, path in (
+            ("GET", f"/v1/files/{file_id}"),
+            ("GET", f"/v1/files/{file_id}/content"),
+            ("DELETE", f"/v1/files/{file_id}"),
+        ):
+            with self.subTest(method=method, path=path):
+                self.assertEqual(self.client.request(method, path, headers=self.alice).status_code, 404)
+        self.assertIsNone(self.sql("SELECT deleted_at FROM files WHERE id = :id",
+                                   id=file_id).scalar_one())
+        download = self.client.get(f"/v1/files/{personal['id']}/content", headers=self.alice)
+        self.assertEqual(download.content, PDF)
+
     def test_metadata_and_download_of_own_file(self) -> None:
         body = self.uploaded(self.alice, "Hướng dẫn máy.pdf")
         self.assertEqual(self.client.get(f"/v1/files/{body['id']}", headers=self.alice).json(), body)

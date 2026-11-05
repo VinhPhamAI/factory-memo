@@ -70,6 +70,8 @@ class KnowledgeBase(RecordDates, Base):
     name: Mapped[str] = mapped_column(Text, unique=True)
     title: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
+    # Built-in knowledge base whose extraction and retrieval policy this one copies.
+    template: Mapped[str] = mapped_column(Text)
     created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
 
 
@@ -88,6 +90,13 @@ class KnowledgeSource(RecordDates, Base):
             "kind = 'text' OR file_id IS NOT NULL", name="file_required_for_kind"
         ),
         json_object("metadata"),
+        Index(
+            "ix_knowledge_sources_active_original",
+            "knowledge_base_id",
+            "original_sha256",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND original_sha256 IS NOT NULL"),
+        ),
         # Target of composite references that keep processing records in the
         # source's collection.
         UniqueConstraint("id", "knowledge_base_id"),
@@ -98,6 +107,7 @@ class KnowledgeSource(RecordDates, Base):
         ForeignKey("knowledge_bases.id"), index=True
     )
     file_id: Mapped[UUID | None] = mapped_column(ForeignKey("files.id"), index=True)
+    original_sha256: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(Text)
     # NULL until the source is converted to text.

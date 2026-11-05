@@ -2,7 +2,8 @@
 
 Bytes live at `<root>/<storage key>`, where the key is a random 32-character
 hex name. Client filenames are metadata only and never become paths. Records
-live in the application database (APP_DATABASE_URL).
+live in the application database (APP_DATABASE_URL). Knowledge-source uploads
+share `files` but use a different storage-key namespace and are excluded here.
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_FILE_BYTES = 100 * 1024 * 1024
 _CHUNK_BYTES = 1024 * 1024
 _STORAGE_KEY = re.compile(r"[0-9a-f]{32}")
+# KB originals have nested keys under DOCUMENT_UPLOAD_DIR, not FILE_LIBRARY_DIR.
+_LIBRARY_FILE = File.storage_key.regexp_match(f"^{_STORAGE_KEY.pattern}$")
 
 
 def file_library_dir_from_env() -> Path:
@@ -206,30 +209,31 @@ class FileRecordStore:
         return _record(row)
 
     async def get(self, file_id: UUID) -> FileRecord | None:
-        """Return a file record by ID, including a deleted one, or None if unknown.
+        """Return a personal-library record, including a deleted one, or None.
 
+        Knowledge-source files live in a separate byte store and are excluded.
         Callers decide access with the record's owner and deletion time.
         """
 
         async with self._transaction() as session:
-            row = await session.get(File, file_id)
+            row = await session.scalar(select(File).where(File.id == file_id, _LIBRARY_FILE))
             return None if row is None else _record(row)
 
     async def list_owned(self, user_id: UUID) -> list[FileRecord]:
-        """Return a user's files that are not deleted, newest first."""
+        """Return a user's non-deleted personal-library files, newest first."""
 
         async with self._transaction() as session:
             rows = (
                 await session.scalars(
                     select(File)
-                    .where(File.uploaded_by == user_id, File.deleted_at.is_(None))
+                    .where(File.uploaded_by == user_id, File.deleted_at.is_(None), _LIBRARY_FILE)
                     .order_by(File.created_at.desc(), File.id.desc())
                 )
             ).all()
             return [_record(row) for row in rows]
 
     async def soft_delete(self, file_id: UUID, user_id: UUID) -> bool:
-        """Set `deleted_at` on a user's file that is not yet deleted.
+        """Set `deleted_at` on a user's non-deleted personal-library file.
 
         Returns:
             True when a row changed; False when the file is unknown, belongs
@@ -239,7 +243,10 @@ class FileRecordStore:
         async with self._transaction() as session:
             result = await session.execute(
                 update(File)
-                .where(File.id == file_id, File.uploaded_by == user_id, File.deleted_at.is_(None))
+                .where(
+                    File.id == file_id, File.uploaded_by == user_id,
+                    File.deleted_at.is_(None), _LIBRARY_FILE,
+                )
                 .values(deleted_at=func.now())
             )
             return result.rowcount == 1

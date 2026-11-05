@@ -10,8 +10,10 @@ shadcn/ui. API mode requires sign-in; mock mode needs no account.
 extracted results, with per-source mode selection and shared review. TXT files
 can be extracted directly from Raw without a manual Convert step. Recording
 transcripts, speaker labels and audio are reviewed in the same workspace. The **Tải lên tài liệu**
-tab stores PDF, images, TXT, PPTX and other files independently of conversations,
-without extraction. See [voice capture](../docs/features/voice-capture.md) and
+tab uploads PDF, DOCX, XLSX, PNG and JPEG through the same `/v1/files` API as
+**Thư viện file**, then attaches the saved ID to the selected KB. **Chỉ lưu** keeps
+the source raw; **Auto** queues conversion and extraction. Retrying a failed
+attachment reuses the saved file. See [voice capture](../docs/features/voice-capture.md) and
 [document uploads](../docs/features/document-uploads.md) and
 [knowledge management](../docs/features/knowledge-management.md). The old five-step MR-JE-AX167 simulation remains available explicitly in
 `mock` mode.
@@ -69,7 +71,8 @@ owns the client:
 owns the client and `src/pages/conversations.tsx` the screen.
 
 - API mode uses a left sidebar (a drawer below 860 px): brand, the three sections,
-  and on `/ask` a new-chat button and the conversation list, with the account and
+  with expandable **Quản lý tri thức** links for knowledge bases, sources, search
+  and conflicts, and on `/ask` a new-chat button and the conversation list, with the account and
   sign-out at the bottom (`src/components/qa-shell.tsx`, `conversation-list.tsx`).
 - Conversations are saved on the server per account and listed newest activity
   first; each item has rename and delete. The first message of a new chat creates

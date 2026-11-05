@@ -1,12 +1,24 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { CheckCircle2, FileText, Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { uploadDocument, type StoredDocument } from "@/services/document-api";
+import {
+  attachLibraryFile,
+  uploadDocument,
+  type StoredDocument,
+} from "@/services/document-api";
+import {
+  ACCEPTED_EXTENSIONS,
+  uploadFile,
+  type LibraryFile,
+} from "@/services/file-api";
+import { useAuthClient } from "@/hooks/auth";
+import type { AuthClient } from "@/services/auth-api";
 
 interface UploadItem {
   file: File;
   document?: StoredDocument;
+  libraryFile?: LibraryFile;
   error?: string;
 }
 
@@ -17,18 +29,27 @@ function fileSize(bytes: number) {
   return `${value.toLocaleString("vi-VN", { maximumFractionDigits: 2 })} ${unit}`;
 }
 
+function documentLink(document: StoredDocument) {
+  return `/knowledge/${encodeURIComponent(document.kb)}/sources/upload/${encodeURIComponent(document.id)}`;
+}
+
 export function DocumentUpload({
   kb,
   disabled,
   extractMode = null,
   onBusy,
+  onStored,
+  libraryClient,
 }: {
   kb: string;
   disabled: boolean;
   /** Auto: queue conversion and extraction in this mode after each upload. */
   extractMode?: "knowledge" | "documents" | null;
   onBusy(busy: boolean): void;
+  onStored?(): void;
+  libraryClient?: AuthClient;
 }) {
+  const navigate = useNavigate();
   const [items, setItems] = useState<UploadItem[]>([]);
   const [sending, setSending] = useState(false);
   const [active, setActive] = useState<number | null>(null);
@@ -39,16 +60,44 @@ export function DocumentUpload({
     if (disabled || sending || !pending) return;
     setSending(true);
     onBusy(true);
+    let stored = false;
     try {
       for (let index = 0; index < items.length; index++) {
         const item = items[index];
         if (item.document) continue;
         setActive(index);
+        let libraryFile = item.libraryFile;
         try {
-          const document = await uploadDocument(kb, item.file, extractMode);
+          if (libraryClient && !libraryFile) {
+            libraryFile = await uploadFile(libraryClient, item.file);
+            const savedFile = libraryFile;
+            setItems((current) =>
+              current.map((entry, i) =>
+                i === index
+                  ? { ...entry, libraryFile: savedFile, error: undefined }
+                  : entry,
+              ),
+            );
+          }
+          const document =
+            libraryClient && libraryFile
+              ? await attachLibraryFile(
+                  libraryClient,
+                  kb,
+                  libraryFile.id,
+                  extractMode,
+                )
+              : await uploadDocument(kb, item.file, extractMode);
+          stored = true;
+          if (document.duplicate && pendingCount === 1) {
+            void navigate(documentLink(document), {
+              state: { notice: "File đã có trong KB" },
+            });
+            return;
+          }
           setItems((current) =>
             current.map((entry, i) =>
-              i === index ? { file: entry.file, document } : entry,
+              i === index ? { ...entry, document, error: undefined } : entry,
             ),
           );
         } catch (error) {
@@ -57,8 +106,9 @@ export function DocumentUpload({
               i === index
                 ? {
                     ...entry,
-                    error:
-                      error instanceof Error ? error.message : String(error),
+                    error: `${libraryFile ? "File đã lưu trong Thư viện file. " : ""}${
+                      error instanceof Error ? error.message : String(error)
+                    }`,
                   }
                 : entry,
             ),
@@ -69,6 +119,7 @@ export function DocumentUpload({
       setActive(null);
       setSending(false);
       onBusy(false);
+      if (stored) onStored?.();
     }
   }
 
@@ -79,6 +130,7 @@ export function DocumentUpload({
         <input
           type="file"
           multiple
+          accept={libraryClient ? ACCEPTED_EXTENSIONS.join(",") : undefined}
           disabled={sending}
           onChange={(event) => {
             const selected = Array.from(event.target.files ?? []);
@@ -91,8 +143,11 @@ export function DocumentUpload({
           aria-describedby="document-upload-help"
         />
         <small id="document-upload-help">
-          PDF, hình ảnh, TXT, PPTX, DOCX, XLSX và các loại file khác. Có thể
-          chọn nhiều lần để thêm file vào danh sách, tối đa 100 MiB mỗi file.
+          {libraryClient
+            ? "PDF, XLSX, DOCX, JPEG, PNG."
+            : "PDF, hình ảnh, TXT, PPTX, DOCX, XLSX và các loại file khác."}{" "}
+          Có thể chọn nhiều lần để thêm file vào danh sách, tối đa 100 MiB mỗi
+          file.
         </small>
         <small role="status">Đang chờ tải lên: {pendingCount} file.</small>
       </label>
@@ -100,6 +155,15 @@ export function DocumentUpload({
       <div className="vc-notice" role="note">
         <FileText size={18} />
         <p>
+          {libraryClient && (
+            <>
+              File được lưu vào{" "}
+              <Link to="/files" className="link-button">
+                Thư viện file
+              </Link>{" "}
+              và liên kết với knowledge base.{" "}
+            </>
+          )}
           {extractMode
             ? "Auto: sau khi lưu file gốc, worker tự chuyển đổi và trích xuất. Theo dõi và duyệt kết quả trong "
             : "Tải lên chỉ lưu file gốc theo knowledge base. Chuyển đổi, trích xuất và duyệt kết quả trong "}
@@ -118,10 +182,13 @@ export function DocumentUpload({
               <small>{fileSize(item.file.size)}</small>
               {item.document ? (
                 <span className="vc-upload-success">
-                  <CheckCircle2 size={16} /> Đã lưu vào {item.document.kb} · Mã:{" "}
-                  {item.document.id} ·{" "}
+                  <CheckCircle2 size={16} />{" "}
+                  {item.document.duplicate
+                    ? "File đã có trong KB"
+                    : `Đã lưu vào ${item.document.kb}`}{" "}
+                  · Mã: {item.document.id} ·{" "}
                   <Link
-                    to={`/knowledge/${encodeURIComponent(item.document.kb)}/sources/upload/${item.document.id}`}
+                    to={documentLink(item.document)}
                     className="link-button"
                   >
                     Xem / xử lý
@@ -170,4 +237,12 @@ export function DocumentUpload({
       </Button>
     </>
   );
+}
+
+/** Store bytes through the personal library, then attach them for KB processing. */
+export function LibraryDocumentUpload(
+  props: Omit<Parameters<typeof DocumentUpload>[0], "libraryClient">,
+) {
+  const client = useAuthClient();
+  return <DocumentUpload {...props} libraryClient={client} />;
 }

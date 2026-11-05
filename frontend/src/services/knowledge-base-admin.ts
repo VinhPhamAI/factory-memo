@@ -1,6 +1,7 @@
 import type { KnowledgeBase } from "@/types";
 import { ApiError } from "./voice-api";
 import { apiBaseUrl } from "./config";
+import { sessionClient } from "./auth-api";
 
 export const MAX_KB_TITLE = 80;
 export const MAX_KB_DESCRIPTION = 500;
@@ -36,7 +37,7 @@ export async function createKnowledgeBase(form: {
 }): Promise<KnowledgeBase> {
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}/v1/knowledge-bases`, {
+    response = await sessionClient.authorizedFetch(`${apiBaseUrl}/v1/knowledge-bases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(form),
@@ -55,16 +56,66 @@ export async function createKnowledgeBase(form: {
     // Not JSON; the status code is enough.
   }
   if (response.status === 409)
-    throw new Error(
-      detail.startsWith("Database")
-        ? `Trên máy chủ đã có database kb_${form.name} chưa đăng ký. Chọn mã khác để không lẫn dữ liệu cũ.`
-        : `Mã “${form.name}” đã được dùng. Chọn mã khác.`,
-    );
-  if (response.status === 403)
+    throw new Error(`Mã “${form.name}” đã được dùng. Chọn mã khác.`);
+  if (response.status === 403) {
+    // The API uses 403 for both a missing role and the creation limit.
+    if (/role required/i.test(detail))
+      throw new Error("Chỉ chuyên gia hoặc quản trị viên mới tạo được knowledge base.");
     throw new Error("Đã đạt số knowledge base tối đa có thể tạo.");
+  }
   if (response.status === 503)
-    throw new Error(
-      "Máy chủ không tạo được database. Kiểm tra PostgreSQL rồi thử lại.",
-    );
+    throw new Error("Kho ứng dụng chưa sẵn sàng. Hãy thử lại.");
   throw new ApiError(response.status, detail);
+}
+
+export interface KnowledgeBaseDetail {
+  name: string;
+  title: string;
+  description: string;
+  template: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  source_counts: Record<string, number>;
+  chunk_counts: Record<string, Record<string, number>>;
+}
+
+const detailPath = (name: string) =>
+  `${apiBaseUrl}/v1/knowledge-bases/${encodeURIComponent(name)}`;
+
+async function requestDetail(name: string, init?: RequestInit) {
+  const response = await sessionClient.authorizedFetch(detailPath(name), init);
+  if (response.status === 404) throw new Error("Không tìm thấy knowledge base.");
+  if (response.status === 403)
+    throw new Error("Bạn không có quyền thay đổi knowledge base này.");
+  if (!response.ok) throw new ApiError(response.status, "");
+  return response;
+}
+
+async function readDetail(response: Response): Promise<KnowledgeBaseDetail> {
+  const detail = await response.json() as KnowledgeBaseDetail;
+  if (!detail?.source_counts || !detail.chunk_counts)
+    throw new Error("Máy chủ chưa trả về chi tiết knowledge base.");
+  return detail;
+}
+
+export async function getKnowledgeBase(name: string, signal: AbortSignal) {
+  const response = await requestDetail(name, { signal });
+  return readDetail(response);
+}
+
+export async function updateKnowledgeBase(
+  name: string,
+  changes: Pick<KnowledgeBaseDetail, "title" | "description">,
+) {
+  const response = await requestDetail(name, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(changes),
+  });
+  return readDetail(response);
+}
+
+export async function deleteKnowledgeBase(name: string) {
+  await requestDetail(name, { method: "DELETE" });
 }

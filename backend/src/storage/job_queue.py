@@ -319,7 +319,14 @@ class JobQueue:
             raise StorageError(f"Could not record a heartbeat: {exc}") from exc
         return True
 
-    async def complete(self, job: Job, worker: str, result: dict[str, Any] | None = None) -> Job | None:
+    async def complete(
+        self,
+        job: Job,
+        worker: str,
+        result: dict[str, Any] | None = None,
+        *,
+        continue_pipeline: bool = True,
+    ) -> Job | None:
         """Marks the job done and, in the same transaction, queues its next stage."""
 
         engine = await self._ensure()
@@ -331,7 +338,7 @@ class JobQueue:
                     "result = CAST(:result AS jsonb)",
                     {"result": json.dumps(result or {}, ensure_ascii=False, default=str)},
                 )
-                if not job.next_stages:
+                if not continue_pipeline or not job.next_stages:
                     return None
                 return await self._insert(
                     conn, kb=job.kb, stage=job.next_stages[0], source_kind=job.source_kind,
@@ -543,11 +550,13 @@ class MemoryJobQueue:
         self.jobs[job.id] = replace(current, heartbeat_at=self._now())
         return True
 
-    async def complete(self, job, worker, result=None) -> Job | None:
+    async def complete(
+        self, job, worker, result=None, *, continue_pipeline=True
+    ) -> Job | None:
         current = self._owned(job, worker)
         self.jobs[job.id] = replace(current, status="done", finished_at=self._now(),
                                     locked_by=None, result=dict(result or {}))
-        if not current.next_stages:
+        if not continue_pipeline or not current.next_stages:
             return None
         return self._insert(kb=current.kb, stage=current.next_stages[0],
                             source_kind=current.source_kind, source_id=current.source_id,

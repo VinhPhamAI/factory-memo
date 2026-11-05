@@ -3,7 +3,24 @@
 Document OCR for PDF, PNG and JPEG files with the
 [PaddleOCR-VL-1.6](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6) pipeline.
 It is sized for one or two people testing, not for production load.
-The ingestion pipeline does not call it yet.
+The backend ingestion convert worker calls this service through the externally
+hosted `ai-services-api` gateway for PNG, JPEG and scanned PDF sources.
+
+## Ingestion client
+
+Set `OCR_API_URL` on the backend worker to the gateway base URL; the client appends
+`/v1/ocr`. `OCR_API_KEY`, when set, is sent as a bearer token. `OCR_TIMEOUT_S`
+defaults to 300 seconds and `OCR_DOC_ORIENTATION=1` requests orientation correction
+(the OCR host must also use `OCR_DOC_PREPROCESSING=1`). A remote gateway should use
+HTTPS and an authenticating proxy because the original file leaves the backend
+host. The gateway itself does not authenticate requests.
+
+Connection errors, timeouts, HTTP 503 and other server errors retry with the job's
+backoff. Input errors such as HTTP 400, 413 and 422 fail immediately and retain the
+provider's limit message. `OCR_API_URL` being unset is a final conversion error;
+local text, PDF-text, DOCX and XLSX conversion remains available. OCR model, pipeline,
+page count and elapsed time are saved in source conversion metadata. File contents,
+OCR text and `OCR_API_KEY` are not logged.
 
 | Worker | Role | Image |
 | --- | --- | --- |

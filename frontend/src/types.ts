@@ -44,6 +44,21 @@ export interface Source {
   originalId?: string;
 }
 
+export type LocatedReference =
+  | {
+      type: "page" | "image";
+      page: number;
+      bbox?: [number, number, number, number];
+      page_width?: number;
+      page_height?: number;
+      label?: string;
+      quote?: string;
+    }
+  | { type: "paragraph"; index: number; table?: number; cell?: string; quote?: string }
+  | { type: "cells"; sheet: string; range: string; quote?: string }
+  | { type: "source"; quote?: string; location_missing?: boolean }
+  | { type: "passage"; chunk_index: number; quote?: string };
+
 /** One quote that supports a knowledge-card row. */
 export interface EvidenceRef {
   /** Chip label: a turn code ("T04") or a short document label. */
@@ -122,6 +137,7 @@ export interface Citation {
   reviewStatus?: "draft" | "approved" | "deprecated";
   excerpt: string;
   page?: number;
+  location?: LocatedReference;
   turnId?: number;
   turnCode?: string;
   cardRow?: CardRowKey;

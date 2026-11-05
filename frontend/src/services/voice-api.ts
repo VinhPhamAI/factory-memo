@@ -1,5 +1,6 @@
-import type { KnowledgeBase } from "@/types";
+import type { KnowledgeBase, LocatedReference } from "@/types";
 import { apiBaseUrl } from "./config";
+import { sessionClient } from "./auth-api";
 
 export type JobState =
   "off" | "queued" | "running" | "done" | "failed" | "interrupted";
@@ -70,6 +71,7 @@ export interface VoiceRecord {
   verify: VerifyResult | null;
   consolidation: { action?: string; reason?: string; target?: string } | null;
   history: { decision?: string; note?: string | null; at?: string }[];
+  references?: LocatedReference[];
 }
 
 export interface Speaker {
@@ -115,7 +117,7 @@ const kbPath = (kb: string) => `${base()}/${encodeURIComponent(kb)}`;
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(url, init);
+    response = await sessionClient.authorizedFetch(url, init);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;
@@ -263,6 +265,15 @@ export function audioUrl(kb: string, id: string) {
   return `${kbPath(kb)}/conversations/${id}/audio`;
 }
 
+export async function fetchAudio(kb: string, id: string, signal?: AbortSignal) {
+  const response = await sessionClient.authorizedFetch(audioUrl(kb, id), {
+    signal,
+  });
+  if (!response.ok)
+    throw new ApiError(response.status, "Không tải được file ghi âm.");
+  return response.blob();
+}
+
 /** Whole recording kept by the browser, sent when the live socket was lost. */
 /** Saved recording; `job`/`job_error` only when Auto queued extraction. */
 export interface SavedRecording {
@@ -301,4 +312,9 @@ export function recordSocketUrl(kb: string, origin = window.location) {
   const scheme = target.protocol === "https:" ? "wss:" : "ws:";
   const prefix = apiBaseUrl ? target.pathname.replace(/\/+$/, "") : "";
   return `${scheme}//${target.host}${prefix}/v1/voice/${encodeURIComponent(kb)}/record`;
+}
+
+/** Current access credential sent in the WebSocket start message. */
+export function recordAccessToken() {
+  return sessionClient.accessToken;
 }

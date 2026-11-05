@@ -216,6 +216,64 @@ class MigrationRevisionTest(MigratedDatabaseTest):
         finally:
             database.drop()
 
+    def test_upload_hash_upgrade_backfills_and_keeps_duplicate_history(self) -> None:
+        """Upgrade two pre-Phase-7 uploads without losing original file records."""
+
+        database = DisposableDatabase(DATABASE_URL or "")
+        database.create()
+        self.addCleanup(database.drop)
+        config = alembic_config(database.url)
+        engine = create_engine(database.url)
+        self.addCleanup(engine.dispose)
+        user_id, kb_id, first, second, first_file, second_file = (new_id() for _ in range(6))
+        with mock.patch.dict(os.environ, {"EMBEDDING_DIM": str(EMBEDDING_DIM)}):
+            command.upgrade(config, "ed8de1c70a6b")
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO users (id, username, display_name, password_hash, role)
+                    VALUES (:user, 'expert', 'Expert', 'test', 'expert')
+                """), {"user": user_id})
+                conn.execute(text("""
+                    INSERT INTO knowledge_bases (id, name, title, template, created_by)
+                    VALUES (:kb, 'factory', 'Factory', 'general', :user)
+                """), {"kb": kb_id, "user": user_id})
+                for source, file, days in ((first, first_file, 2), (second, second_file, 1)):
+                    conn.execute(text("""
+                        INSERT INTO files (id, filename, content_type, size_bytes, storage_key, sha256, uploaded_by)
+                        VALUES (:file, 'manual.txt', 'text/plain', 4, :key, :sha, :user)
+                    """), {"file": file, "key": str(file), "sha": "a" * 64, "user": user_id})
+                    conn.execute(text("""
+                        INSERT INTO knowledge_sources (id, knowledge_base_id, file_id, title,
+                            kind, submitted_by, created_at)
+                        VALUES (:source, :kb, :file, 'Manual', 'document', :user,
+                            now() - make_interval(days => :days))
+                    """), {"source": source, "kb": kb_id, "file": file, "user": user_id, "days": days})
+                conn.execute(text("""
+                    INSERT INTO ingestion_jobs (id, knowledge_base_id, source_id, stage)
+                    VALUES (:job, :kb, :source, 'convert')
+                """), {"job": new_id(), "kb": kb_id, "source": second})
+                conn.execute(text("""
+                    INSERT INTO extraction_runs (id, knowledge_base_id, source_id, content_sha256,
+                        mode, fingerprint, status, result)
+                    VALUES (:run, :kb, :source, :sha, 'knowledge', 'fixture', 'done', '{"stored": 2}')
+                """), {"run": new_id(), "kb": kb_id, "source": second, "sha": "a" * 64})
+            command.upgrade(config, "head")
+        command.check(config)
+        with Session(engine) as session, session.begin():
+            self.assertEqual(session.get(KnowledgeSource, first).original_sha256, "a" * 64)
+            self.assertIsNone(session.get(KnowledgeSource, first).deleted_at)
+            self.assertIsNotNone(session.get(KnowledgeSource, second).deleted_at)
+            self.assertIsNone(session.get(File, first_file).deleted_at)
+            self.assertIsNotNone(session.get(File, second_file).deleted_at)
+            self.assertEqual(session.scalar(select(IngestionJob.error)), "SOURCE_REMOVED")
+            run = session.scalars(select(ExtractionRun)).one()
+            self.assertEqual((run.source_id, run.source_removed, run.status, run.result),
+                             (second, True, "done", {"stored": 2}))
+            session.add(ExtractionRun(
+                knowledge_base_id=kb_id, source_id=first, content_sha256=run.content_sha256,
+                mode=run.mode, fingerprint=run.fingerprint, status="done",
+            ))
+
     def test_upgrade_refuses_the_service_job_queue_database(self) -> None:
         database = DisposableDatabase(DATABASE_URL or "")
         database.create()
@@ -281,8 +339,8 @@ class SessionStorageUpgradeTest(unittest.TestCase):
                     )
                     self.assertIn("auth_sessions", inspect(engine).get_table_names())
 
-                    command.downgrade(config, "-1")
-                    command.downgrade(config, "-1")
+                    # The revision before auth sessions were added.
+                    command.downgrade(config, "3665f6870fa4")
                     self.assertNotIn("auth_sessions", inspect(engine).get_table_names())
                     command.upgrade(config, "head")
                     command.check(config)
@@ -314,7 +372,10 @@ class DatabaseRuleTest(MigratedDatabaseTest):
 
     def add_collection(self, owner: User) -> KnowledgeBase:
         collection = KnowledgeBase(
-            name=f"kb_{uuid4().hex[:8]}", title="Collection", created_by=owner.id
+            name=f"kb_{uuid4().hex[:8]}",
+            title="Collection",
+            template="general",
+            created_by=owner.id,
         )
         self.session.add(collection)
         self.session.commit()

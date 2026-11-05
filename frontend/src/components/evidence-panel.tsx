@@ -152,7 +152,12 @@ export function EvidencePanel({
                 "Chưa xác định máy"}
             </div>
           </div>
-          <SourcePreview source={selected} citation={active} compact />
+          <SourcePreview
+            source={selected}
+            citation={active}
+            location={active.location}
+            compact
+          />
         </div>
       ) : (
         <div className="evidence-list">
