@@ -146,7 +146,11 @@ class AgentRuntime:
     """Own admission and graph execution while application lifespan owns clients."""
 
     def __init__(
-        self, graph, ready: Callable[[], Awaitable[bool]], settings: RuntimeSettings
+        self,
+        graph,
+        ready: Callable[[], Awaitable[bool]],
+        settings: RuntimeSettings,
+        provider=None,
     ):
         """Connect the compiled graph, bounded readiness probe and request limits.
 
@@ -154,7 +158,10 @@ class AgentRuntime:
             graph: Compiled LangGraph exposing asynchronous custom streaming.
             ready: Database readiness probe that makes no model call.
             settings: Validated runtime limits and credentials.
+            provider: Open model client for non-graph calls such as inquiry
+                drafts; None disables them.
         """
+        self.provider = provider
         self.graph = graph
         self.ready = ready
         self.settings = settings

@@ -17,6 +17,27 @@ MAX_ANSWER_CHARACTERS = 32_000
 MAX_REASONING_CHARACTERS = 64_000
 # Enough for one tool call with a short query.
 ROUTING_MAX_TOKENS = 256
+# Five bounded text fields (4,000 characters each) plus a title.
+DRAFT_MAX_TOKENS = 4096
+DRAFT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "write_inquiry_draft",
+        "description": "Write the draft inquiry fields from the conversation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "situation": {"type": "string"},
+                "observations": {"type": "string"},
+                "attempted_actions": {"type": "string"},
+                "proposed_fix": {"type": "string"},
+            },
+            "required": ["title"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 @contextmanager
@@ -164,6 +185,45 @@ class ModelArk:
         if not isinstance(arguments, dict):
             return ToolCall("", "", {})
         return ToolCall(call.id, call.function.name, arguments)
+
+    async def draft_inquiry(self, messages: list[dict]) -> dict | None:
+        """Force one `write_inquiry_draft` tool call and return its arguments.
+
+        Args:
+            messages: Drafting instruction and bounded conversation.
+
+        Returns:
+            The parsed argument object, or None when the model made no such
+            call or its arguments are not a JSON object. The caller validates
+            the fields. Reply text is discarded.
+
+        Raises:
+            AgentError: Provider timeout, rejection (including a provider that
+                does not support a pinned tool choice) or request failure.
+        """
+        if self.client is None:
+            raise RuntimeError("ModelArk client is not open")
+        with _provider_errors():
+            reply = await self.client.chat.completions.create(
+                model=self.settings.model,
+                messages=messages,
+                tools=[DRAFT_TOOL],
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": DRAFT_TOOL["function"]["name"]},
+                },
+                max_tokens=DRAFT_MAX_TOKENS,
+            )
+        calls = reply.choices[0].message.tool_calls if reply.choices else None
+        for call in calls or []:
+            if call.function.name != DRAFT_TOOL["function"]["name"]:
+                continue
+            try:
+                arguments = json.loads(call.function.arguments or "")
+            except ValueError:
+                return None
+            return arguments if isinstance(arguments, dict) else None
+        return None
 
     @staticmethod
     async def consume(stream, writer: Callable[[dict], Any]) -> str:

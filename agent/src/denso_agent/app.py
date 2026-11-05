@@ -74,6 +74,7 @@ def create_app(
                 build_graph(provider, saver, resolved, knowledge=knowledge),
                 probe,
                 resolved,
+                provider,
             )
             try:
                 yield
