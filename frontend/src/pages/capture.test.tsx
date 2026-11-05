@@ -1,22 +1,40 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AuthProvider } from "@/hooks/auth";
+import type { AuthClient } from "@/services/auth-api";
 import { CapturePage } from "./capture";
+import { FilesPage } from "./files";
 
 const kbs = {
   knowledge_bases: [{ name: "general", description: "General knowledge" }],
 };
 
 function showCapture() {
+  const client = {
+    restore: async () => {},
+    refresh: async () => false,
+    authorizedFetch: (url: string, init?: RequestInit) => fetch(url, init),
+  } as unknown as AuthClient;
   const router = createMemoryRouter(
-    [{ path: "/capture", element: <CapturePage /> }],
-    {
-      initialEntries: ["/capture"],
-    },
+    [
+      { path: "/capture", element: <CapturePage /> },
+      { path: "/files", element: <FilesPage /> },
+    ],
+    { initialEntries: ["/capture"] },
   );
-  render(<RouterProvider router={router} />);
+  render(
+    <AuthProvider client={client}>
+      <RouterProvider router={router} />
+    </AuthProvider>,
+  );
   return router;
 }
+
+const pick = (...files: File[]) =>
+  fireEvent.change(screen.getByTestId("document-files"), {
+    target: { files },
+  });
 
 describe("document upload tab", () => {
   beforeEach(() => {
@@ -25,189 +43,180 @@ describe("document upload tab", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("replaces typed conversation fields, uploads original files and retries only failed files", async () => {
+  it("uses the personal file API, retries only failed files and shows uploads in the library", async () => {
     let failed = false;
     const uploads: string[] = [];
+    const stored: object[] = [];
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/knowledge-bases")) return Response.json(kbs);
-      if (url.endsWith("/conversations"))
-        return Response.json({ conversations: [] });
-      if (url === "/v1/documents/general/uploads") {
-        const form = init?.body as FormData;
+      if (url === "/v1/documents/general/files") {
+        const body = JSON.parse(init!.body as string);
+        expect(body.extract_mode).toBeNull();
+        return Response.json(
+          { id: body.file_id, kb: "general", status: "stored" },
+          { status: 201 },
+        );
+      }
+      if (url === "/v1/files") {
+        if (init?.method !== "POST") return Response.json({ files: stored });
+        const form = init.body as FormData;
         const file = form.get("file") as File;
-        expect(init?.method).toBe("POST");
-        expect(form.get("name")).toBeNull();
-        expect(form.get("dialogue")).toBeNull();
+        expect(Array.from(form.keys())).toEqual(["file"]);
         uploads.push(file.name);
-        if (file.name === "slides.pptx" && !failed) {
+        if (file.name === "photo.png" && !failed) {
           failed = true;
           return Response.json({}, { status: 503 });
         }
-        return Response.json({
+        const result = {
           id: file.name,
           filename: file.name,
-          kb: "general",
-          status: "stored",
-        });
+          size_bytes: file.size,
+          content_type: file.type,
+          sha256: "a".repeat(64),
+          created_at: "2026-11-05T00:00:00Z",
+        };
+        stored.push(result);
+        return Response.json(result, { status: 201 });
       }
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
     const router = showCapture();
     await screen.findByRole("option", { name: "general" });
-    expect(screen.getByText("Tên cuộc hội thoại")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("mode-documents"));
+    expect(screen.queryByText("Tên cuộc hội thoại")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("capture-clean")).not.toBeInTheDocument();
+    expect(screen.getByTestId("capture-kb")).toBeInTheDocument();
+    expect(screen.getByTestId("processing-store")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     await waitFor(() =>
       expect(screen.getByTestId("capture-kb")).not.toBeDisabled(),
     );
-    expect(screen.queryByText("Tên cuộc hội thoại")).not.toBeInTheDocument();
-    expect(screen.queryByText("Hội thoại nhiều người")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("capture-clean")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("capture-text")).not.toBeInTheDocument();
     expect(screen.getByTestId("document-upload")).toBeDisabled();
-
-    fireEvent.change(screen.getByTestId("document-files"), {
-      target: {
-        files: [
-          new File(["pdf bytes"], "manual.pdf", { type: "application/pdf" }),
-        ],
-      },
-    });
-    fireEvent.change(screen.getByTestId("document-files"), {
-      target: { files: [new File(["slides bytes"], "slides.pptx")] },
-    });
-    expect(screen.getByText("manual.pdf")).toBeInTheDocument();
-    expect(screen.getByText("slides.pptx")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Đang chờ tải lên: 2 file.",
+    expect(screen.getByTestId("document-files")).toHaveAttribute(
+      "accept",
+      ".pdf,.xlsx,.docx,.jpg,.jpeg,.png",
     );
-    // Closing the picker without a selection must also preserve the queue.
-    fireEvent.change(screen.getByTestId("document-files"), {
-      target: { files: [] },
-    });
+
+    pick(new File(["pdf bytes"], "manual.pdf", { type: "application/pdf" }));
+    pick(new File(["image bytes"], "photo.png", { type: "image/png" }));
+    pick();
     expect(screen.getByRole("status")).toHaveTextContent(
       "Đang chờ tải lên: 2 file.",
     );
     fireEvent.click(screen.getByTestId("document-upload"));
     await screen.findByRole("alert");
-    expect(screen.getByText(/Đã lưu vào general/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Đã lưu vào general/)).toHaveLength(1);
     fireEvent.click(screen.getByTestId("document-upload"));
     await waitFor(() =>
       expect(screen.getAllByText(/Đã lưu vào general/)).toHaveLength(2),
     );
-    expect(uploads).toEqual(["manual.pdf", "slides.pptx", "slides.pptx"]);
-    expect(router.state.location.pathname).toBe("/capture");
+    expect(uploads).toEqual(["manual.pdf", "photo.png", "photo.png"]);
     expect(screen.getByTestId("document-upload")).toBeDisabled();
-    expect(fetchMock.mock.calls.every(([url]) => !url.endsWith("/texts"))).toBe(
-      true,
-    );
 
-    // Adding a later batch keeps saved results and does not resend saved files.
-    fireEvent.change(screen.getByTestId("document-files"), {
-      target: { files: [new File(["notes bytes"], "notes.txt")] },
-    });
-    expect(screen.getAllByText(/Đã lưu vào general/)).toHaveLength(2);
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Đang chờ tải lên: 1 file.",
-    );
+    pick(new File(["more bytes"], "more.pdf", { type: "application/pdf" }));
     fireEvent.click(screen.getByTestId("document-upload"));
     await waitFor(() =>
       expect(screen.getAllByText(/Đã lưu vào general/)).toHaveLength(3),
     );
     expect(uploads).toEqual([
       "manual.pdf",
-      "slides.pptx",
-      "slides.pptx",
-      "notes.txt",
+      "photo.png",
+      "photo.png",
+      "more.pdf",
     ]);
-
-    fireEvent.click(screen.getByTestId("mode-voice"));
-    expect(screen.getByText("Tên cuộc hội thoại")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("link", { name: /^Thư viện file$/ }),
+    );
+    expect(await screen.findAllByTestId("library-file")).toHaveLength(3);
+    expect(router.state.location.pathname).toBe("/files");
   });
 
-  it("rejects empty documents without sending them", async () => {
-    localStorage.setItem("voice-capture:mode", "text");
+  it("rejects empty, unsupported and oversized files using library validation", async () => {
+    localStorage.setItem("voice-capture:mode", "documents");
     const fetchMock = vi.fn(async () => Response.json(kbs));
     vi.stubGlobal("fetch", fetchMock);
     showCapture();
     await waitFor(() =>
       expect(screen.getByTestId("capture-kb")).not.toBeDisabled(),
     );
-    fireEvent.change(screen.getByTestId("document-files"), {
-      target: { files: [new File([], "empty.txt")] },
-    });
+    const huge = new File(["bytes"], "large.pdf");
+    Object.defineProperty(huge, "size", { value: 100 * 1024 * 1024 + 1 });
+    pick(new File([], "empty.pdf"), new File(["text"], "notes.txt"), huge);
     fireEvent.click(screen.getByTestId("document-upload"));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Tài liệu trống",
-    );
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(3));
+    expect(
+      screen.getAllByRole("alert").map((element) => element.textContent),
+    ).toEqual([
+      expect.stringContaining("File trống"),
+      expect.stringContaining("Chỉ nhận PDF"),
+      expect.stringContaining("File quá lớn"),
+    ]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("queues conversion and extraction for each upload in Auto mode", async () => {
-    const modes: (string | null)[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.endsWith("/knowledge-bases")) return Response.json(kbs);
-        const form = init?.body as FormData;
-        const file = form.get("file") as File;
-        modes.push(form.get("extract_mode") as string | null);
+  it("retains Auto extraction and retries attachment without uploading saved bytes again", async () => {
+    localStorage.setItem("voice-capture:mode", "text");
+    localStorage.setItem("voice-capture:auto", "true");
+    localStorage.setItem("voice-capture:extract-mode", "documents");
+    let links = 0;
+    let uploads = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/knowledge-bases")) return Response.json(kbs);
+      if (url === "/v1/files") {
+        uploads++;
+        expect(Array.from((init?.body as FormData).keys())).toEqual(["file"]);
         return Response.json(
-          file.name === "manual.pdf"
-            ? {
-                id: "pdf1",
-                kb: "general",
-                status: "stored",
-                job_error: "Chưa có OCR/bộ chuyển đổi cho loại file này.",
-              }
-            : {
-                id: "txt1",
-                kb: "general",
-                status: "stored",
-                job: { id: "job1", stage: "convert", status: "queued" },
-              },
+          { id: "file1", filename: "manual.pdf" },
           { status: 201 },
         );
-      }),
-    );
-    localStorage.setItem("voice-capture:mode", "documents");
+      }
+      expect(url).toBe("/v1/documents/general/files");
+      expect(JSON.parse(init!.body as string)).toEqual({
+        file_id: "file1",
+        extract_mode: "documents",
+      });
+      links++;
+      if (links === 1) return Response.json({}, { status: 503 });
+      return Response.json(
+        {
+          id: "source1",
+          kb: "general",
+          status: "stored",
+          job: { id: "job1", stage: "convert", status: "queued" },
+        },
+        { status: 201 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
     showCapture();
     await waitFor(() =>
       expect(screen.getByTestId("capture-kb")).not.toBeDisabled(),
     );
-    expect(screen.getByTestId("processing-store")).toHaveAttribute(
+    expect(screen.getByTestId("processing-auto")).toHaveAttribute(
       "aria-checked",
       "true",
     );
-    fireEvent.click(screen.getByTestId("processing-auto"));
-    fireEvent.change(screen.getByTestId("capture-extract-mode"), {
-      target: { value: "documents" },
-    });
-    fireEvent.change(screen.getByTestId("document-files"), {
-      target: {
-        files: [
-          new File(["notes"], "notes.txt"),
-          new File(["%PDF"], "manual.pdf"),
-        ],
-      },
-    });
+    pick(new File(["pdf"], "manual.pdf"));
     fireEvent.click(screen.getByTestId("document-upload"));
-    await waitFor(() =>
-      expect(screen.getAllByTestId("upload-job")).toHaveLength(2),
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "File đã lưu trong Thư viện file",
     );
-    const [queued, failed] = screen.getAllByTestId("upload-job");
-    expect(queued).toHaveTextContent("Đã xếp hàng chuyển đổi → trích xuất");
-    expect(failed).toHaveTextContent("Chưa có OCR");
-    expect(modes).toEqual(["documents", "documents"]);
-    expect(localStorage.getItem("voice-capture:auto")).toBe("true");
-
-    // "Chỉ lưu" uploads the original only.
-    fireEvent.click(screen.getByTestId("processing-store"));
-    fireEvent.change(screen.getByTestId("document-files"), {
-      target: { files: [new File(["more"], "more.txt")] },
-    });
     fireEvent.click(screen.getByTestId("document-upload"));
-    await waitFor(() => expect(modes).toHaveLength(3));
-    expect(modes[2]).toBeNull();
+    expect(await screen.findByTestId("upload-job")).toHaveTextContent(
+      "Đã xếp hàng chuyển đổi → trích xuất",
+    );
+    expect(uploads).toBe(1);
+    expect(links).toBe(2);
+    fireEvent.click(screen.getByTestId("mode-voice"));
+    await screen.findByRole("option", { name: "general" });
+    expect(screen.getByTestId("processing-auto")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByTestId("capture-extract-mode")).toHaveValue("documents");
+    expect(screen.getByTestId("capture-clean")).toBeInTheDocument();
   });
 });

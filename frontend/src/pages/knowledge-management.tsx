@@ -1,24 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router-dom";
-import { Tabs } from "radix-ui";
+import { Link, Navigate, useLocation, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
   Check,
-  Database,
   Download,
-  Files,
   FileText,
   FolderOpen,
-  GitCompareArrows,
   Loader2,
   Mic,
   Plus,
   RefreshCw,
-  Search,
   Undo2,
   X,
 } from "lucide-react";
+import type { QaShellOutletContext } from "@/components/qa-shell";
 import type { KnowledgeBase, LocatedReference } from "@/types";
 import { Button } from "@/components/ui/button";
 import { ChunkSearchPanel } from "@/components/knowledge/chunk-search";
@@ -589,7 +585,9 @@ export function KnowledgeManagementPage() {
   const auth = useAuth();
   const user = auth.status === "signed-in" ? auth.user : undefined;
   const canManage = user?.role === "admin" || user?.role === "expert";
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
+  const shell = useOutletContext<QaShellOutletContext | undefined>();
+  const setNavigationLocked = shell?.setKnowledgeNavigationLocked;
   const tab = params.get("tab");
   const view =
     tab === "knowledge-bases" || tab === "conflicts" || tab === "search"
@@ -615,6 +613,11 @@ export function KnowledgeManagementPage() {
   const [removeBusy, setRemoveBusy] = useState(false);
   const [removeError, setRemoveError] = useState("");
   const refresh = () => setReload((value) => value + 1);
+
+  useEffect(() => {
+    setNavigationLocked?.(uploading);
+    return () => setNavigationLocked?.(false);
+  }, [uploading, setNavigationLocked]);
 
   async function confirmRemove() {
     if (!removing) return;
@@ -803,33 +806,7 @@ export function KnowledgeManagementPage() {
           <RefreshCw /> Làm mới
         </Button>
       </header>
-      <Tabs.Root
-        className="km-workspace"
-        value={view}
-        orientation="vertical"
-        activationMode="manual"
-        onValueChange={(value) => {
-          const nextParams = new URLSearchParams(params);
-          if (value === "sources") nextParams.delete("tab");
-          else nextParams.set("tab", value);
-          setParams(nextParams);
-        }}
-      >
-        <Tabs.List className="km-sidebar" aria-label="Nội dung quản lý tri thức">
-          <Tabs.Trigger className="km-tab" value="knowledge-bases" disabled={uploading}>
-            <Database aria-hidden="true" /> Knowledge base
-          </Tabs.Trigger>
-          <Tabs.Trigger className="km-tab" value="sources">
-            <Files aria-hidden="true" /> Nguồn dữ liệu
-          </Tabs.Trigger>
-          <Tabs.Trigger className="km-tab" value="search" disabled={uploading}>
-            <Search aria-hidden="true" /> Tìm kiếm
-          </Tabs.Trigger>
-          <Tabs.Trigger className="km-tab" value="conflicts" disabled={uploading}>
-            <GitCompareArrows aria-hidden="true" /> Mâu thuẫn
-          </Tabs.Trigger>
-        </Tabs.List>
-
+      <div className="km-workspace">
         <div className="km-workspace-content">
           <div className="km-workspace-bar">
             <label className="vc-field km-kb-picker">
@@ -858,223 +835,231 @@ export function KnowledgeManagementPage() {
             <p className="vc-notice error" role="alert">{catalogError}</p>
           )}
 
-          <Tabs.Content value="knowledge-bases" className="km-tab-panel">
-            {kb && (
-              <KnowledgeBaseSettings
-                key={kb}
-                name={kb}
-                role={user?.role}
-                revision={reload}
-                onChanged={refresh}
-              />
-            )}
-            {!kb && !loading && !catalogError && (
-              <p className="vc-muted">Chưa có knowledge base để quản lý.</p>
-            )}
-            {canManage && (
-              <CreateKnowledgeBaseDialog
-                open={creatingKb}
-                taken={kbs.map((item) => item.name)}
-                onClose={() => setCreatingKb(false)}
-                onCreated={(created) => {
-                  setKbs((items) => [...items, created]);
-                  setKb(created.name);
-                  setCreatingKb(false);
-                  refresh();
-                }}
-              />
-            )}
-          </Tabs.Content>
-
-          <Tabs.Content value="search" className="km-tab-panel">
-            {kb ? (
-              <ChunkSearchPanel key={kb} kb={kb} />
-            ) : (
-              !loading && <p className="vc-muted">Chọn knowledge base để tìm kiếm.</p>
-            )}
-          </Tabs.Content>
-
-          <Tabs.Content value="conflicts" className="km-tab-panel">
-            {kb ? (
-              <ConflictReviewPanel
-                key={kb}
-                kb={kb}
-                refreshKey={`${reload}:${sources.map((source) => `${source.processing.conflict_job?.id}:${source.processing.conflict_job?.status}`).join(",")}`}
-                activeJobs={polling}
-                onChanged={refresh}
-              />
-            ) : (
-              !loading && <p className="vc-muted">Chọn knowledge base để xem mâu thuẫn.</p>
-            )}
-          </Tabs.Content>
-
-          <Tabs.Content value="sources" className="km-tab-panel">
-            <label className="vc-field km-source-search">
-              <span>Tìm nguồn dữ liệu</span>
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Tên file hoặc bản ghi…"
-              />
-            </label>
-            {kb && (
-              <details className="km-add-documents">
-                <summary>Thêm tài liệu</summary>
-                <DocumentUpload key={kb} kb={kb} disabled={loading} onBusy={setUploading}
-                  onStored={refresh} />
-              </details>
-            )}
-            <div
-              className="vc-filter km-filters"
-              role="tablist"
-              aria-label="Lọc nguồn dữ liệu"
-            >
-              {[
-                ["all", "Tất cả"],
-                ["raw", "Raw"],
-                ["converted", "Converted"],
-                ["extracted", "Extracted"],
-                ["pending", "Chờ duyệt"],
-              ].map(([key, label]) => (
-                <button
-                  key={key}
-                  role="tab"
-                  aria-selected={filter === key}
-                  onClick={() => setFilter(key)}
-                >
-                  {label}
-                </button>
-              ))}
+          {view === "knowledge-bases" && (
+            <div className="km-tab-panel">
+              {kb && (
+                <KnowledgeBaseSettings
+                  key={kb}
+                  name={kb}
+                  role={user?.role}
+                  revision={reload}
+                  onChanged={refresh}
+                />
+              )}
+              {!kb && !loading && !catalogError && (
+                <p className="vc-muted">Chưa có knowledge base để quản lý.</p>
+              )}
+              {canManage && (
+                <CreateKnowledgeBaseDialog
+                  open={creatingKb}
+                  taken={kbs.map((item) => item.name)}
+                  onClose={() => setCreatingKb(false)}
+                  onCreated={(created) => {
+                    setKbs((items) => [...items, created]);
+                    setKb(created.name);
+                    setCreatingKb(false);
+                    refresh();
+                  }}
+                />
+              )}
             </div>
-            {error && (
-              <p className="vc-notice error" role="alert">
-                {error}
-              </p>
-            )}
-            {warnings.map((warning) => (
-              <p className="vc-notice warn" key={warning} role="status">
-                {warning}
-              </p>
-            ))}
-            {bulkResult && <BulkNotice kb={kb} result={bulkResult} />}
-            {!!visible.length && (
-              <BulkActions
-                key={qaMode}
-                sources={checked}
-                selectable={selectable.length}
-                defaultMode={qaMode}
-                allSelected={allSelected}
-                onToggleAll={toggleAll}
-                onQueued={queued}
-              />
-            )}
-            {loading && !sources.length ? (
-              <p className="vc-muted">
-                <Loader2 className="animate-spin" size={16} /> Đang tải dữ liệu…
-              </p>
-            ) : !visible.length ? (
-              <div className="km-empty">
-                <FolderOpen size={32} />
-                <h2>
-                  {sources.length
-                    ? "Không có nguồn phù hợp bộ lọc"
-                    : "Chưa có nguồn dữ liệu"}
-                </h2>
-                <Link to="/capture">Thêm dữ liệu</Link>
-              </div>
-            ) : (
-              <ul className="km-source-list">
-                {visible.map((source) => (
-                  <li key={key(source)} data-testid="managed-source">
-                    <input
-                      type="checkbox"
-                      className="km-select"
-                      aria-label={`Chọn ${source.name}`}
-                      checked={isSelectable(source) && selected.has(key(source))}
-                      disabled={!isSelectable(source)}
-                      title={
-                        isSelectable(source)
-                          ? undefined
-                          : isRunning(source)
-                            ? "Đang xử lý"
-                            : "Không có bước Convert/Extract cho nguồn này"
-                      }
-                      onChange={() => toggle(source)}
-                      data-testid="select-source"
-                    />
-                    <div className="km-source-icon">
-                      {source.source_kind === "voice_recording" ? (
-                        <Mic />
-                      ) : (
-                        <FileText />
-                      )}
-                    </div>
-                    <div className="km-source-main">
-                      <Link to={sourceLink(source)} className="km-source-name">
-                        {source.name}
-                      </Link>
-                      <p className="vc-muted">
-                        {source.content_type} ·{" "}
-                        {source.created_at
-                          ? dateTime(source.created_at)
-                          : "Không có thời gian nguồn"}
-                        {source.mode ? ` · ${MODES[source.mode]}` : ""}
-                      </p>
-                      <SourceStatus source={source} />
-                      {source.conversion_note && (
-                        <p className="vc-muted">{source.conversion_note}</p>
-                      )}
-                      <JobNote processing={source.processing} />
-                      <ConflictJobNote processing={source.processing} />
-                      {source.review === "pending" && (
-                        <small>{source.counts.draft ?? 0} mục chờ duyệt</small>
-                      )}
-                    </div>
-                    <Button variant="outline" size="sm" asChild>
-                      <Link to={sourceLink(source)}>
-                        {source.review === "pending"
-                          ? "Duyệt kết quả"
-                          : "Xem / xử lý"}
-                        <ArrowRight />
-                      </Link>
-                    </Button>
-                    {user && (canManage || user.id === source.submitted_by) && (
-                      <Button variant="outline" size="sm"
-                        disabled={
-                          source.processing.job?.status === "running" ||
-                          source.processing.conflict_job?.status === "running" ||
-                          source.processing.status === "running"
-                        }
-                        onClick={() => {
-                          setRemoveError("");
-                          setRemoving(source);
-                        }}>
-                        Gỡ nguồn
-                      </Button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {next !== null && (
-              <Button
-                variant="outline"
-                disabled={loading}
-                onClick={() => void loadMore()}
+          )}
+
+          {view === "search" && (
+            <div className="km-tab-panel">
+              {kb ? (
+                <ChunkSearchPanel key={kb} kb={kb} />
+              ) : (
+                !loading && <p className="vc-muted">Chọn knowledge base để tìm kiếm.</p>
+              )}
+            </div>
+          )}
+
+          {view === "conflicts" && (
+            <div className="km-tab-panel">
+              {kb ? (
+                <ConflictReviewPanel
+                  key={kb}
+                  kb={kb}
+                  refreshKey={`${reload}:${sources.map((source) => `${source.processing.conflict_job?.id}:${source.processing.conflict_job?.status}`).join(",")}`}
+                  activeJobs={polling}
+                  onChanged={refresh}
+                />
+              ) : (
+                !loading && <p className="vc-muted">Chọn knowledge base để xem mâu thuẫn.</p>
+              )}
+            </div>
+          )}
+
+          {view === "sources" && (
+            <div className="km-tab-panel">
+              <label className="vc-field km-source-search">
+                <span>Tìm nguồn dữ liệu</span>
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Tên file hoặc bản ghi…"
+                />
+              </label>
+              {kb && (
+                <details className="km-add-documents">
+                  <summary>Thêm tài liệu</summary>
+                  <DocumentUpload key={kb} kb={kb} disabled={loading} onBusy={setUploading}
+                    onStored={refresh} />
+                </details>
+              )}
+              <div
+                className="vc-filter km-filters"
+                role="tablist"
+                aria-label="Lọc nguồn dữ liệu"
               >
-                Tải thêm nguồn dữ liệu
-              </Button>
-            )}
-            <p className="vc-muted km-footnote">
-              Chọn các nguồn rồi bấm Convert hoặc Extract ở đầu danh sách; hai nút
-              chỉ xếp job, worker chạy nền theo thứ tự chuyển đổi → trích xuất
-              (Extract trên Raw tự chuyển đổi trước). Trạng thái xử lý và trạng
-              thái duyệt được lưu riêng. “Extracted” chưa có nghĩa là đã được
-              chuyên gia duyệt.
-            </p>
-          </Tabs.Content>
+                {[
+                  ["all", "Tất cả"],
+                  ["raw", "Raw"],
+                  ["converted", "Converted"],
+                  ["extracted", "Extracted"],
+                  ["pending", "Chờ duyệt"],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    role="tab"
+                    aria-selected={filter === key}
+                    onClick={() => setFilter(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {error && (
+                <p className="vc-notice error" role="alert">
+                  {error}
+                </p>
+              )}
+              {warnings.map((warning) => (
+                <p className="vc-notice warn" key={warning} role="status">
+                  {warning}
+                </p>
+              ))}
+              {bulkResult && <BulkNotice kb={kb} result={bulkResult} />}
+              {!!visible.length && (
+                <BulkActions
+                  key={qaMode}
+                  sources={checked}
+                  selectable={selectable.length}
+                  defaultMode={qaMode}
+                  allSelected={allSelected}
+                  onToggleAll={toggleAll}
+                  onQueued={queued}
+                />
+              )}
+              {loading && !sources.length ? (
+                <p className="vc-muted">
+                  <Loader2 className="animate-spin" size={16} /> Đang tải dữ liệu…
+                </p>
+              ) : !visible.length ? (
+                <div className="km-empty">
+                  <FolderOpen size={32} />
+                  <h2>
+                    {sources.length
+                      ? "Không có nguồn phù hợp bộ lọc"
+                      : "Chưa có nguồn dữ liệu"}
+                  </h2>
+                  <Link to="/capture">Thêm dữ liệu</Link>
+                </div>
+              ) : (
+                <ul className="km-source-list">
+                  {visible.map((source) => (
+                    <li key={key(source)} data-testid="managed-source">
+                      <input
+                        type="checkbox"
+                        className="km-select"
+                        aria-label={`Chọn ${source.name}`}
+                        checked={isSelectable(source) && selected.has(key(source))}
+                        disabled={!isSelectable(source)}
+                        title={
+                          isSelectable(source)
+                            ? undefined
+                            : isRunning(source)
+                              ? "Đang xử lý"
+                              : "Không có bước Convert/Extract cho nguồn này"
+                        }
+                        onChange={() => toggle(source)}
+                        data-testid="select-source"
+                      />
+                      <div className="km-source-icon">
+                        {source.source_kind === "voice_recording" ? (
+                          <Mic />
+                        ) : (
+                          <FileText />
+                        )}
+                      </div>
+                      <div className="km-source-main">
+                        <Link to={sourceLink(source)} className="km-source-name">
+                          {source.name}
+                        </Link>
+                        <p className="vc-muted">
+                          {source.content_type} ·{" "}
+                          {source.created_at
+                            ? dateTime(source.created_at)
+                            : "Không có thời gian nguồn"}
+                          {source.mode ? ` · ${MODES[source.mode]}` : ""}
+                        </p>
+                        <SourceStatus source={source} />
+                        {source.conversion_note && (
+                          <p className="vc-muted">{source.conversion_note}</p>
+                        )}
+                        <JobNote processing={source.processing} />
+                        <ConflictJobNote processing={source.processing} />
+                        {source.review === "pending" && (
+                          <small>{source.counts.draft ?? 0} mục chờ duyệt</small>
+                        )}
+                      </div>
+                      <Button variant="outline" size="sm" asChild>
+                        <Link to={sourceLink(source)}>
+                          {source.review === "pending"
+                            ? "Duyệt kết quả"
+                            : "Xem / xử lý"}
+                          <ArrowRight />
+                        </Link>
+                      </Button>
+                      {user && (canManage || user.id === source.submitted_by) && (
+                        <Button variant="outline" size="sm"
+                          disabled={
+                            source.processing.job?.status === "running" ||
+                            source.processing.conflict_job?.status === "running" ||
+                            source.processing.status === "running"
+                          }
+                          onClick={() => {
+                            setRemoveError("");
+                            setRemoving(source);
+                          }}>
+                          Gỡ nguồn
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {next !== null && (
+                <Button
+                  variant="outline"
+                  disabled={loading}
+                  onClick={() => void loadMore()}
+                >
+                  Tải thêm nguồn dữ liệu
+                </Button>
+              )}
+              <p className="vc-muted km-footnote">
+                Chọn các nguồn rồi bấm Convert hoặc Extract ở đầu danh sách; hai nút
+                chỉ xếp job, worker chạy nền theo thứ tự chuyển đổi → trích xuất
+                (Extract trên Raw tự chuyển đổi trước). Trạng thái xử lý và trạng
+                thái duyệt được lưu riêng. “Extracted” chưa có nghĩa là đã được
+                chuyên gia duyệt.
+              </p>
+            </div>
+          )}
         </div>
-      </Tabs.Root>
+      </div>
       <Dialog open={!!removing} onOpenChange={(open) => {
         if (!open && !removeBusy) setRemoving(undefined);
       }}>

@@ -1,5 +1,6 @@
 import { apiBaseUrl } from "./config";
 import { sessionClient } from "./auth-api";
+import type { AuthClient } from "./auth-api";
 
 export const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024;
 
@@ -17,6 +18,45 @@ export interface StoredDocument {
   /** Present only when Auto queued conversion and extraction. */
   job?: { id: string; stage: string; status: string } | null;
   job_error?: string | null;
+}
+
+/** Attach saved library bytes to a KB without uploading the file again. */
+export async function attachLibraryFile(
+  client: Pick<AuthClient, "authorizedFetch" | "refresh">,
+  kb: string,
+  fileId: string,
+  extractMode?: "knowledge" | "documents" | null,
+): Promise<StoredDocument> {
+  const url = `${apiBaseUrl}/v1/documents/${encodeURIComponent(kb)}/files`;
+  const init = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      file_id: fileId,
+      extract_mode: extractMode ?? null,
+    }),
+  };
+  let response: Response;
+  try {
+    response = await client.authorizedFetch(url, init);
+    if (response.status === 401 && (await client.refresh()))
+      response = await client.authorizedFetch(url, init);
+  } catch (error) {
+    throw new Error(
+      "Không kết nối được máy chủ để thêm file vào KB. Hãy thử lại.",
+      { cause: error },
+    );
+  }
+  if (response.ok) return (await response.json()) as StoredDocument;
+  if (response.status === 404)
+    throw new Error(
+      "Không tìm thấy KB hoặc file để liên kết. File có thể đã bị xóa hoặc bạn không có quyền truy cập.",
+    );
+  if (response.status === 401)
+    throw new Error("Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại.");
+  throw new Error(
+    `Chưa thêm được file vào KB (HTTP ${response.status}). Hãy thử lại.`,
+  );
 }
 
 export async function uploadDocument(

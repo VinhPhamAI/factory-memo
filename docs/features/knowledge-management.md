@@ -1,8 +1,9 @@
 # Knowledge management
 
 The **Quản lý tri thức** tab (`/knowledge`) is the shared source inventory and
-review workspace. **Thêm dữ liệu** (`/capture`) only captures microphone audio or
-uploads original files. It links to management after saving. Its **Auto · chạy
+review workspace. **Thêm dữ liệu** (`/capture`) captures microphone audio or
+uploads files to the personal library and attaches them to the selected KB,
+without copying their bytes. It links to management after saving. Its **Auto · chạy
 đến Extract** option queues the whole pipeline at save time instead (see
 [Job queue and workers](#job-queue-and-workers)). Existing
 `/capture/<kb>/<conversation_id>` bookmarks redirect to the shared workspace.

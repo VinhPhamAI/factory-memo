@@ -4,16 +4,16 @@ Scope: the implemented personal file library. A signed-in user uploads, lists,
 downloads and deletes their own files through `/v1/files` and the **Thư viện file**
 page (`/files`, live mode only).
 
-Not implemented: in-browser preview, adding library files to a knowledge base,
-OCR or extraction, and access by citations or inquiries. To make uploaded documents
-searchable, use the separate [document uploads](document-uploads.md) flow on the
-Capture page through `/v1/documents/{kb}/uploads`.
+The Capture page's **Tải lên tài liệu** tab uploads through the same library API,
+then attaches the file to a KB through `POST /v1/documents/{kb}/files` for manual
+or Auto conversion/extraction; see [document uploads](document-uploads.md).
+The library page itself has no KB attachment or extraction controls.
+In-browser library preview and access by citations or inquiries are not implemented.
 
 Both flows use the application `files` table. Personal files have flat,
-32-character hexadecimal storage keys under `FILE_LIBRARY_DIR`; KB originals
-have nested keys under `DOCUMENT_UPLOAD_DIR`. `/v1/files` lists, reads and deletes
-only personal-library keys. KB originals stay available through source endpoints
-and cannot be deleted through the personal library.
+32-character hexadecimal storage keys under `FILE_LIBRARY_DIR`. KB sources attached
+from the library reference these same file rows and bytes. Direct KB uploads retain
+nested keys under `DOCUMENT_UPLOAD_DIR` and are excluded from `/v1/files`.
 
 The API can start without `APP_DATABASE_URL`; database-backed endpoints then
 return unavailable responses. A missing or incompatible KB embedding setting
@@ -91,7 +91,8 @@ Delete is a soft delete:
 
 1. The server sets `deleted_at` on the `files` row.
 2. The file disappears from the owner's list, metadata and download (`404`).
-3. The record and the bytes on disk remain.
+3. The record and the bytes on disk remain. Already attached KB sources stay readable
+   and processable. New attachment requires an active personal file.
 
 The bytes are kept so that readers of existing citations or inquiries can still
 open the original once those features exist. Read access is decided only by
@@ -130,7 +131,8 @@ drops before confirming it, the insert reports a failure and the bytes are remov
 The row then stays listed, but its download returns `404`.
 
 The volume survives container recreation and `docker compose down`;
-`docker compose down -v` deletes it. Only the API service mounts it.
+`docker compose down -v` deletes it. API and worker mount it so that KB processing
+reads the same library bytes. Removing a KB source does not hide its library entry.
 
 Without `APP_DATABASE_URL`, the API starts, but file library routes return `503`.
 

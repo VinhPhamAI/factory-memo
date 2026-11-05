@@ -3805,42 +3805,7 @@ button.ref-chip:hover,
 }
 .km-heading p { margin: 0; color: #60728b; line-height: 1.6; }
 .km-actions { display: flex; gap: 10px; flex-shrink: 0; }
-.km-workspace {
-  display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  align-items: start;
-  gap: 28px;
-}
-.km-sidebar {
-  position: sticky;
-  top: 0;
-  display: grid;
-  gap: 4px;
-  padding: 8px;
-  border: 1px solid #e1e8f3;
-  border-radius: 12px;
-  background: #f8fafc;
-}
-.km-tab {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 12px;
-  border-radius: 8px;
-  text-align: left;
-  font-size: 14px;
-  font-weight: 600;
-  color: #52647c;
-  cursor: pointer;
-}
-.km-tab svg { width: 17px; height: 17px; flex-shrink: 0; }
-.km-tab:hover { background: #edf2f8; }
-.km-tab[data-state="active"] { background: #e6efff; color: #174eaa; }
-.km-tab:disabled { opacity: .55; cursor: not-allowed; }
-.km-tab:focus-visible, .km-tab-panel:focus-visible {
-  outline: 2px solid #356bc4;
-  outline-offset: 2px;
-}
+.km-workspace { min-width: 0; }
 .km-workspace-content { min-width: 0; }
 .km-workspace-bar {
   display: flex;
@@ -3988,8 +3953,6 @@ button.ref-chip:hover,
   .chat-focus-topbar .qa-nav-link { font-size: 12px; gap: 4px; padding: 0 6px; white-space: nowrap; }
   .km-heading { flex-direction: column; }
   .km-heading h1 { font-size: 23px; }
-  .km-workspace { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .km-sidebar { position: static; }
   .km-kb-card { padding: 16px; }
   .km-source-list > li { flex-wrap: wrap; gap: 12px; padding: 16px; }
   .km-source-list > li > [data-slot="button"] { margin-left: 84px; }
@@ -5401,6 +5364,19 @@ button.ref-chip:hover,
   color: #1d4ed8;
   font-weight: 550;
 }
+.sidebar-chevron { margin-left: auto; transition: transform .15s ease; }
+.sidebar-link[aria-expanded="true"] .sidebar-chevron { transform: rotate(180deg); }
+.sidebar-subnav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 8px 18px;
+  padding-left: 10px;
+  border-left: 1px solid #dbe4ef;
+}
+.sidebar-subnav[hidden] { display: none; }
+.sidebar-subnav .sidebar-link { font-size: 13px; }
+.sidebar-link[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
 .sidebar-scroll {
   flex: 1;
   min-height: 0;

@@ -1,9 +1,21 @@
 # Document uploads
 
-The `/capture` page has a **Tải lên tài liệu** tab, replacing the typed-text
-capture form. Select a knowledge base and one or more files. The tab has no
-conversation name, speaker settings or extraction controls. Successful uploads
-show their object IDs; retries send only files that failed in the current batch.
+The `/capture` page has a **Tải lên tài liệu** tab. Select a knowledge base,
+one or more files, and **Chỉ lưu** or **Auto · chạy đến Extract**. It uses the
+same `uploadFile` client and `POST /v1/files` API as **Thư viện file**, then
+attaches the saved file ID through `POST /v1/documents/{kb}/files`.
+The original bytes are stored once in the personal library and are also read by
+KB processing. Files appear in the owner's library. If attachment fails, the
+file remains there; retrying attachment does not upload its bytes again.
+
+This tab accepts PDF, DOCX, XLSX, PNG and JPEG, with the same signature checks
+and 100 MiB limit as the [file library](file-library.md). **Chỉ lưu** creates a
+raw KB source for later processing. **Auto** queues conversion and extraction.
+Extracted knowledge remains searchable as drafts, pending human review.
+
+The **Thêm tài liệu** control in **Quản lý tri thức** and existing API clients
+still use the direct upload endpoint described below. Existing originals stay
+in their original storage location.
 
 Upload always stores the original file first. Processing is separate: TXT and
 other text files, PDF, DOCX, XLSX, PNG and JPEG can then be converted and
@@ -16,8 +28,10 @@ from their bytes; the client-supplied MIME type is metadata, not proof of format
 
 | API runtime | Storage root |
 | --- | --- |
-| Direct host run, e.g. `uv run uvicorn backend.app:app --port 8005` | `<project>/data/uploads/`, independent of the shell's working directory |
-| Docker Compose API | `/app/data/uploads/`, mounted from the Docker-managed named volume `document_uploads` (normally `knowledge-agent_document_uploads`) |
+| Capture tab, host run | `<project>/data/files/`, or `FILE_LIBRARY_DIR` |
+| Capture tab, Docker API and worker | `/app/data/files/`, named volume `file_library` |
+| Direct KB uploads, host run | `<project>/data/uploads/`, independent of the shell's working directory |
+| Direct KB uploads, Docker API and worker | `/app/data/uploads/`, named volume `document_uploads` |
 
 `DOCUMENT_UPLOAD_DIR` overrides the host-run location; Compose explicitly sets it
 to the volume mount. Storage follows the **API server's runtime**, so a `curl`
@@ -26,7 +40,9 @@ needed: this is a local filesystem object store backed by that volume. The
 volume survives container recreation and `docker compose down`; `down -v`
 removes it. Existing audio still uses the host bind mount `data/audio/`.
 
-Objects are stored as:
+Library objects use flat 32-character hexadecimal keys. API and workers resolve
+these keys under `FILE_LIBRARY_DIR`; both mount the same `file_library` volume.
+Direct-upload objects retain their existing layout:
 
 ```text
 <root>/<kb>/<uuid>/content
@@ -41,6 +57,21 @@ directory rename. If the database transaction fails, the published object is
 removed. No LLM, embedding or speech calls occur during storage.
 
 ## API / CLI
+
+`POST /v1/documents/{kb}/files` accepts JSON
+`{"file_id":"<uuid>","extract_mode":null}`. `extract_mode` may instead be
+`knowledge` or `documents` to queue Auto processing. The caller must own the
+non-deleted personal file, and its bytes must exist. It creates only a
+`knowledge_sources` row referencing the existing `files` row; bytes are not copied.
+It returns `201` with the source metadata, or `200` and `duplicate: true` for an
+identical active source in the KB. Duplicates do not queue more work. Errors:
+`401` for missing authentication, `404` for an unavailable KB/file or another
+owner's file, `422` for invalid IDs/modes, and `503` for unavailable storage.
+Queue failure returns the stored source with `job_error`, as for direct uploads.
+
+Deleting the personal library entry does not retract already attached KB evidence.
+Removing a KB source does not delete its personal library entry. Original downloads
+and located evidence previews continue to resolve the same stored bytes.
 
 `POST /v1/documents/{kb}/uploads` accepts one multipart **file** field per request
 and an existing application KB name. A bearer access token is required. It
@@ -71,8 +102,8 @@ directly without a manual Convert step. PDF files with a sufficient text layer
 are read locally. PNG, JPEG and scanned PDFs use `OCR_API_URL`; OCR of embedded
 Office images is not implemented.
 
-**Auto mode.** With **Auto · chạy đến Extract** selected on the capture page, the
-upload also sends the form field `extract_mode` (`knowledge` or `documents`).
+**Auto mode.** Capture sends `extract_mode` in the attachment JSON. Direct-upload
+clients may send the form field `extract_mode` (`knowledge` or `documents`).
 The file is stored first, then a convert → extract pipeline is queued for the
 [job workers](knowledge-management.md#job-queue-and-workers); the response adds
 `job`. If nothing can be queued (no converter for the file type, or the queue is

@@ -15,6 +15,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
+from backend.src.storage.file_library import FileBlobStore
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
@@ -46,11 +48,16 @@ class DocumentUploadStore:
 
     Docker mounts a named volume at the root; host-run APIs use data/uploads.
     Client filenames are metadata only and never participate in filesystem paths.
+    Source readers also resolve flat library keys under the separate library root.
     """
 
-    def __init__(self, root: Path | None = None, *, max_bytes: int = MAX_DOCUMENT_BYTES):
+    def __init__(self, root: Path | None = None, *, max_bytes: int = MAX_DOCUMENT_BYTES,
+                 library_root: Path | None = None):
+        """Configure legacy upload storage and the library used by linked sources."""
+
         self.root = (root if root is not None else uploads_dir_from_env()).resolve()
         self.max_bytes = max_bytes
+        self.library = FileBlobStore(library_root)
 
     def object_dir(self, kb: str, document_id: str) -> Path:
         if not re.fullmatch(r"[a-z][a-z0-9_]{0,59}", kb):
@@ -188,8 +195,17 @@ class DocumentUploadStore:
             shutil.rmtree(directory)
 
     def content_path(self, storage_key: str) -> Path:
-        """Resolve a validated storage key to the original byte file."""
+        """Resolve legacy or library source keys without moving original bytes.
 
+        Returns:
+            A path under the configured upload or library root, without checking existence.
+
+        Raises:
+            ValueError: The key does not match either store's layout.
+        """
+
+        if re.fullmatch(r"[0-9a-f]{32}", storage_key):
+            return self.library.path(storage_key)
         parts = Path(storage_key).parts
         if len(parts) != 3 or parts[2] != "content":
             raise ValueError("Invalid document storage key")

@@ -207,6 +207,65 @@ class SourceRepositoryTest(RepositoryTest):
         with Session(self.engine) as session:
             self.assertIsNotNone(session.get(File, upload.file.id).deleted_at)
 
+    async def test_library_attachment_reuses_file_and_survives_library_deletion(self) -> None:
+        """KB evidence and the personal library share bytes with independent deletion."""
+
+        from backend.src.storage.file_library import FileRecordStore
+        from backend.src.storage.repositories.sources import SourceFileNotFound
+
+        files = FileRecordStore(self.sessions)
+        library_file = await files.insert(
+            filename="manual.pdf", content_type="application/pdf", size_bytes=4,
+            storage_key=uuid4().hex, sha256="b" * 64, uploaded_by=self.user.id,
+        )
+        repository = SourceRepository(self.sessions)
+        file_count = self.count(File)
+        first, duplicate = await repository.create_from_file(
+            self.kb.id, file_id=library_file.id, submitted_by=self.user.id,
+        )
+        self.assertFalse(duplicate)
+        self.assertEqual(first.file.id, library_file.id)
+        self.assertEqual(first.status, "received")
+        again, duplicate = await repository.create_from_file(
+            self.kb.id, file_id=library_file.id, submitted_by=self.user.id,
+        )
+        self.assertTrue(duplicate)
+        self.assertEqual(first.id, again.id)
+        self.assertEqual(self.count(File), file_count)
+        other_kb = self.add_kb()
+        second, _ = await repository.create_from_file(
+            other_kb.id, file_id=library_file.id, submitted_by=self.user.id,
+        )
+        await repository.remove(self.kb.id, first.id, actor_id=self.user.id, role=self.user.role)
+        self.assertIsNone((await files.get(library_file.id)).deleted_at)
+        self.assertTrue(await files.soft_delete(library_file.id, self.user.id))
+        self.assertIsNotNone(await repository.get(other_kb.id, second.id))
+        page, count = await repository.list_page(other_kb.id)
+        self.assertEqual((count, page[0].id), (1, second.id))
+        with self.assertRaises(SourceFileNotFound):
+            await repository.create_from_file(self.kb.id, file_id=library_file.id, submitted_by=self.user.id)
+
+    async def test_library_attachment_rejects_foreign_missing_and_legacy_files(self) -> None:
+        """A guessed file ID cannot attach somebody else's file or legacy bytes."""
+
+        from backend.src.storage.file_library import FileRecordStore
+        from backend.src.storage.repositories.sources import SourceFileNotFound
+
+        foreign = self.add_user()
+        files = FileRecordStore(self.sessions)
+        entry = await files.insert(
+            filename="manual.pdf", content_type="application/pdf", size_bytes=4,
+            storage_key=uuid4().hex, sha256="c" * 64, uploaded_by=foreign.id,
+        )
+        repository = SourceRepository(self.sessions)
+        legacy = await repository.create(
+            self.kb.id, kind=SourceKind.DOCUMENT, title="manual.txt",
+            submitted_by=self.user.id, file=self.new_file(),
+        )
+        for file_id in [entry.id, legacy.file.id, uuid4()]:
+            with self.subTest(file_id=file_id), self.assertRaises(SourceFileNotFound):
+                await repository.create_from_file(self.kb.id, file_id=file_id, submitted_by=self.user.id)
+
     async def test_pages_count_chunks_and_updates_merge_metadata(self) -> None:
         repository = SourceRepository(self.sessions)
         first = await self.add_source()

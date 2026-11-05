@@ -62,7 +62,7 @@ relationships. Existing per-collection databases remain until deliberately migra
 | Standalone `agent/` | Native CLI and Docker, ModelArk answering, streaming, PostgreSQL checkpoints |
 | Standalone-agent tools/retrieval | Not implemented in its initial service |
 | Older backend agent | Separate implementation; do not confuse its in-memory history with standalone-agent memory |
-| Personal file library | Implemented: upload, list, download, and soft delete under `/v1/files`; bytes on local disk or a Docker volume, metadata in `files`. No preview, knowledge ingestion, or citation/inquiry access yet |
+| Personal file library | Upload, list, download and soft delete under `/v1/files`. Capture attaches library files to KB sources for conversion/extraction without copying bytes. No library preview or citation/inquiry access yet |
 | Backend knowledge/search | Existing per-collection databases and two search representations; not the target schema |
 | OCR, voice, images, inquiry flow | Some earlier support exists; the full intended flow is not established |
 | 3D assistance | Undecided; no selected generation or visualization approach |

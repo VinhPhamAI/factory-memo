@@ -40,6 +40,10 @@ class SourceJobRunning(RuntimeError):
     """The source has a running ingestion job."""
 
 
+class SourceFileNotFound(LookupError):
+    """The library file is missing, deleted or owned by another user."""
+
+
 @dataclass(frozen=True)
 class NewFile:
     """Metadata of original bytes already saved in the file store."""
@@ -118,8 +122,12 @@ def _source_entry(
     )
 
 
-# A source is visible while neither it nor its file is deleted.
-_VISIBLE = (KnowledgeSource.deleted_at.is_(None), File.deleted_at.is_(None))
+# Deleting a library entry does not retract evidence already attached to a KB.
+_LIBRARY_FILE = File.storage_key.regexp_match(r"^[0-9a-f]{32}$")
+_VISIBLE = (
+    KnowledgeSource.deleted_at.is_(None),
+    File.deleted_at.is_(None) | _LIBRARY_FILE,
+)
 
 
 class SourceRepository(Repository):
@@ -172,12 +180,13 @@ class SourceRepository(Repository):
         title: str, submitted_by: UUID, file: NewFile | None = None,
         extracted_text: str | None = None, metadata: dict[str, Any] | None = None,
         source_id: UUID | None = None,
+        existing_file: File | None = None,
     ) -> SourceEntry:
-        """Insert the source and original file within the caller's transaction."""
+        """Insert a source with a new or existing file in the caller's transaction."""
 
-        if file is None and kind is not SourceKind.TEXT:
+        if file is None and existing_file is None and kind is not SourceKind.TEXT:
             raise ValueError(f"A {kind.value} source needs a file")
-        file_row = None
+        file_row = existing_file
         if file is not None:
             file_row = File(
                 filename=file.filename,
@@ -191,7 +200,7 @@ class SourceRepository(Repository):
             id=source_id or new_id(),
             knowledge_base_id=knowledge_base_id,
             kind=kind.value,
-            original_sha256=file.sha256 if kind is not SourceKind.TEXT and file else None,
+            original_sha256=file_row.sha256 if kind is not SourceKind.TEXT and file_row else None,
             title=title,
             extracted_text=extracted_text,
             status=SourceStatus.RECEIVED.value,
@@ -238,6 +247,56 @@ class SourceRepository(Repository):
                     return _source_entry(*existing), True
                 # Removal won the race after the unique-index check. Try the insert again.
 
+    async def create_from_file(
+        self, knowledge_base_id: UUID, *, file_id: UUID, submitted_by: UUID,
+    ) -> tuple[SourceEntry, bool]:
+        """Attach an owned library file without copying bytes or creating another file row.
+
+        Args:
+            knowledge_base_id: Active KB that receives the source.
+            file_id: Personal library file whose row is reused.
+            submitted_by: Owner of the file and submitter of the new source.
+
+        Returns:
+            The raw source and whether an identical active source already exists.
+
+        Raises:
+            SourceFileNotFound: The file is not an active library file owned by the submitter.
+            InactiveKnowledgeBase: The KB is unavailable.
+        """
+
+        async with self._transaction() as session:
+            if not await lock_kb(session, knowledge_base_id):
+                raise InactiveKnowledgeBase()
+            file = await session.scalar(select(File).where(
+                File.id == file_id, File.uploaded_by == submitted_by,
+                File.deleted_at.is_(None), _LIBRARY_FILE,
+            ).with_for_update())
+            if file is None:
+                raise SourceFileNotFound(str(file_id))
+            while True:
+                try:
+                    async with session.begin_nested():
+                        source = await self._create(
+                            session, knowledge_base_id, kind=SourceKind.DOCUMENT,
+                            title=file.filename, submitted_by=submitted_by, existing_file=file,
+                        )
+                    return source, False
+                except IntegrityError as exc:
+                    if violated_constraint(exc) != ACTIVE_ORIGINAL_INDEX:
+                        raise
+                existing = (await session.execute(
+                    select(KnowledgeSource, File)
+                    .join(File, File.id == KnowledgeSource.file_id)
+                    .where(
+                        KnowledgeSource.knowledge_base_id == knowledge_base_id,
+                        KnowledgeSource.original_sha256 == file.sha256,
+                        KnowledgeSource.deleted_at.is_(None),
+                    ).with_for_update(of=KnowledgeSource)
+                )).one_or_none()
+                if existing is not None:
+                    return _source_entry(*existing), True
+
     async def remove(
         self, knowledge_base_id: UUID, source_id: UUID, *, actor_id: UUID, role: str,
     ) -> bool:
@@ -263,14 +322,20 @@ class SourceRepository(Repository):
             source.deleted_at = func.now()
             await fail_queued(session, knowledge_base_id, SOURCE_REMOVED, source_id=source_id)
             if source.file_id is not None:
+                # Library entries have their own lifecycle; only legacy files are retired here.
                 # Lock shared files before counting references so concurrent removals
                 # of the last two sources cannot both leave their file active.
-                await session.scalar(select(File.id).where(File.id == source.file_id).with_for_update())
+                legacy_file = await session.scalar(select(File.id).where(
+                    File.id == source.file_id, ~_LIBRARY_FILE,
+                ).with_for_update())
+                if legacy_file is None:
+                    return True
                 active_ref = select(KnowledgeSource.id).where(
                     KnowledgeSource.file_id == source.file_id, KnowledgeSource.deleted_at.is_(None),
                 ).exists()
                 await session.execute(update(File).where(
                     File.id == source.file_id, File.deleted_at.is_(None), ~active_ref,
+                    ~_LIBRARY_FILE,
                 ).values(deleted_at=func.now()))
             return True
 

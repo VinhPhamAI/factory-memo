@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter, Outlet, RouterProvider } from "react-router-dom";
+import { KnowledgeNavigation } from "@/components/knowledge-navigation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   KnowledgeManagementPage,
@@ -124,7 +125,10 @@ function kbDetail(name = "general") {
 function show(path: string) {
   const router = createMemoryRouter(
     [
-      { path: "/knowledge", element: <KnowledgeManagementPage /> },
+      {
+        element: <><KnowledgeNavigation /><Outlet /></>,
+        children: [{ path: "/knowledge", element: <KnowledgeManagementPage /> }],
+      },
       {
         path: "/knowledge/:kb/sources/:kind/:sourceId",
         element: <KnowledgeSourcePage />,
@@ -186,7 +190,7 @@ describe("knowledge management", () => {
     expect(screen.queryByRole("button", { name: "Sửa knowledge base" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Xóa knowledge base" })).toBeNull();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("tab", { name: "Knowledge base" }));
+    await user.click(screen.getByRole("link", { name: "Knowledge base" }));
     expect(await screen.findByText("Đã nhận 2")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Sửa knowledge base" }));
     fireEvent.change(screen.getByLabelText("Tiêu đề"), { target: { value: "Line A" } });
@@ -198,7 +202,7 @@ describe("knowledge management", () => {
     fireEvent.change(screen.getByLabelText("Mã xác nhận"), { target: { value: "general" } });
     fireEvent.click(confirm);
     await waitFor(() => expect(screen.getByTestId("management-kb")).toHaveValue("backup"));
-    await user.click(screen.getByRole("tab", { name: "Mâu thuẫn" }));
+    await user.click(screen.getByRole("link", { name: "Mâu thuẫn" }));
     expect(screen.queryByRole("button", { name: "Sửa knowledge base" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Xóa knowledge base" })).toBeNull();
   });
@@ -989,7 +993,7 @@ it("opens conflict review inside management and follows the selected KB", async 
   expect(fetchMock.mock.calls.some(([url]) => url.includes("/conflicts"))).toBe(
     false,
   );
-  await userEvent.click(screen.getByRole("tab", { name: "Mâu thuẫn" }));
+  await userEvent.click(screen.getByRole("link", { name: "Mâu thuẫn" }));
   await screen.findByText(/Chưa có cặp nào ở trạng thái này/);
   expect(
     fetchMock.mock.calls.some(([url]) =>
@@ -1000,6 +1004,6 @@ it("opens conflict review inside management and follows the selected KB", async 
     target: { value: "general" },
   });
   await screen.findByText("Knowledge base này chưa bật phát hiện mâu thuẫn.");
-  await userEvent.click(screen.getByRole("tab", { name: "Nguồn dữ liệu" }));
+  await userEvent.click(screen.getByRole("link", { name: "Nguồn dữ liệu" }));
   await screen.findByText("Chưa có nguồn dữ liệu");
 });

@@ -170,6 +170,56 @@ test("agent chat shows errors and unconfirmed answers without sending again", as
   expect(streams).toBe(2);
 });
 
+for (const auto of [false, true]) {
+  test(`capture upload uses library bytes with Auto=${auto}`, async ({ page }) => {
+    await mockBases(page);
+    const content = Buffer.from("%PDF-1.7 original library bytes");
+    const file = {
+      id: "019a5100-0000-7000-8000-000000000001",
+      filename: "manual.pdf", content_type: "application/pdf", size_bytes: content.length,
+      sha256: "a".repeat(64), created_at: "2026-11-05T00:00:00Z",
+    };
+    let uploads = 0;
+    let attachments = 0;
+    await page.route("**/v1/files", async (route) => {
+      if (route.request().method() === "POST") {
+        uploads++;
+        await route.fulfill({ status: 201, json: file });
+      } else await route.fulfill({ json: { files: uploads ? [file] : [] } });
+    });
+    await page.route(`**/v1/files/${file.id}/content`, (route) => route.fulfill({
+      body: content, contentType: "application/pdf",
+    }));
+    await page.route("**/v1/documents/general/files", async (route) => {
+      attachments++;
+      expect(route.request().postDataJSON()).toEqual({
+        file_id: file.id, extract_mode: auto ? "knowledge" : null,
+      });
+      await route.fulfill({ status: 201, json: {
+        id: "019a5100-0000-7000-8000-000000000002", kb: "general", status: "stored",
+        ...(auto ? { job: { id: "job1", stage: "convert", status: "queued" } } : {}),
+      } });
+    });
+    await page.goto("/capture");
+    await page.getByTestId("mode-documents").click();
+    await page.getByTestId("capture-kb").selectOption("general");
+    if (auto) await page.getByTestId("processing-auto").click();
+    await page.getByTestId("document-files").setInputFiles({
+      name: "manual.pdf", mimeType: "application/pdf", buffer: content,
+    });
+    await page.getByTestId("document-upload").click();
+    await expect(page.getByText(/Đã lưu vào general/)).toBeVisible();
+    expect(uploads).toBe(1);
+    expect(attachments).toBe(1);
+    if (auto) await expect(page.getByTestId("upload-job")).toContainText("Đã xếp hàng");
+    await page.getByRole("note").getByRole("link", { name: "Thư viện file", exact: true }).click();
+    await expect(page.getByTestId("library-file")).toContainText("manual.pdf");
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Tải về manual.pdf", exact: true }).click();
+    expect((await downloading).suggestedFilename()).toBe("manual.pdf");
+  });
+}
+
 for (const width of [1365, 390]) {
   test(`conflict review compares evidence and supersedes an explicit survivor at ${width}px`, async ({
     page,
@@ -256,7 +306,16 @@ for (const width of [1365, 390]) {
     );
     await page.goto("/knowledge");
     await page.getByTestId("management-kb").selectOption("industrial_qa");
-    await page.getByRole("tab", { name: "Mâu thuẫn", exact: true }).click();
+    if (width < 860) await page.getByTestId("open-menu").click();
+    const knowledgeMenu = page.getByRole("button", { name: "Quản lý tri thức", exact: true });
+    await expect(knowledgeMenu).toHaveAttribute("aria-expanded", "true");
+    await knowledgeMenu.click();
+    await expect(page.getByRole("link", { name: "Mâu thuẫn", exact: true })).toBeHidden();
+    await knowledgeMenu.click();
+    await expect(page.getByRole("link", { name: "Nguồn dữ liệu", exact: true })).toHaveAttribute("aria-current", "page");
+    await page.getByRole("link", { name: "Mâu thuẫn", exact: true }).click();
+    await expect(page).toHaveURL(/tab=conflicts/);
+    if (width < 860) await expect(page.getByRole("dialog")).toBeHidden();
     await expect(
       page.getByRole("heading", { name: "Review mâu thuẫn" }),
     ).toBeVisible();

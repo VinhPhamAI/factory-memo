@@ -58,6 +58,7 @@ services:
       APP_DATABASE_URL: "${API_APP_DATABASE_URL:-postgresql+psycopg://voice_agent:voice_agent@postgres:5432/voice_agent_app}"
       VOICE_AUDIO_DIR: /app/data/audio
       DOCUMENT_UPLOAD_DIR: /app/data/uploads
+      FILE_LIBRARY_DIR: /app/data/files
       OCR_API_URL: "${OCR_API_URL:-}"
       OCR_API_KEY: "${OCR_API_KEY:-}"
       OCR_TIMEOUT_S: "${OCR_TIMEOUT_S:-}"
@@ -65,6 +66,7 @@ services:
     volumes:
       - ../data:/app/data
       - document_uploads:/app/data/uploads
+      - file_library:/app/data/files
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

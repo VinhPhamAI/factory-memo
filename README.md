@@ -248,8 +248,8 @@ default `VITE_DATA_MODE=api` connects QA to FastAPI through the Vite `/v1` proxy
 If you already have `.env.local`, set its data mode to `api` and restart Vite.
 The **Ghi âm** tab records a conversation (needs the speech service and HTTPS or
 localhost for the microphone); after Stop it shows the transcript next to the
-extracted knowledge for approval. **Tải lên tài liệu** stores original documents
-without creating a conversation or extracting content; see [document uploads](docs/features/document-uploads.md).
+extracted knowledge for approval. **Tải lên tài liệu** stores originals in the personal file library and attaches them
+to the selected KB, with optional Auto conversion/extraction; see [document uploads](docs/features/document-uploads.md).
 **Thư viện file** keeps each signed-in user's own PDF, XLSX, DOCX, JPEG and PNG files;
 see [file library](docs/features/file-library.md). See the
 [frontend guide](frontend/README.md) for configuration, tests and optional mock demo.

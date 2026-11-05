@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { LevelMeter, SpeakerBadge } from "@/components/voice/speaker-badge";
 import { cn } from "@/utils/cn";
-import { DocumentUpload } from "@/components/voice/document-upload";
+import { LibraryDocumentUpload } from "@/components/voice/document-upload";
 import { listKnowledgeBases } from "@/services/knowledge-api";
 
 const KB_KEY = "voice-capture:kb";
@@ -183,7 +183,7 @@ export function CapturePage() {
           <p>
             {mode === "voice"
               ? "Ghi âm trao đổi tại hiện trường. Sau khi lưu transcript, trích xuất (hoặc để Auto chạy) và duyệt trong Quản lý tri thức."
-              : "Lưu tài liệu và hình ảnh vào kho lưu trữ của knowledge base. Chọn Auto để tự chuyển đổi và trích xuất sau khi tải lên."}
+              : "Lưu tài liệu và hình ảnh vào Thư viện file, liên kết với knowledge base đã chọn. Chọn Auto để tự chuyển đổi và trích xuất sau khi tải lên."}
           </p>
         </header>
 
@@ -295,7 +295,7 @@ export function CapturePage() {
           />
 
           {mode === "documents" ? (
-            <DocumentUpload
+            <LibraryDocumentUpload
               kb={kb}
               disabled={kbState !== "ready" || !kb}
               extractMode={auto ? extractMode : null}

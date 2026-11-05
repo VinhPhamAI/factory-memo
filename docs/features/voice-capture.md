@@ -8,8 +8,8 @@ Extract** is selected: the recording then sends `extract_mode` and, once saved,
 an extraction job is queued for the [job workers](knowledge-management.md#job-queue-and-workers).
 Legacy API clients without `extract_mode` still extract in the API process by
 default unless they send `extract=false`. The
-same page offers **Tải lên tài liệu** for storage-only document uploads, independent
-of conversations; see [document uploads](document-uploads.md). The typed-text API
+same page offers **Tải lên tài liệu** to save personal library files and attach them
+to a KB for manual or Auto processing, independently of conversations; see [document uploads](document-uploads.md). The typed-text API
 remains available to existing clients (see [Typed text](#typed-text)).
 
 ```text

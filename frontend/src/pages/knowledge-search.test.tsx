@@ -94,15 +94,12 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("knowledge search tab", () => {
-  it("is a tab of the page and sends the chosen mode and filters", async () => {
+describe("knowledge search view", () => {
+  it("opens from the URL and sends the chosen mode and filters", async () => {
     const calls = stubApi(() => Response.json(answer([result()])));
     show();
     const user = userEvent.setup();
-    expect(screen.getByRole("tab", { name: "Tìm kiếm" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(await screen.findByLabelText("Câu hỏi hoặc từ khóa")).toBeInTheDocument();
     await screen.findByRole("option", { name: "General" });
     expect(screen.getByRole("button", { name: "Tìm kiếm" })).toBeDisabled();
     await user.selectOptions(screen.getByLabelText("Chế độ"), "keyword");

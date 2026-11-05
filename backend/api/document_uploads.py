@@ -1,8 +1,8 @@
 """Document upload API. Stores original bytes and metadata.
 
-Without `extract_mode` the upload stays raw. With it (Auto on the capture
-page), conversion and extraction are queued for the job workers; the upload
-is kept even when queueing fails, and can be processed later.
+Capture attaches existing library files; direct-upload clients remain supported.
+Without `extract_mode` the source stays raw. With it, conversion and extraction
+are queued; a queue failure keeps the saved source available for later processing.
 """
 
 from __future__ import annotations
@@ -14,12 +14,15 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
+from pydantic import BaseModel
 
 from backend.api.knowledge_bases import refresh_catalog
 from backend.api.auth import require_current_user
+from backend.api.files import get_file_library
+from backend.src.services.file_library import FileLibraryService, FileNotFound
 from backend.src.services.auth import Account
 from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
-from backend.src.storage.repositories.sources import NewFile, SourceRepository
+from backend.src.storage.repositories.sources import NewFile, SourceFileNotFound, SourceRepository
 from backend.src.storage.document_uploads import (
     DocumentTooLarge,
     DocumentUploadStore,
@@ -48,6 +51,60 @@ class UploadedDocument(StoredDocument):
     duplicate: bool = False
     job: dict[str, Any] | None = None
     job_error: str | None = None
+
+
+class AttachLibraryFile(BaseModel):
+    """An existing personal file to attach as a source, with optional Auto processing."""
+
+    file_id: UUID
+    extract_mode: Literal["knowledge", "documents"] | None = None
+
+
+@router.post(
+    "/{kb}/files", status_code=201, response_model=UploadedDocument,
+    responses={200: {"model": UploadedDocument, "description": "Existing identical source"}},
+)
+async def attach_library_file(
+    request: Request,
+    response: Response,
+    body: AttachLibraryFile,
+    account: Annotated[Account, Depends(require_current_user)],
+    kb_ref: Annotated[tuple[str, UUID], Depends(require_kb)],
+    library: Annotated[FileLibraryService, Depends(get_file_library)],
+) -> UploadedDocument:
+    """Attach an owned library file to a KB and optionally queue conversion and extraction.
+
+    Original bytes stay in the file library. A duplicate returns the existing source
+    without queuing more jobs; attachment failures leave the library file intact.
+    """
+
+    kb, knowledge_base_id = kb_ref
+    sources: SourceRepository = request.app.state.sources
+    if sources is None:
+        raise HTTPException(503, "Source storage is unavailable")
+    try:
+        await library.open_content(account, body.file_id)
+        source, duplicate = await sources.create_from_file(
+            knowledge_base_id, file_id=body.file_id, submitted_by=account.id,
+        )
+    except (FileNotFound, SourceFileNotFound) as exc:
+        raise HTTPException(404, "File not found") from exc
+    except OSError as exc:
+        raise HTTPException(503, "File storage is unavailable") from exc
+    original = source.file
+    uploaded = UploadedDocument(
+        id=source.id.hex, kb=kb, filename=original.filename,
+        content_type=original.content_type, size_bytes=original.size_bytes,
+        sha256=original.sha256, storage_key=original.storage_key,
+        uploaded_at=original.created_at, status="stored", duplicate=duplicate,
+    )
+    if duplicate:
+        response.status_code = 200
+    elif body.extract_mode is not None:
+        uploaded.job, uploaded.job_error = await queue_processing(
+            request, kb, "upload", uploaded.id, body.extract_mode,
+        )
+    return uploaded
 
 
 async def queue_processing(connection: HTTPConnection, kb: str, kind: str, source_id: str,

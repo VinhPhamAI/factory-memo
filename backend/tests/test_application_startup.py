@@ -106,6 +106,16 @@ class SharedApplicationStartupTest(MigratedDatabaseTest):
             self.assertEqual([item['id'] for item in listing.json()['files']], [personal.json()['id']])
             personal_download = client.get(f"/v1/files/{personal.json()['id']}/content", headers=headers)
             self.assertEqual(personal_download.content, PDF)
+            linked = client.post('/v1/documents/line_a/files', headers=headers, json={
+                'file_id': personal.json()['id'], 'extract_mode': 'documents',
+            })
+            self.assertEqual(linked.status_code, 201, linked.text)
+            self.assertEqual(linked.json()['job']['stage'], 'convert')
+            self.assertEqual(linked.json()['job']['next_stages'], ['extract'])
+            library_evidence_path = (
+                f"/v1/knowledge-management/line_a/sources/upload/{linked.json()['id']}/original"
+            )
+            self.assertEqual(client.get(library_evidence_path, headers=headers).content, PDF)
             evidence_path = f"/v1/knowledge-management/line_a/sources/upload/{source.json()['id']}/original"
             evidence = client.get(evidence_path, headers=headers)
             self.assertEqual(evidence.status_code, 200, evidence.text)
@@ -113,3 +123,7 @@ class SharedApplicationStartupTest(MigratedDatabaseTest):
             deleted = client.delete(f"/v1/files/{personal.json()['id']}", headers=headers)
             self.assertEqual(deleted.status_code, 204, deleted.text)
             self.assertEqual(client.get(evidence_path, headers=headers).content, original)
+            self.assertEqual(client.get(library_evidence_path, headers=headers).content, PDF)
+            detail = client.get(library_evidence_path.removesuffix('/original'), headers=headers)
+            self.assertEqual(detail.status_code, 200, detail.text)
+            self.assertEqual(detail.json()['processing']['job']['status'], 'queued')
