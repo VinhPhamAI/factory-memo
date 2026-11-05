@@ -12,6 +12,8 @@ import {
   MAX_THINKING_CHARACTERS,
   useConversations,
 } from "@/hooks/conversations";
+import { useInquiriesApi } from "@/hooks/inquiries";
+import { InquiryError } from "@/services/inquiries-api";
 import { useDictation } from "@/hooks/dictation";
 import { BrandMark } from "@/components/brand";
 import { CitedAnswer } from "@/components/cited-answer";
@@ -71,6 +73,9 @@ export function ConversationsPage() {
   const navigate = useNavigate();
   const { api, list, remember, rememberThinking, thinkingFor } =
     useConversations();
+  const inquiries = useInquiriesApi();
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [historyState, setHistoryState] = useState<
@@ -310,6 +315,24 @@ export function ConversationsPage() {
     }
   }
 
+  async function createInquiry() {
+    if (!conversationId) return;
+    setDrafting(true);
+    setDraftError("");
+    try {
+      const inquiry = await inquiries.draftFromConversation(conversationId);
+      void navigate(`/inquiries/${inquiry.id}`);
+    } catch (cause) {
+      setDraftError(
+        cause instanceof InquiryError
+          ? cause.message
+          : "Không tạo được yêu cầu chuyên gia.",
+      );
+    } finally {
+      setDrafting(false);
+    }
+  }
+
   return (
     <div
       className={`ask-layout agent-chat-layout ${diagnosis.state.open && diagnosis.state.scenario ? "with-diagnosis" : ""}`}
@@ -319,6 +342,25 @@ export function ConversationsPage() {
           <h1 data-testid="chat-title">
             {current?.title ?? (conversationId ? "" : "Trò chuyện mới")}
           </h1>
+          {conversationId && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="ml-auto"
+              data-testid="create-inquiry"
+              disabled={drafting || sending}
+              onClick={() => void createInquiry()}
+            >
+              {drafting ? <Loader2 size={14} className="animate-spin" /> : null}
+              {drafting ? "Đang soạn…" : "Tạo yêu cầu chuyên gia"}
+            </Button>
+          )}
+          {draftError && (
+            <p role="alert" className="inline-error" data-testid="draft-error">
+              {draftError}
+            </p>
+          )}
         </header>
         <div className="chat-scroll" ref={scroll}>
           {historyState === "loading" ? (

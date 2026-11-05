@@ -62,6 +62,7 @@ function serve(
   histories: Record<string, unknown[]>,
   createGate?: Promise<void>,
   transcription?: () => Promise<Response>,
+  inquiryDraft?: () => Response,
 ) {
   const streams: Stream[] = [];
   const speechCalls: unknown[] = [];
@@ -93,6 +94,11 @@ function serve(
         messages: histories[history[1]] ?? [],
         truncated: false,
       });
+    const draft = url.match(/^\/v1\/conversations\/([^/]+)\/inquiry-draft$/);
+    if (draft && method === "POST")
+      return inquiryDraft
+        ? inquiryDraft()
+        : Response.json({ id: "inq-1" }, { status: 201 });
     if (url === "/v1/speech/transcriptions") {
       speechCalls.push(init?.body);
       return (await transcription?.()) ?? Response.json({ text: "" });
@@ -309,6 +315,30 @@ describe("ConversationsPage", () => {
     fireEvent.click(screen.getByTestId("dictation"));
     await screen.findByRole("button", { name: "Dừng ghi âm" });
     expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates an inquiry draft and opens it", async () => {
+    serve({ "chat-a": [] });
+    const router = show("/ask/chat-a");
+    fireEvent.click(await screen.findByTestId("create-inquiry"));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/inquiries/inq-1"),
+    );
+  });
+
+  it("shows an error and stays on the chat when the draft fails", async () => {
+    serve({ "chat-a": [] }, undefined, undefined, () =>
+      Response.json(
+        { detail: { code: "draft_failed", message: "x" } },
+        { status: 502 },
+      ),
+    );
+    const router = show("/ask/chat-a");
+    fireEvent.click(await screen.findByTestId("create-inquiry"));
+    expect(await screen.findByTestId("draft-error")).toHaveTextContent(
+      "Trợ lý không soạn được yêu cầu",
+    );
+    expect(router.state.location.pathname).toBe("/ask/chat-a");
   });
 
   it("renames and deletes a conversation from the sidebar", async () => {

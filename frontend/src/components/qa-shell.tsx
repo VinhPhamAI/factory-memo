@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { Files, LogOut, Menu, MessagesSquare, Settings2 } from "lucide-react";
+import { Files, LogOut, Menu, MessagesSquare, Settings2, UserCheck } from "lucide-react";
 import { BrandMark } from "./brand";
 import { ConversationList } from "./conversation-list";
 import {
@@ -19,6 +19,12 @@ import { cn } from "@/utils/cn";
 const SECTIONS = [
   { to: "/ask", label: "Hỏi đáp", icon: MessagesSquare, testId: "nav-ask" },
   { to: "/files", label: "Quản lý tài liệu", icon: Files, testId: "nav-files" },
+  {
+    to: "/inquiries",
+    label: "Yêu cầu chuyên gia",
+    icon: UserCheck,
+    testId: "nav-inquiries",
+  },
 ];
 
 export type QaShellOutletContext = {
