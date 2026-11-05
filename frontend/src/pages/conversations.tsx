@@ -8,15 +8,26 @@ import {
   RotateCw,
   Square,
 } from "lucide-react";
-import { useConversations } from "@/hooks/conversations";
+import {
+  MAX_THINKING_CHARACTERS,
+  useConversations,
+} from "@/hooks/conversations";
 import { useDictation } from "@/hooks/dictation";
 import { BrandMark } from "@/components/brand";
 import { CitedAnswer } from "@/components/cited-answer";
+import { ChatToolCalls } from "@/components/chat-tool-calls";
 import { ThinkingBlock } from "@/components/thinking-block";
 import { Button } from "@/components/ui/button";
 import {
+  parseChatTools,
+  parseReplyId,
+  reconcileChatTools,
+  type ChatTool,
+} from "@/services/chat-tools";
+import {
   ConversationError,
   parseCitations,
+  parseSearchStatus,
   type Citation,
   type SearchStatus,
 } from "@/services/conversations-api";
@@ -33,9 +44,10 @@ type Turn = {
   status: "saved" | "streaming" | "failed" | "stopped" | "unconfirmed";
   error?: string;
   citations: Citation[];
+  tools?: ChatTool[];
   search?: SearchStatus;
   hasPhoto?: boolean;
-  /** Streamed model reasoning; shown collapsed and never saved. */
+  /** Streamed model reasoning retained in this tab's memory only. */
   reasoning?: string;
   thinkingSeconds?: number;
 };
@@ -49,7 +61,8 @@ const errorMessage = (cause: unknown, fallback: string) =>
 export function ConversationsPage() {
   const { threadId: conversationId } = useParams();
   const navigate = useNavigate();
-  const { api, list, remember } = useConversations();
+  const { api, list, remember, rememberThinking, thinkingFor } =
+    useConversations();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [historyState, setHistoryState] = useState<
@@ -110,15 +123,24 @@ export function ConversationsPage() {
     api
       .history(conversationId, abort.signal)
       .then((history) => {
+        if (abort.signal.aborted) return;
         setTurns(
-          history.messages.map((message, index) => ({
-            key: `saved-${index}`,
-            role: message.role,
-            text: message.text,
-            status: "saved",
-            citations: parseCitations(message.citations),
-            hasPhoto: Boolean(message.attachment),
-          })),
+          history.messages.map((message, index) => {
+            const replyId = message.role === "assistant"
+              ? parseReplyId(message.reply_id)
+              : undefined;
+            return {
+              key: replyId ?? `saved-${index}`,
+              role: message.role,
+              text: message.text,
+              status: "saved",
+              citations: parseCitations(message.citations),
+              tools: parseChatTools(message.tools),
+              search: parseSearchStatus(message.search),
+              hasPhoto: Boolean(message.attachment),
+              ...(replyId ? thinkingFor(conversationId, replyId) : undefined),
+            };
+          }),
         );
         setTruncated(history.truncated);
         setHistoryState("idle");
@@ -130,7 +152,7 @@ export function ConversationsPage() {
         setError(errorMessage(cause, "Không tải được cuộc trò chuyện."));
       });
     return () => abort.abort();
-  }, [api, cancelDictation, conversationId, historyReload]);
+  }, [api, cancelDictation, conversationId, historyReload, thinkingFor]);
 
   useEffect(() => () => controller.current?.abort(), []);
   useEffect(() => {
@@ -206,7 +228,9 @@ export function ConversationsPage() {
     ]);
     let text = "";
     let reasoning = "";
+    let toolCalls: ChatTool[] = [];
     let thinkingStarted: number | undefined;
+    let elapsed: number | undefined;
     // Thinking ends when the first answer text arrives.
     const thinkingSeconds = () =>
       thinkingStarted === undefined
@@ -214,20 +238,44 @@ export function ConversationsPage() {
         : Math.round((Date.now() - thinkingStarted) / 1000);
     try {
       for await (const event of api.stream(id, message, abort.signal)) {
+        if (abort.signal.aborted || shown.current !== id) {
+          update({ status: "stopped" });
+          break;
+        }
         if (event.type === "reasoning") {
           thinkingStarted ??= Date.now();
-          reasoning += event.delta;
+          reasoning = (reasoning + event.delta).slice(0, MAX_THINKING_CHARACTERS);
           update({ reasoning });
         } else if (event.type === "text") {
-          if (!text) update({ thinkingSeconds: thinkingSeconds() });
+          if (!text) {
+            elapsed = thinkingSeconds();
+            update({ thinkingSeconds: elapsed });
+          }
           text += event.delta;
           update({ text });
+        } else if (event.type === "tool") {
+          const tool = event.tool;
+          toolCalls = toolCalls.some((item) => item.id === tool.id)
+            ? toolCalls.map((item) => (item.id === tool.id ? tool : item))
+            : [...toolCalls, tool].slice(0, 2);
+          update({ tools: toolCalls });
         } else if (event.type === "complete") {
+          elapsed ??= thinkingSeconds();
+          if (event.reply_id && reasoning) {
+            rememberThinking(id, event.reply_id, {
+              reasoning,
+              thinkingSeconds: elapsed,
+            });
+          }
           update({
             text: event.answer,
             status: "saved",
             citations: event.citations,
             search: event.search,
+            tools: event.tools
+              ? reconcileChatTools(event.tools, toolCalls)
+              : toolCalls,
+            thinkingSeconds: elapsed,
           });
         } else if (event.type === "error") {
           update({ status: "failed", error: event.message });
@@ -265,8 +313,7 @@ export function ConversationsPage() {
             <div className="chat-empty">
               <h2>Máy đang gặp vấn đề gì?</h2>
               <p>
-                Mô tả sự cố bằng tiếng Việt. Trợ lý chưa tra cứu kho tri thức,
-                hãy kiểm tra lại trước khi làm theo.
+                Mô tả sự cố và cung cấp mã lỗi hoặc thông tin về máy nếu có.
               </p>
             </div>
           ) : (
@@ -309,6 +356,13 @@ export function ConversationsPage() {
                         reasoning={turn.reasoning}
                         thinking={turn.status === "streaming" && !turn.text}
                         seconds={turn.thinkingSeconds}
+                      />
+                    )}
+                    {turn.tools && turn.tools.length > 0 && (
+                      <ChatToolCalls
+                        calls={turn.tools}
+                        citations={turn.citations}
+                        streaming={turn.status === "streaming"}
                       />
                     )}
                     <div className="answer-prose" data-testid="answer-text">
@@ -417,7 +471,7 @@ export function ConversationsPage() {
                   ? "Đang ghi âm… bấm lại để dừng (tối đa 2 phút)"
                   : dictation.state === "transcribing"
                     ? "Đang nhận dạng giọng nói…"
-                    : "Trợ lý chưa tra cứu kho tri thức"}
+                    : "Thêm mã lỗi hoặc kiểu máy nếu có"}
               </span>
               <span className="composer-actions">
                 <Button

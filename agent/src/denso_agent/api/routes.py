@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import SecretStr
 
 from denso_agent.api.authentication import authenticate
 from denso_agent.api.stream_response import AgentStreamResponse
@@ -92,6 +93,7 @@ async def answer(body: ChatRequest, request: Request):
     if runtime is None:
         raise HTTPException(503, detail=UNAVAILABLE)
     runtime.admission.acquire(str(body.conversation_id))
+    credential = request.headers.get("X-Employee-Access-Token")
     try:
         return AgentStreamResponse(
             runtime.stream(
@@ -100,6 +102,7 @@ async def answer(body: ChatRequest, request: Request):
                 uuid4(),
                 body.search_scope,
                 body.attachment,
+                employee_access=SecretStr(credential) if credential else None,
             ),
             runtime.admission,
             str(body.conversation_id),

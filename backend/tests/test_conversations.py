@@ -12,22 +12,27 @@ import os
 import sys
 import unittest
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 from uuid import UUID, uuid4
 
+import httpx
 from alembic import command
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+from backend.api.conversations import router
 from backend.app import create_app
-from backend.src.clients.agent import AgentHistory, AgentRejected, AgentUnavailable
-from backend.src.services.auth import AuthService
+from backend.src.clients.agent import AgentClient, AgentHistory, AgentRejected, AgentSettings, AgentUnavailable
+from backend.src.services.auth import Account, AuthService, InvalidSession
 from backend.src.storage.app_database import create_session_factory
 from backend.src.storage.auth import AuthStore
-from backend.src.storage.conversations import ConversationStore
+from backend.src.storage.conversations import ConversationNotFound, ConversationStore
 from backend.tests.test_auth import FAST_HASHER, PASSWORD, SETTINGS
 from backend.tests.test_database_migrations import (
     DATABASE_URL,
@@ -87,7 +92,9 @@ class ControlledAgent:
             raise self.history
         return self.history or AgentHistory(conversation_id=conversation_id, messages=[], truncated=False)
 
-    async def open_stream(self, conversation_id: UUID, message: str) -> ControlledStream:
+    async def open_stream(
+        self, conversation_id: UUID, message: str, *, employee_access: SecretStr | None = None,
+    ) -> ControlledStream:
         self.calls.append(("stream", conversation_id, message))
         if self.stream_error is not None:
             raise self.stream_error
@@ -352,6 +359,112 @@ class ConversationAgentProxyTest(ConversationTestCase):
                     self.assertEqual(response.json()["detail"]["code"], error.code)
         listed = self.client.get("/v1/conversations", headers=owner).json()["conversations"]
         self.assertEqual(listed[0]["updated_at"], created["updated_at"], "a rejected message is not activity")
+
+
+class ConversationCredentialTest(unittest.IsolatedAsyncioTestCase):
+    """Exercise the real route and agent client with controlled dependencies."""
+
+    async def test_stream_forwards_only_current_employee_access_when_enabled(self) -> None:
+        """Keep service authentication separate and ignore an injected browser header."""
+
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                sent = await self.call_stream(enabled=enabled)
+                self.assertEqual(len(sent), 1)
+                self.assertEqual(sent[0].headers["authorization"], "Bearer agent-service")
+                self.assertEqual(
+                    sent[0].headers.get("x-employee-access-token"), "employee-access" if enabled else None,
+                )
+                self.assertNotIn("employee-access", sent[0].content.decode())
+                self.assertNotIn("refresh-secret", str(sent[0].headers))
+
+    async def test_invalid_identity_or_foreign_chat_never_reaches_agent(self) -> None:
+        """Reject invalid auth and inaccessible conversations before forwarding."""
+
+        self.assertEqual(await self.call_stream(enabled=True, expired=True, expected_status=401), [])
+        self.assertEqual(await self.call_stream(enabled=True, foreign=True, expected_status=404), [])
+
+    async def call_stream(
+        self, *, enabled: bool, expired: bool = False, foreign: bool = False, expected_status: int = 200,
+    ) -> list[httpx.Request]:
+        """Send one chat request through the authorization and transport boundary."""
+
+        sent = []
+
+        def upstream(request: httpx.Request) -> httpx.Response:
+            """Record internal headers and return a controlled event stream."""
+            sent.append(request)
+            return httpx.Response(200, stream=httpx.ByteStream(b"".join(SSE_FRAMES)))
+
+        app = FastAPI()
+        app.include_router(router)
+        app.state.auth_service = SimpleNamespace(
+            authenticate_access=mock.AsyncMock(
+                return_value=Account(uuid4(), "employee", "Employee", "employee"),
+                side_effect=InvalidSession() if expired else None,
+            ),
+        )
+        app.state.conversation_store = SimpleNamespace(
+            require_active_owner=mock.AsyncMock(side_effect=ConversationNotFound() if foreign else None),
+            mark_active=mock.AsyncMock(),
+        )
+        with mock.patch.dict(os.environ, {
+            "AGENT_BASE_URL": "http://agent.internal",
+            "AGENT_API_TOKEN": "agent-service",
+            "AGENT_KB_TOOLS_ENABLED": str(enabled).lower(),
+        }):
+            settings = AgentSettings.from_env()
+        async with httpx.AsyncClient(
+            base_url="http://agent.internal", transport=httpx.MockTransport(upstream),
+        ) as transport:
+            app.state.agent_client = AgentClient(settings, transport)
+            async with httpx.AsyncClient(
+                base_url="http://api.internal", transport=httpx.ASGITransport(app=app),
+            ) as client:
+                response = await client.post(
+                    f"/v1/conversations/{uuid4()}/stream",
+                    json={"message": "E12"},
+                    headers={
+                        "Authorization": "Bearer employee-access",
+                        "X-Employee-Access-Token": "browser-spoof",
+                        "Cookie": "refresh=refresh-secret",
+                    },
+                )
+        self.assertEqual(response.status_code, expected_status, response.text)
+        return sent
+
+
+class ConversationHistoryProjectionTest(unittest.TestCase):
+    """Verify the backend's projection of saved agent history."""
+
+    def test_history_projects_tool_calls_and_citation_sources(self) -> None:
+        """Preserve public additions without carrying unrecognized upstream fields."""
+
+        reply_id = str(uuid4())
+        source = {
+            "kb": "line", "source_id": str(uuid4()), "source_kind": "upload",
+            "title": "Manual", "reference": {"type": "page", "page": 4},
+        }
+        result = {"rank": 1, "chunk_id": str(uuid4()), "title": "Seal", "status": "approved", "sources": [source]}
+        raw = {
+            "conversation_id": str(uuid4()), "truncated": False,
+            "messages": [{
+                "role": "assistant", "text": "See [S1].", "reply_id": reply_id,
+                "tools": [
+                    {"id": "call-1", "name": "list_knowledge_bases", "state": "results", "count": 1,
+                     "catalog": [{"name": "line", "title": "Line", "description": "Line manuals", "raw": "omit"}]},
+                    {"id": "call-2", "name": "search_knowledge", "state": "results", "count": 1,
+                     "kb": "line", "query": "Seal E12", "results": [result]},
+                ],
+                "citations": [{**CITATION, "sources": [source], "raw": "omit"}],
+            }],
+        }
+        message = AgentHistory.model_validate(raw).model_dump(mode="json")["messages"][0]
+        self.assertEqual(message["reply_id"], reply_id)
+        self.assertEqual(message["tools"][0]["catalog"], [{"name": "line", "title": "Line", "description": "Line manuals"}])
+        self.assertEqual(message["tools"][1]["results"][0]["sources"], [source])
+        self.assertEqual(message["citations"][0]["sources"], [source])
+        self.assertNotIn("raw", str(message))
 
 
 if __name__ == "__main__":

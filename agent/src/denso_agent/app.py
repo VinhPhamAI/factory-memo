@@ -5,6 +5,7 @@
 
 from contextlib import AsyncExitStack, asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -41,6 +42,7 @@ def create_app(
         from denso_agent.clients.modelark import (
             ModelArk,
         )  # pylint: disable=import-outside-toplevel
+        from denso_agent.clients.knowledge import KnowledgeClient
         from denso_agent.runtime.graph import (
             build_graph,
         )  # pylint: disable=import-outside-toplevel
@@ -52,13 +54,26 @@ def create_app(
             saver = await stack.enter_async_context(
                 checkpoint_store(resolved.database_url)
             )
+            knowledge = None
+            if resolved.kb_backend_url:
+                http = await stack.enter_async_context(
+                    httpx.AsyncClient(base_url=resolved.kb_backend_url, trust_env=False)
+                )
+                knowledge = KnowledgeClient(
+                    http,
+                    timeout=resolved.search_timeout,
+                    limit=resolved.search_max_results,
+                    excerpt_length=resolved.search_max_excerpt_characters,
+                )
 
             async def probe():
                 """Check checkpoint readiness through the existing runtime pool."""
                 return await check_readiness(saver)
 
             application.state.runtime = AgentRuntime(
-                build_graph(provider, saver, resolved), probe, resolved
+                build_graph(provider, saver, resolved, knowledge=knowledge),
+                probe,
+                resolved,
             )
             try:
                 yield

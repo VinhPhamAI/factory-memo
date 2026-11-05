@@ -1,5 +1,7 @@
 """Validate runtime and provisioning settings without opening connections."""
 
+from urllib.parse import urlsplit
+
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -54,6 +56,7 @@ class RuntimeSettings(DatabaseSettings):
     search_timeout: float = Field(
         default=10, alias="AGENT_SEARCH_TIMEOUT_SECONDS", gt=0, le=120
     )
+    kb_backend_url: str = Field(default="", alias="AGENT_KB_BACKEND_URL")
     search_max_results: int = Field(
         default=5, alias="AGENT_SEARCH_MAX_RESULTS", ge=1, le=20
     )
@@ -98,6 +101,24 @@ class RuntimeSettings(DatabaseSettings):
         if not value.get_secret_value().strip():
             raise ValueError("A nonblank secret is required.")
         return value
+
+    @field_validator("kb_backend_url")
+    @classmethod
+    def kb_origin(cls, value: str) -> str:
+        """Accept an optional backend origin without credentials or a path."""
+        if not value:
+            return value
+        url = urlsplit(value)
+        if (
+            url.scheme not in {"http", "https"}
+            or not url.hostname
+            or url.username is not None
+            or url.path not in {"", "/"}
+            or any((url.query, url.fragment))
+        ):
+            raise ValueError("An HTTP or HTTPS backend origin is required.")
+        _ = url.port
+        return value.rstrip("/")
 
 
 class SetupSettings(DatabaseSettings):

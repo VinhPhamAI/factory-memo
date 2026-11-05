@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -14,6 +15,11 @@ import {
   type Conversation,
 } from "@/services/conversations-api";
 
+export const MAX_THINKING_CHARACTERS = 64_000;
+const MAX_THINKING_REPLIES = 20;
+
+type Thinking = { reasoning: string; thinkingSeconds?: number };
+
 interface Conversations {
   api: ConversationsApi;
   /** The signed-in user's conversations, most recently active first. */
@@ -22,6 +28,12 @@ interface Conversations {
   error: string;
   /** Add or move a conversation to the top of the list. */
   remember(conversation: Conversation): void;
+  rememberThinking(
+    conversationId: string,
+    replyId: string,
+    thinking: Thinking,
+  ): void;
+  thinkingFor(conversationId: string, replyId: string): Thinking | undefined;
   rename(id: string, title: string): Promise<void>;
   remove(id: string): Promise<void>;
 }
@@ -35,6 +47,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
   const [list, setList] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const thinkingReplies = useRef(new Map<string, Thinking>());
 
   useEffect(() => {
     const abort = new AbortController();
@@ -65,12 +78,33 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     ]);
   }, []);
 
+  const rememberThinking = useCallback(
+    (conversationId: string, replyId: string, thinking: Thinking) => {
+      const entries = thinkingReplies.current;
+      const key = `${conversationId}/${replyId}`;
+      entries.delete(key);
+      entries.set(key, thinking);
+      const oldest = entries.keys().next();
+      if (entries.size > MAX_THINKING_REPLIES && !oldest.done)
+        entries.delete(oldest.value);
+    },
+    [],
+  );
+
+  const thinkingFor = useCallback(
+    (conversationId: string, replyId: string) =>
+      thinkingReplies.current.get(`${conversationId}/${replyId}`),
+    [],
+  );
+
   const value: Conversations = {
     api,
     list,
     loading,
     error,
     remember,
+    rememberThinking,
+    thinkingFor,
     rename: async (id, title) => {
       const renamed = await api.rename(id, title);
       setList((items) =>
@@ -79,6 +113,9 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     },
     remove: async (id) => {
       await api.remove(id);
+      const entries = thinkingReplies.current;
+      for (const key of entries.keys())
+        if (key.startsWith(`${id}/`)) entries.delete(key);
       setList((items) => items.filter((item) => item.id !== id));
     },
   };

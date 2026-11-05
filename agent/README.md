@@ -1,7 +1,8 @@
 # Standalone agent
 
-Streams ModelArk answers and saves conversation history in PostgreSQL. Runs
-without the backend. Tools, retrieval, voice, OCR and user login are not included.
+Streams ModelArk answers and saves conversation history in PostgreSQL. Supports
+standalone chat and optional knowledge-base search through the backend. For the
+signed-in UI and KB tools, follow [local chat setup](../docs/features/conversations.md#run-locally).
 
 [API and request examples](docs/api.md) · [Settings and development](docs/development.md)
 
@@ -96,6 +97,13 @@ Update local database URLs if PostgreSQL's published port changes.
 - Append `text.delta` for progress. **Replace** it with the full saved
   `complete.answer` when complete; strict validators must accept `answer`.
 - No `complete` means unfinished. A disconnect can also lose the final event.
+- To enable knowledge-base tools, set `AGENT_KB_TOOLS_ENABLED=true` in the backend
+  environment. For native serving, set `AGENT_KB_BACKEND_URL=http://127.0.0.1:8005`
+  in `agent/.env`. For paired Compose services, `AGENT_CONTAINER_KB_BACKEND_URL`
+  defaults to `http://api:8005`. Set `API_AGENT_BASE_URL=http://agent:8010` in the
+  backend environment when its agent also runs in Compose.
+  The agent uses the authenticated employee's access token
+  for KB calls. See [conversation settings](../docs/features/conversations.md#settings).
 
 | Endpoint | Access | Purpose |
 |---|---|---|

@@ -15,7 +15,7 @@ from typing import Literal
 from uuid import UUID
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, JsonValue, SecretStr, ValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,16 @@ class AgentRejected(RuntimeError):
         self.message = message
 
 
+class SourceReference(BaseModel):
+    """A saved link to a knowledge-base source and optional evidence location."""
+
+    kb: str
+    source_id: UUID
+    source_kind: Literal["upload", "conversation"]
+    title: str
+    reference: dict[str, JsonValue] | None = None
+
+
 class Citation(BaseModel):
     """Evidence that a marker such as [S1] in a saved answer refers to."""
 
@@ -49,6 +59,40 @@ class Citation(BaseModel):
     title: str
     excerpt: str
     location: str | None = None
+    sources: list[SourceReference] = Field(default_factory=list, max_length=2, exclude_if=lambda sources: not sources)
+
+
+class CatalogEntry(BaseModel):
+    """Public metadata of one knowledge base returned by discovery."""
+
+    name: str
+    title: str
+    description: str | None = None
+
+
+class ToolResult(BaseModel):
+    """A ranked search hit in the public tool summary."""
+
+    rank: int = Field(ge=1)
+    chunk_id: UUID
+    title: str
+    status: Literal["draft", "approved"]
+    excerpt: str | None = None
+    sources: list[SourceReference] = Field(default_factory=list, max_length=2)
+
+
+class ToolSummary(BaseModel):
+    """Public details of an executed knowledge tool, without raw provider data."""
+
+    id: str
+    name: Literal["list_knowledge_bases", "search_knowledge"]
+    state: Literal["running", "results", "empty", "unavailable"]
+    kb: str | None = None
+    query: str | None = None
+    count: int | None = Field(default=None, ge=0)
+    truncated: bool = False
+    catalog: list[CatalogEntry] = Field(default_factory=list, max_length=50)
+    results: list[ToolResult] = Field(default_factory=list)
 
 
 class AttachmentRef(BaseModel):
@@ -65,6 +109,8 @@ class HistoryMessage(BaseModel):
     text: str
     citations: list[Citation] = []
     attachment: AttachmentRef | None = None
+    reply_id: UUID | None = Field(default=None, exclude_if=lambda reply_id: reply_id is None)
+    tools: list[ToolSummary] = Field(default_factory=list, max_length=2, exclude_if=lambda tools: not tools)
 
 
 class AgentHistory(BaseModel):
@@ -81,16 +127,18 @@ class AgentSettings:
 
     base_url: str
     api_token: str
+    kb_tools_enabled: bool = False
 
     @classmethod
     def from_env(cls) -> AgentSettings | None:
-        """Read AGENT_BASE_URL and AGENT_API_TOKEN; None when either is unset."""
+        """Read the agent endpoint, service token, and optional tool toggle."""
 
         base_url = os.getenv("AGENT_BASE_URL", "").strip().rstrip("/")
         token = os.getenv("AGENT_API_TOKEN", "")
         if not base_url or not token.strip():
             return None
-        return cls(base_url=base_url, api_token=token)
+        kb_tools_enabled = os.getenv("AGENT_KB_TOOLS_ENABLED", "").strip().lower() == "true"
+        return cls(base_url=base_url, api_token=token, kb_tools_enabled=kb_tools_enabled)
 
 
 class AgentStream:
@@ -124,6 +172,7 @@ class AgentClient:
             timeout=httpx.Timeout(HISTORY_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
         )
         self._headers = {"Authorization": f"Bearer {settings.api_token}"}
+        self._kb_tools_enabled = settings.kb_tools_enabled
 
     async def aclose(self) -> None:
         """Close pooled connections."""
@@ -151,8 +200,15 @@ class AgentClient:
         except ValidationError as exc:
             raise AgentUnavailable("history response is invalid") from exc
 
-    async def open_stream(self, conversation_id: UUID, message: str) -> AgentStream:
+    async def open_stream(
+        self, conversation_id: UUID, message: str, *, employee_access: SecretStr | None = None,
+    ) -> AgentStream:
         """Start an answer stream for a conversation the caller already authorized.
+
+        Args:
+            conversation_id: ID of the authorized conversation.
+            message: Validated user input.
+            employee_access: Verified bearer access token for tool reads, if enabled.
 
         Returns:
             The open stream; its status was 200.
@@ -162,15 +218,18 @@ class AgentClient:
             AgentUnavailable: Any other failure before streaming started.
         """
 
+        headers = self._headers.copy()
+        if self._kb_tools_enabled and employee_access is not None:
+            headers["X-Employee-Access-Token"] = employee_access.get_secret_value()
         request = self._http.build_request(
             "POST",
             "/v1/agent/stream",
             json={"conversation_id": str(conversation_id), "message": message},
-            headers=self._headers,
+            headers=headers,
             timeout=httpx.Timeout(STREAM_READ_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
         )
         try:
-            response = await self._http.send(request, stream=True)
+            response = await self._http.send(request, stream=True, follow_redirects=False)
         except httpx.HTTPError as exc:
             raise AgentUnavailable(type(exc).__name__) from exc
         if response.status_code == 200:

@@ -182,8 +182,11 @@ def routing_model(*tool_calls, content="private routing text", error=None):
         if error:
             raise error
         calls = [
-            SimpleNamespace(function=SimpleNamespace(name=name, arguments=arguments))
-            for name, arguments in tool_calls
+            SimpleNamespace(
+                id=f"call-{index}",
+                function=SimpleNamespace(name=name, arguments=arguments),
+            )
+            for index, (name, arguments) in enumerate(tool_calls)
         ]
         message = SimpleNamespace(content=content, tool_calls=calls or None)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
@@ -236,6 +239,21 @@ async def test_route_failure_is_a_sanitized_provider_error():
         await model.route([])
     assert caught.value.code == "provider_error"
     assert "private" not in caught.value.message
+
+
+async def test_live_tool_choice_preserves_call_id_and_rejects_parallel_calls():
+    """Keep the provider ID for tool messages and execute at most one choice."""
+    from denso_agent.runtime.knowledge import KNOWLEDGE_TOOLS, ToolCall
+
+    model, requests = routing_model(("list_knowledge_bases", "{}"))
+    assert await model.decide_tool([], KNOWLEDGE_TOOLS) == ToolCall(
+        "call-0", "list_knowledge_bases", {}
+    )
+    assert requests[0]["tools"] == KNOWLEDGE_TOOLS
+    parallel, _ = routing_model(
+        ("list_knowledge_bases", "{}"), ("search_knowledge", "{}")
+    )
+    assert await parallel.decide_tool([], KNOWLEDGE_TOOLS) == ToolCall("", "", {})
 
 
 def reasoning_chunk(reasoning=None, content=None, finish=None):

@@ -173,6 +173,63 @@ describe("ConversationsApi", () => {
     });
   });
 
+  it("drops malformed tool events and refuses nonlocal evidence identities", async () => {
+    const result = {
+      rank: 1,
+      chunk_id: "016fbe12-6d56-7ed2-af5f-1d21779fabc6",
+      title: "Áp suất",
+      status: "approved",
+      sources: [
+        {
+          kb: "maintenance",
+          source_id: "016fbe12-6d56-7ed2-af5f-1d21779fabc5",
+          source_kind: "upload",
+          reference: { type: "paragraph", index: 4, quote: "Supporting quote" },
+          title: "Sổ tay",
+          original_url: "https://unsafe.example/",
+        },
+        {
+          kb: "..",
+          source_id: "016fbe12-6d56-7ed2-af5f-1d21779fabc5",
+          source_kind: "upload",
+        },
+      ],
+    };
+    const call = {
+      id: "search",
+      name: "search_knowledge",
+      state: "results",
+      kb: "maintenance",
+      query: "E12",
+      results: [result],
+    };
+    const frame = (tool: unknown) =>
+      `event: tool\ndata: ${JSON.stringify({ tool })}\n\n`;
+    const { auth } = fakeAuth(() => sse(
+      frame({ ...call, query: null }),
+      frame({ ...call, name: "unknown_tool" }),
+      frame(call),
+      'event: complete\ndata: {"answer":"ok"}\n\n',
+    ));
+
+    const events = await collect(
+      new ConversationsApi(auth, "").stream(conversation.id, "x"),
+    );
+    expect(events).toHaveLength(2);
+    const event = events[0];
+    expect(event.type).toBe("tool");
+    if (event.type === "tool")
+      expect(event.tool.results[0].sources).toEqual([
+        {
+          kb: "maintenance",
+          source_id: "016fbe12-6d56-7ed2-af5f-1d21779fabc5",
+          source_kind: "upload",
+          title: "Sổ tay",
+          reference: { type: "paragraph", index: 4, quote: "Supporting quote" },
+        },
+      ]);
+  });
+
   it("marks a stream that ends without a final event as interrupted", async () => {
     const { auth } = fakeAuth(() =>
       sse(

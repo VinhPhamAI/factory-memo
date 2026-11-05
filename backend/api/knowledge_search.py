@@ -70,6 +70,13 @@ class SearchEvidence(BaseModel):
     original_url: str | None
 
 
+class SearchApplicability(BaseModel):
+    """Recorded applicability fields available for a ranked hit."""
+
+    applies_to: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    condition: str | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
 class SearchResult(BaseModel):
     """One ranked chunk."""
 
@@ -82,6 +89,7 @@ class SearchResult(BaseModel):
     content: str
     scores: SearchScores
     evidence: list[SearchEvidence]
+    applicability: SearchApplicability | None = None
 
 
 class SearchResponse(BaseModel):
@@ -110,6 +118,7 @@ def search_response(kb: str, body: SearchRequest, found: ChunkSearchResult) -> S
             title=hit.title,
             content=hit.content,
             scores=SearchScores(fused=hit.fused, dense=hit.dense, keyword=hit.keyword),
+            applicability=SearchApplicability(**hit.applicability) if hit.applicability else None,
             evidence=[
                 SearchEvidence(
                     source_id=item.source_id,

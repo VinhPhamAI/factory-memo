@@ -8,11 +8,12 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
+from pydantic import SecretStr
 
 from denso_agent.api.sse import encode_event
 from denso_agent.config import RuntimeSettings
 from denso_agent.runtime.errors import AgentError
-from denso_agent.runtime.graph import TurnImage
+from denso_agent.runtime.graph import TurnContext, TurnImage
 from denso_agent.schemas.chat import (
     AttachmentRef,
     ChatHistory,
@@ -26,7 +27,9 @@ from denso_agent.schemas.events import (
     ReasoningEvent,
     StatusEvent,
     TextEvent,
+    ToolEvent,
 )
+from denso_agent.schemas.tools import ToolActivity
 
 
 def _answer_from_update(update: object) -> AIMessage:
@@ -61,6 +64,14 @@ def _citations(message: AIMessage) -> list[Citation]:
     return [
         Citation.model_validate(item)
         for item in message.additional_kwargs.get("citations", [])
+    ]
+
+
+def _tools(message: AIMessage) -> list[ToolActivity]:
+    """Restore the allowlisted summary saved on a completed answer."""
+    return [
+        ToolActivity.model_validate(item)
+        for item in message.additional_kwargs.get("tools", [])
     ]
 
 
@@ -173,6 +184,12 @@ class AgentRuntime:
                 role="user" if isinstance(message, HumanMessage) else "assistant",
                 text=message.content,
                 citations=_citations(message) if isinstance(message, AIMessage) else [],
+                reply_id=(
+                    message.additional_kwargs.get("reply_id")
+                    if isinstance(message, AIMessage)
+                    else None
+                ),
+                tools=_tools(message) if isinstance(message, AIMessage) else [],
                 attachment=(
                     AttachmentRef.model_validate(
                         message.additional_kwargs["attachment"]
@@ -189,7 +206,7 @@ class AgentRuntime:
         selected: list[HistoryMessage] = []
         characters = 0
         for message in reversed(public):
-            characters += len(message.text)
+            characters += len(message.model_dump_json()) + 1
             if (
                 len(selected) >= self.settings.history_max_messages
                 or characters > self.settings.history_max_characters
@@ -210,6 +227,8 @@ class AgentRuntime:
         request_id: UUID,
         search_scope: SearchScope | None = None,
         attachment: ImageAttachment | None = None,
+        *,
+        employee_access: SecretStr | None = None,
     ):
         """Stream provisional text, then return the full answer after persistence.
 
@@ -220,6 +239,7 @@ class AgentRuntime:
             search_scope: Knowledge bases the caller authorized; None disables search.
             attachment: Optional photo; its reference is saved with the message
                 and its bytes reach only this turn's model call.
+            employee_access: Optional backend credential kept in request memory.
         Yields:
             Typed SSE frames; at most one connected terminal event.
         """
@@ -278,6 +298,9 @@ class AgentRuntime:
                         }
                     },
                     stream_mode=["custom", "updates"],
+                    context=TurnContext(
+                        reply_id=request_id, employee_access=employee_access
+                    ),
                     version="v2",
                     durability="sync",
                 )
@@ -292,6 +315,9 @@ class AgentRuntime:
                                 yield event(
                                     "reasoning", ReasoningEvent, delta=reasoning
                                 )
+                            tool = part["data"].get("tool")
+                            if tool:
+                                yield event("tool", ToolEvent, tool=tool)
                         elif part["type"] == "updates":
                             if final_answer is not None:
                                 raise ValueError(
@@ -306,6 +332,8 @@ class AgentRuntime:
                 answer=final_answer.content,
                 citations=_citations(final_answer),
                 search=final_answer.additional_kwargs.get("search", "not_used"),
+                reply_id=final_answer.additional_kwargs.get("reply_id"),
+                tools=_tools(final_answer),
             )
         except TimeoutError:
             yield event(

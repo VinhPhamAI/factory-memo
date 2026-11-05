@@ -628,6 +628,25 @@ async def test_complete_and_history_carry_the_saved_citations(client, runtime):
     ]
 
 
+async def test_history_budget_includes_saved_evidence(client, runtime):
+    """A citation excerpt counts toward the history size limit."""
+    runtime.settings = runtime.settings.model_copy(
+        update={"history_max_characters": 300}
+    )
+    oversized = AIMessage(
+        content="See [S1].",
+        additional_kwargs={
+            "citations": [{**CITATION, "excerpt": "x" * 500}],
+        },
+    )
+    runtime.graph.aget_state = saved_state([oversized, HumanMessage(content="next")])
+
+    response = await client.get(history_path(), headers=AUTH)
+
+    assert [message["text"] for message in response.json()["messages"]] == ["next"]
+    assert response.json()["truncated"] is True
+
+
 async def test_answer_without_saved_metadata_completes_without_citations(
     client, runtime
 ):

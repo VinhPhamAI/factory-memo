@@ -72,6 +72,8 @@ _CONTEXT_KEY = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 # Statuses a chunk search may request; deprecated chunks are never searchable.
 SEARCHABLE_STATUSES = (KnowledgeStatus.DRAFT.value, KnowledgeStatus.APPROVED.value)
 MAX_CHUNK_SEARCH_LIMIT = 50
+_APPLICABILITY_FIELDS = ("applies_to", "condition")
+_MAX_APPLICABILITY_CHARACTERS = 240
 _LIVE_SOURCE = (KnowledgeSource.deleted_at.is_(None), File.deleted_at.is_(None))
 
 
@@ -108,6 +110,7 @@ class ChunkSearchHit:
     lexical_rank: int | None
     confident: bool
     evidence: list[ChunkEvidence]
+    applicability: dict[str, str] | None = None
 
     @property
     def citation(self) -> str:
@@ -116,6 +119,20 @@ class ChunkSearchHit:
         if self.kind == DOCUMENT_PASSAGE_KIND:
             return f"[D:{self.doc_id}]"
         return f"[K:{self.chunk_id}]"
+
+
+def _search_applicability(details: Mapping[str, Any]) -> dict[str, str] | None:
+    """Project recorded, bounded applicability fields from chunk details."""
+
+    context = details.get("context")
+    if not isinstance(context, Mapping):
+        return None
+    applicability = {}
+    for field in _APPLICABILITY_FIELDS:
+        value = context.get(field)
+        if isinstance(value, str) and (value := value.strip()):
+            applicability[field] = value[:_MAX_APPLICABILITY_CHARACTERS]
+    return applicability or None
 
 
 @dataclass(frozen=True)
@@ -920,6 +937,7 @@ class ChunkRepository(Repository):
                 lexical_rank=candidate.lexical_rank,
                 confident=candidate.confident,
                 evidence=evidence,
+                applicability=_search_applicability(details),
             ))
             if len(hits) == result_k:
                 break
