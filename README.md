@@ -7,9 +7,9 @@ Start with the [product requirements](docs/features/project-overview.md),
 [documentation index](docs/README.md). New sessions should read [AGENTS.md](AGENTS.md).
 
 The current code includes knowledge extraction/search, a React UI, a trace UI,
-and earlier voice-capture flows. The intended inquiry workflow and refined database
-remain separate implementation work. The independent agent has its own
-[setup, API, and development guide](agent/README.md).
+and voice-capture flows. For signed-in chat and knowledge-base tools, follow
+the [local chat setup](docs/features/conversations.md#run-locally). The independent
+agent has its own [setup, API, and development guide](agent/README.md).
 
 ## 1. Environment setup
 
@@ -243,8 +243,9 @@ cp .env.example .env.local
 npx vite --host 127.0.0.1 --port 5180 --strictPort
 ```
 
-Open **http://127.0.0.1:5180**, select a knowledge base, and ask a question. The
-default `VITE_DATA_MODE=api` connects QA to FastAPI through the Vite `/v1` proxy.
+Open **http://127.0.0.1:5180** and sign in. Follow the
+[chat setup](docs/features/conversations.md#run-locally) to enable KB tools.
+The default `VITE_DATA_MODE=api` connects to FastAPI through the Vite proxy.
 If you already have `.env.local`, set its data mode to `api` and restart Vite.
 The **Ghi âm** tab records a conversation (needs the speech service and HTTPS or
 localhost for the microphone); after Stop it shows the transcript next to the
