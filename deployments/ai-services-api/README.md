@@ -14,7 +14,8 @@ examples). Interactive docs: `http://127.0.0.1:8080/docs`.
 ```text
 client ──► ai-services-api :8080 ──┬─► ai-speech     /v1/audio/transcriptions[/realtime]
                                    ├─► ai-ocr        /v1/ocr ──► ai-ocr-vlm (vLLM)
-                                   └─► ai-embedding  /v1/embeddings[/tokenize, /info]
+                                   ├─► ai-embedding  /v1/embeddings[/tokenize, /info]
+                                   └─► ai-llm        /v1/chat/completions, /v1/completions, ...
 ```
 
 | Service | Paths | Worker containers | Guide |
@@ -22,6 +23,7 @@ client ──► ai-services-api :8080 ──┬─► ai-speech     /v1/audio/t
 | `speech` | `POST /v1/audio/transcriptions`, `WS /v1/audio/transcriptions/realtime` | `ai-speech` | [speech](../speech/README.md) |
 | `ocr` | `POST /v1/ocr` | `ai-ocr`, `ai-ocr-vlm` | [OCR](../ocr/README.md) |
 | `embedding` | `POST /v1/embeddings` (OpenAI-compatible), `POST /v1/embeddings/tokenize`, `GET /v1/embeddings/info` | `ai-embedding` (TEI) | [embedding](../embedding/README.md) |
+| `llm` | vLLM's own paths: `POST /v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/messages`, `/tokenize`, `/detokenize` | `ai-llm` (vLLM, Qwen/Qwen3.5-4B; also direct on port 8043) | [LLM](../llm/README.md) |
 
 The models run in separate workers because their runtimes cannot share one
 Python process: VieGem-ASR needs Python 3.12, PyTorch 2.14 and cuDNN 9.10, while
