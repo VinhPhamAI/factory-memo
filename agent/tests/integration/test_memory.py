@@ -189,7 +189,14 @@ async def test_history_endpoint_reads_saved_turns_after_restart(database):
     conversation = uuid4()
     async with checkpoint_store(database["database_url"]) as saver:
         graph = build_graph(provider, saver, settings)
-        await run_turn(graph, saver, settings, conversation, "Máy số 3 báo lỗi")
+        frames = await run_turn(
+            graph, saver, settings, conversation, "Máy số 3 báo lỗi"
+        )
+        reply_id = next(
+            data["reply_id"]
+            for name, data in parse_events(frames)
+            if name == "complete"
+        )
         provider.mode = "failure"
         await run_turn(graph, saver, settings, conversation, "Kết quả thế nào?")
     async with checkpoint_store(database["database_url"]) as saver:
@@ -224,6 +231,7 @@ async def test_history_endpoint_reads_saved_turns_after_restart(database):
             "text": "complete answer",
             "citations": [],
             "attachment": None,
+            "reply_id": reply_id,
         },
         {
             "role": "user",
@@ -371,3 +379,99 @@ async def test_photo_bytes_never_reach_checkpoint_storage(database):
             encoded[:40], marker.decode(), marker.hex(), encoded[:40].encode().hex()
         )
         assert sum(leaked.values()) == 0, leaked
+
+
+async def test_tool_summary_reopens_without_saving_employee_credential(database):
+    """Exercise the stream route, callback, checkpoint and reopened history."""
+    from denso_agent.clients.knowledge import KnowledgeClient
+    from denso_agent.runtime.knowledge import ToolCall
+
+    class SearchProvider(ControlledProvider):
+        """Request one KB search and stream an answer without a citation."""
+
+        async def decide_tool(self, _messages, _tools):
+            """Choose the same validated KB on every controlled turn."""
+            return ToolCall(
+                "fixture-call", "search_knowledge", {"kb": "press", "query": "E42"}
+            )
+
+    await setup_database(SetupSettings(**database))
+    settings = runtime_settings(database)
+    conversation = uuid4()
+    secret = f"employee-secret-{uuid4()}"
+    excerpt = "Uncited fixture excerpt"
+    provider = SearchProvider()
+
+    def search(request):
+        """Return one search hit only for the employee credential."""
+        assert request.headers["Authorization"] == f"Bearer {secret}"
+        assert request.url.path == "/v1/knowledge-management/press/search"
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "chunk_id": str(uuid4()),
+                        "title": "Press manual",
+                        "content": excerpt,
+                        "status": "draft",
+                        "evidence": [],
+                    }
+                ]
+            },
+        )
+
+    async with (
+        httpx.AsyncClient(
+            base_url="http://backend", transport=httpx.MockTransport(search)
+        ) as http,
+        checkpoint_store(database["database_url"]) as saver,
+    ):
+        knowledge = KnowledgeClient(http, timeout=1, limit=5, excerpt_length=1500)
+        runtime = AgentRuntime(
+            build_graph(provider, saver, settings, knowledge=knowledge),
+            lambda: check_readiness(saver),
+            settings,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=create_app(settings=settings, runtime=runtime)
+            ),
+            base_url="http://agent",
+        ) as client:
+            response = await client.post(
+                "/v1/agent/stream",
+                json={"conversation_id": str(conversation), "message": "E42?"},
+                headers={
+                    "Authorization": "Bearer test-token",
+                    "X-Employee-Access-Token": secret,
+                },
+            )
+    events = parse_events(response.text)
+    tool_results = [data["tool"] for name, data in events if name == "tool"]
+    complete = next(data for name, data in events if name == "complete")
+    assert [tool["state"] for tool in tool_results] == ["running", "results"]
+    assert tool_results[-1]["results"][0]["excerpt"] == excerpt
+    assert excerpt in str(provider.inputs)
+    assert secret not in response.text + str(provider.inputs)
+    async with checkpoint_store(database["database_url"]) as saver:
+        runtime = AgentRuntime(
+            build_graph(provider, saver, settings),
+            lambda: check_readiness(saver),
+            settings,
+        )
+        history = await runtime.load_history(conversation)
+    assert str(history.messages[-1].reply_id) == complete["reply_id"]
+    assert history.messages[-1].tools[0].results[0].title == "Press manual"
+    assert excerpt not in history.model_dump_json()
+
+    with psycopg.connect(database["database_url"]) as connection:
+        rows = connection.execute(
+            "SELECT t::text FROM checkpoints t UNION ALL "
+            "SELECT t::text FROM checkpoint_blobs t UNION ALL "
+            "SELECT t::text FROM checkpoint_writes t"
+        ).fetchall()
+    checkpoint_text = str(rows).lower()
+    for value in (secret, excerpt):
+        assert value.lower() not in checkpoint_text
+        assert value.encode().hex() not in checkpoint_text

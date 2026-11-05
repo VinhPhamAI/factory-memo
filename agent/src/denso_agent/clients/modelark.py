@@ -9,6 +9,7 @@ from httpx import HTTPError
 from openai import APIError, APITimeoutError, AsyncOpenAI, BadRequestError
 
 from denso_agent.runtime.errors import AgentError
+from denso_agent.runtime.knowledge import ToolCall
 from denso_agent.runtime.retrieval import SEARCH_TOOL
 
 MAX_ANSWER_CHARACTERS = 32_000
@@ -113,28 +114,56 @@ class ModelArk:
         Raises:
             AgentError: Provider timeout or request failure.
         """
+        calls = await self._request_calls(messages, [SEARCH_TOOL])
+        if not calls:
+            return None
+        for call in calls:
+            if call.function.name == "search_knowledge":
+                return self._parse_call(call).arguments.get("query", "")
+        return ""
+
+    async def decide_tool(
+        self, messages: list[dict], tools: list[dict]
+    ) -> ToolCall | None:
+        """Return one provider tool call, or mark malformed selections invalid.
+
+        Args:
+            messages: Current routing context, including any tool exchange.
+            tools: Tool definitions offered for this decision.
+        Returns:
+            The parsed call, an invalid sentinel, or None for a direct reply.
+        """
+        calls = await self._request_calls(messages, tools)
+        if not calls:
+            return None
+        if len(calls) != 1:
+            return ToolCall("", "", {})
+        return self._parse_call(calls[0])
+
+    async def _request_calls(self, messages: list[dict], tools: list[dict]):
+        """Ask the provider for a tool choice without streaming its private reply."""
         if self.client is None:
             raise RuntimeError("ModelArk client is not open")
         with _provider_errors():
             reply = await self.client.chat.completions.create(
                 model=self.settings.model,
                 messages=messages,
-                tools=[SEARCH_TOOL],
+                tools=tools,
                 tool_choice="auto",
                 max_tokens=ROUTING_MAX_TOKENS,
             )
-        calls = reply.choices[0].message.tool_calls if reply.choices else None
-        if not calls:
-            return None
-        for call in calls:
-            if call.function.name != SEARCH_TOOL["function"]["name"]:
-                continue
-            try:
-                arguments = json.loads(call.function.arguments or "")
-            except ValueError:
-                return ""
-            return arguments.get("query", "") if isinstance(arguments, dict) else ""
-        return ""
+        return reply.choices[0].message.tool_calls if reply.choices else None
+
+    @staticmethod
+    def _parse_call(call) -> ToolCall:
+        """Parse one function argument object or return the invalid sentinel."""
+        try:
+            arguments = json.loads(call.function.arguments or "")
+        except ValueError:
+            return ToolCall("", "", {})
+        if not isinstance(arguments, dict):
+            return ToolCall("", "", {})
+        return ToolCall(call.id, call.function.name, arguments)
 
     @staticmethod
     async def consume(stream, writer: Callable[[dict], Any]) -> str:

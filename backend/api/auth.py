@@ -39,6 +39,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 REFRESH_COOKIE = "refresh_token"
 COOKIE_PATH = "/auth"
 _bearer = HTTPBearer(auto_error=False)
+AccessCredential = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
 _NOT_AUTHENTICATED = {"WWW-Authenticate": "Bearer"}
 
 
@@ -113,7 +114,7 @@ def check_origin(request: Request) -> None:
 
 
 async def require_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    credentials: AccessCredential,
     service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> Account:
     """Authenticate the bearer access credential of a protected request.

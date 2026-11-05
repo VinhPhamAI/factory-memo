@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
 import { Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { sourceLink } from "@/services/knowledge-management";
+import { EvidenceLink } from "@/components/knowledge/evidence-link";
 import {
   evidenceKind,
   searchChunks,
@@ -14,7 +13,6 @@ import {
   type SearchResult,
 } from "@/services/knowledge-search";
 import { STATUS_LABELS } from "@/services/voice-display";
-import type { LocatedReference } from "@/types";
 import { cn } from "@/utils/cn";
 
 const MODES: Record<SearchMode, string> = {
@@ -29,24 +27,6 @@ const KINDS: Record<ChunkKind, string> = {
 const STATUSES: ChunkStatus[] = ["draft", "approved"];
 const CONTENT_EXCERPT = 400;
 
-function locationLabel(reference: LocatedReference): string {
-  switch (reference.type) {
-    case "page":
-    case "image":
-      return `trang ${reference.page}`;
-    case "paragraph":
-      return reference.table && reference.cell
-        ? `bảng ${reference.table}, ô ${reference.cell}`
-        : `đoạn ${reference.index}`;
-    case "cells":
-      return `${reference.sheet}!${reference.range}`;
-    case "passage":
-      return `đoạn ${reference.chunk_index}`;
-    default:
-      return "";
-  }
-}
-
 function excerpt(content: string) {
   return content.length > CONTENT_EXCERPT
     ? `${content.slice(0, CONTENT_EXCERPT).trimEnd()}…`
@@ -55,21 +35,15 @@ function excerpt(content: string) {
 
 function EvidenceChip({ kb, evidence }: { kb: string; evidence: SearchEvidence }) {
   const located = evidence.references.find((item) => !(item.type === "source"));
-  const where = located ? locationLabel(located) : "";
   return (
-    <Link
-      className="vc-chip km-search-evidence"
-      data-testid="search-evidence"
-      to={sourceLink({
-        kb,
-        kind: evidenceKind(evidence),
-        id: evidence.source_id,
-      })}
-      state={located ? { located } : undefined}
-    >
-      {evidence.source_title}
-      {where && ` · ${where}`}
-    </Link>
+    <EvidenceLink
+      kb={kb}
+      kind={evidenceKind(evidence)}
+      sourceId={evidence.source_id}
+      title={evidence.source_title}
+      located={located}
+      testId="search-evidence"
+    />
   );
 }
 

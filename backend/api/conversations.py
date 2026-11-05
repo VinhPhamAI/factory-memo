@@ -17,9 +17,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import AfterValidator, BaseModel, ConfigDict, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, SecretStr, StringConstraints
 
-from backend.api.auth import require_current_user
+from backend.api.auth import AccessCredential, require_current_user
 from backend.src.clients.agent import AgentHistory, AgentRejected, AgentStream, AgentUnavailable
 from backend.src.services.auth import Account
 from backend.src.storage.conversations import ConversationNotFound, ConversationRecord, ConversationStore
@@ -199,6 +199,7 @@ async def stream_answer(
     user: CurrentUser,
     store: Store,
     agent: Annotated[Any, Depends(get_agent_client)],
+    credentials: AccessCredential,
 ) -> Response:
     """Send the next message and forward the agent's events unchanged.
 
@@ -212,7 +213,11 @@ async def stream_answer(
     except ConversationNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, _NOT_FOUND) from exc
     try:
-        upstream = await agent.open_stream(conversation_id, body.message)
+        upstream = await agent.open_stream(
+            conversation_id,
+            body.message,
+            employee_access=SecretStr(credentials.credentials) if credentials is not None else None,
+        )
     except AgentRejected as exc:
         return JSONResponse(
             {"detail": {"code": exc.code, "message": exc.message}}, status_code=exc.status_code

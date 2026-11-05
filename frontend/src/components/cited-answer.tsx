@@ -1,5 +1,6 @@
 import { useState } from "react";
 import Markdown from "react-markdown";
+import { ChatSourceLinks } from "@/components/knowledge/evidence-link";
 import type { Citation, SearchStatus } from "@/services/conversations-api";
 
 const SEARCH_NOTES: Partial<Record<SearchStatus, string>> = {
@@ -74,6 +75,7 @@ export function CitedAnswer({
             {selected.location ? ` · ${selected.location}` : ""}
           </p>
           <blockquote>{selected.excerpt}</blockquote>
+          <ChatSourceLinks sources={selected.sources ?? []} />
           <p className="field-note">
             Trích từ kết quả tìm kiếm; có thể là tri thức nháp chưa được duyệt.
           </p>

@@ -17,7 +17,7 @@ Content-Type: application/json
 |---|---|
 | `conversation_id` | Required UUID (unique conversation ID), chosen by the caller; reuse for follow-ups. |
 | `message` | Required string; trimmed; 1–20000 characters. |
-| `search_scope` | Optional `{"knowledge_bases": [string, ...]}` (1–50). Set only by the caller after authorizing the user; the model never chooses it. Without it, knowledge search is not offered. |
+| `search_scope` | Optional `{"knowledge_bases": [string, ...]}` (1–50). The caller can narrow the employee's authorized KB scope. |
 | `attachment` | Optional photo for this message: `{"file_id", "media_type", "data"}`. `file_id` (1–200 characters) is the caller's reference, saved with the message. `media_type` is `image/jpeg`, `image/png` or `image/webp`. `data` is strict base64, at most 3 MiB decoded, sent to the model for this turn only and never saved. |
 | Other fields | Rejected. |
 | Request body | Maximum 5 MiB, including chunked requests. |
@@ -26,7 +26,9 @@ Content-Type: application/json
 
 - Authorize user login and conversation ownership.
 - Keep the shared service token out of browsers. It is not a user JWT (login token).
-- All token holders share the same access scope.
+- For KB tools, forward the authenticated employee's access token in the internal
+  `X-Employee-Access-Token` header. The agent uses it only for the backend's
+  knowledge APIs and keeps it out of model input, events, and history.
 - Use the server-generated request ID for tracing, not duplicate prevention.
 
 Authentication rejects before provider or checkpoint execution.
@@ -43,9 +45,10 @@ within the request).
 | Event | Additional fields | Client action |
 |---|---|---|
 | `status` | `state: "generating"` | Show that the request was accepted. |
-| `reasoning` | `delta: string` | Append to a separate, collapsed "thinking" view. The provider's reasoning: unverified, never part of the answer, not saved, at most 64000 characters per answer. Sent only by models that reason. |
+| `reasoning` | `delta: string` | Append to a separate, collapsed "thinking" view. The provider's unverified reasoning stays separate from the answer and is capped at 64000 characters per answer. It is absent from saved history. |
+| `tool` | `tool: ToolActivity` | Update the current reply's tool card by `tool.id`. |
 | `text` | `delta: string` | Append provisional text. |
-| `complete` | `finish_reason: "stop"`, required `answer: string`, `citations`, `search` | Replace provisional text with the whole saved answer; link its citations. |
+| `complete` | `finish_reason: "stop"`, required `answer: string`, `citations`, `search`, optional `reply_id` and `tools` | Replace provisional text with the whole saved answer. Link its citations and reconcile the live tool cards with the saved summary. |
 | `error` | `code`, `message`, `retryable` | Mark the answer as unfinished. |
 
 ```text
@@ -64,7 +67,7 @@ data: {"request_id":"22222222-2222-4222-8222-222222222222","conversation_id":"11
 - One final event per connected request: `complete` or `error`.
 - No `complete` means unfinished. HTTP 200 alone does not confirm success.
 - Disconnections can lose the final event. No replay exists; read [saved history](#read-saved-history) to see whether the answer was saved.
-- Strict client validators must accept the added `answer` field. Event names, request fields, and authentication are unchanged.
+- Clients correlate optional `reply_id` with saved history and accept older replies without tool summaries.
 
 ## Handle errors
 
@@ -97,21 +100,22 @@ Codes: `timeout`, `provider_error`, `context_limit`, `output_limit`,
 
 ## Knowledge search and citations
 
-When the service has a retrieval client and the request has `search_scope`, the
-agent first asks the model, without streaming, whether to call
-`search_knowledge`. The model supplies only a query (1–500 characters); the
-search always uses the request's scope. At most one search runs per turn.
+When the backend enables KB tools and the agent has a KB backend URL, the model
+can call `list_knowledge_bases` without arguments or `search_knowledge` with a
+KB name and a query (1–500 characters). Each turn runs at most one list and one
+search. The backend authorizes each KB request using the employee access token.
 
 | Rule | Behavior |
 |---|---|
 | Evidence | At most `AGENT_SEARCH_MAX_RESULTS` (5) results, excerpts cut to `AGENT_SEARCH_MAX_EXCERPT_CHARACTERS` (1500), numbered `S1`, `S2`, ... and given to the answer call as data, not instructions. |
-| Deadline | `AGENT_SEARCH_TIMEOUT_SECONDS` (10). |
+| Deadline | `AGENT_SEARCH_TIMEOUT_SECONDS` (10) per KB operation. |
 | `search` | `not_used`, `results`, `empty` (nothing matched) or `unavailable` (search failed or timed out, or the model's call was unusable). |
-| `citations` | `[{marker, evidence_id, title, excerpt, location}]` for each `[Sn]` marker in the answer that names evidence returned in that turn, in order of first use. Invented markers stay plain text. |
-| Privacy | The routing reply, the tool call and uncited search results are neither streamed nor saved. The final answer is saved with its citations, including the cited excerpts, and its `search` value. |
+| `citations` | Each valid `[Sn]` marker carries `marker`, `evidence_id`, `title`, `excerpt`, `location`, and source references when available. Invented markers stay plain text. |
+| `ToolActivity` | `id`, `name`, and `state` (`running`, `results`, `empty`, or `unavailable`). The card can also carry `kb`, `query`, `count`, `truncated`, `catalog`, and ranked `results` with source references. |
+| Retention | The final answer saves its citations and a bounded tool summary. Uncited search excerpts are available only in the live tool event. Internal provider routing messages stay private. |
 
-No live retrieval client is configured yet: the knowledge search API contract is
-pending, so production answers report `search: "not_used"`.
+See [conversation settings](../../docs/features/conversations.md#settings) to
+enable the backend connection.
 
 ## Read saved history
 
@@ -125,7 +129,7 @@ pending, so production answers report `search: "not_used"`.
 | Rule | Behavior |
 |---|---|
 | Source | The conversation's latest checkpoint; no separate message table. |
-| Messages | `{role, text, citations, attachment}`: saved user inputs and completed assistant answers, oldest first. Answers carry their saved citations; user messages carry the photo reference (`file_id`, `media_type`) or `null`. Tool, system, and other internal messages are excluded. |
+| Messages | Saved user inputs and completed assistant answers, oldest first. Each has `role`, `text`, `citations`, and `attachment` (photo reference or `null`). Assistant replies can carry `reply_id` and `tools`. Raw tool messages, system messages, and reasoning are excluded. |
 | Unknown conversation | HTTP 200 with an empty list. The caller checks ownership first. |
 | Failed turn | The saved user input appears without an answer; provisional text never appears. |
 | Limit | Newest messages within `AGENT_HISTORY_MAX_MESSAGES` (200) and `AGENT_HISTORY_MAX_CHARACTERS` (400000); `truncated` is true when older messages were left out. |

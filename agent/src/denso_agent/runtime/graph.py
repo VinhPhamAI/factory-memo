@@ -1,19 +1,23 @@
 """One-node conversation graph with bounded context and optional knowledge search.
 
-The answer node may first ask the model whether to call `search_knowledge`
-(at most once per turn), then streams the answer. Search results are given
-to the answer call only; the checkpoint keeps the human input and the final
-answer with its validated citations and search status.
+The answer node may discover a catalog and search one knowledge base before
+streaming the answer. The checkpoint keeps the human input and the final answer
+with its validated citations and compact tool summaries.
 """
 
 import base64
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.config import get_config, get_stream_writer
 from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.runtime import Runtime
+from pydantic import SecretStr
 
 from denso_agent.runtime.errors import AgentError
+from denso_agent.runtime.knowledge import Knowledge, KnowledgeTurn, run_knowledge
+from denso_agent.runtime.prompts import SYSTEM_INSTRUCTION
 from denso_agent.runtime.retrieval import (
     SearchScope,
     cited,
@@ -26,11 +30,7 @@ _COMMON = (
     "Do not invent past records, photographs, inspections or verified repairs. "
     "Explain uncertainty and ask for the missing equipment details or approved instructions. "
     "Distinguish suggested actions from completed repairs and verified outcomes."
-)
-SYSTEM_INSTRUCTION = (
-    "You are a manufacturing assistance demo. No factory knowledge, source evidence, "
-    "images, tools or verified repair procedures are available in this version. "
-    + _COMMON
+    " Without relevant evidence, do not give factory-specific settings or procedures."
 )
 _SEARCH_INSTRUCTIONS = {
     "results": (
@@ -49,11 +49,6 @@ _SEARCH_INSTRUCTIONS = {
         "question. Say the search could not be completed and cite nothing. "
     ),
 }
-PHOTO_INSTRUCTION = (
-    " The user attached a photo to the current message. Describe only what is "
-    "visible, say when the photo is unclear, and do not infer causes, completed "
-    "repairs or verified outcomes from the photo alone."
-)
 ROUTING_INSTRUCTION = (
     "Decide whether answering needs the factory knowledge base (manuals, past fault "
     "cases, procedures). If it does, call search_knowledge once with a short query; "
@@ -75,6 +70,14 @@ class TurnImage:
             "type": "image_url",
             "image_url": {"url": f"data:{self.media_type};base64,{encoded}"},
         }
+
+
+@dataclass(frozen=True)
+class TurnContext:
+    """Request-only inputs kept outside checkpointed graph configuration."""
+
+    reply_id: UUID
+    employee_access: SecretStr | None = field(default=None, repr=False)
 
 
 def select_context(messages: list, settings) -> list:
@@ -123,7 +126,9 @@ def _chat(messages: list) -> list[dict]:
     ]
 
 
-def build_graph(provider, saver, settings, retrieval=None):
+def build_graph(
+    provider, saver, settings, retrieval=None, *, knowledge: Knowledge | None = None
+):
     """Compile a single answer node against the supplied checkpoint saver.
 
     Args:
@@ -132,63 +137,85 @@ def build_graph(provider, saver, settings, retrieval=None):
         settings: Generation-context and search bounds.
         retrieval: Optional search client. Without it, or without a
             `search_scope` in the run configuration, the model is never asked
-            to search.
+            to use the legacy single-query path.
+        knowledge: Optional backend catalog and search client.
 
     Returns:
         A graph supporting custom streams and synchronous checkpoint durability.
     """
 
-    async def answer(state: MessagesState):
+    async def answer(state: MessagesState, runtime: Runtime[TurnContext]):
         """Optionally search, emit answer deltas, then append the cited answer."""
         context = _chat(select_context(state["messages"], settings))
         configurable = get_config().get("configurable", {})
         scope = configurable.get("search_scope")
         image = configurable.get("image")
-        status, evidence = "not_used", []
-        if retrieval is not None and isinstance(scope, SearchScope):
+        writer = get_stream_writer()
+        turn = KnowledgeTurn()
+        current = runtime.context
+        live = (
+            knowledge is not None
+            and current is not None
+            and current.employee_access is not None
+        )
+        if live:
+            turn = await run_knowledge(
+                provider,
+                context,
+                knowledge,
+                current.employee_access,
+                scope,
+                settings,
+                writer,
+            )
+        elif retrieval is not None and isinstance(scope, SearchScope):
             routing = [{"role": "system", "content": ROUTING_INSTRUCTION}, *context]
             requested = await provider.route(routing)
             if requested is not None:
                 query = valid_query(requested)
                 if query is None:
-                    status = "unavailable"
+                    turn.status = "unavailable"
                 else:
-                    status, evidence = await search_evidence(
+                    turn.status, turn.evidence = await search_evidence(
                         retrieval, query, scope, settings
                     )
-        if status == "not_used":
-            messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}, *context]
-        else:
-            messages = [
-                {"role": "system", "content": _SEARCH_INSTRUCTIONS[status] + _COMMON},
-                *context[:-1],
-                *([evidence_message(evidence)] if evidence else []),
-                context[-1],
-            ]
+        instruction = SYSTEM_INSTRUCTION
+        if not live and turn.status != "not_used":
+            instruction = _SEARCH_INSTRUCTIONS[turn.status] + _COMMON
+        outcome = turn.outcome_message() if live else None
+        messages = [
+            {"role": "system", "content": instruction},
+            *context[:-1],
+            *([outcome] if outcome else []),
+            *([evidence_message(turn.evidence)] if turn.evidence else []),
+            context[-1],
+        ]
         if isinstance(image, TurnImage):
-            current = messages[-1]
-            messages[0] = {
-                **messages[0],
-                "content": messages[0]["content"] + PHOTO_INSTRUCTION,
-            }
+            message = messages[-1]
             messages[-1] = {
                 "role": "user",
-                "content": [{"type": "text", "text": current["content"]}, image.part()],
+                "content": [
+                    {"type": "text", "text": message["content"]},
+                    image.part(),
+                ],
             }
-        result = await provider.answer(messages, get_stream_writer())
+        result = await provider.answer(messages, writer)
+        metadata = {"citations": cited(result, turn.evidence), "search": turn.status}
+        if turn.tools:
+            metadata["tools"] = turn.saved_tools()
+        if current is not None:
+            metadata["reply_id"] = str(current.reply_id)
         return {
             "messages": [
                 AIMessage(
                     content=result,
-                    additional_kwargs={
-                        "citations": cited(result, evidence),
-                        "search": status,
-                    },
+                    id=str(current.reply_id) if current is not None else None,
+                    additional_kwargs=metadata,
                 )
             ]
         }
 
-    builder = StateGraph(MessagesState)
+    builder = StateGraph(MessagesState, context_schema=TurnContext)
     builder.add_node("answer", answer)
     builder.add_edge(START, "answer")
     builder.add_edge("answer", END)

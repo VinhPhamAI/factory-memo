@@ -138,11 +138,14 @@ function Sidebar({
 /** Live mode: a left sidebar (drawer on phones) next to the current page. */
 export function QaShell() {
   const workspace = useWorkspace();
+  const auth = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [knowledgeNavigationLocked, setKnowledgeNavigationLocked] =
     useState(false);
   return (
-    <ConversationsProvider>
+    <ConversationsProvider
+      key={auth.status === "signed-in" ? auth.user.id : auth.status}
+    >
       <div className="app-shell chat-focus-shell" data-testid="chat-focus-root">
         <aside className="app-sidebar">
           <Sidebar knowledgeNavigationLocked={knowledgeNavigationLocked} />

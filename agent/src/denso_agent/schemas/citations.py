@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from denso_agent.schemas.tools import SourceRef
+
 # not_used: no search this turn; results / empty: the search ran;
 # unavailable: the search failed, timed out or the model's query was invalid.
 SearchStatus = Literal["not_used", "results", "empty", "unavailable"]
@@ -27,3 +29,6 @@ class Citation(BaseModel):
     title: str
     excerpt: str
     location: str | None = None
+    sources: list[SourceRef] = Field(
+        default_factory=list, max_length=2, exclude_if=lambda value: not value
+    )

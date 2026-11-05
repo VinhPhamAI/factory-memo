@@ -1,11 +1,12 @@
 import {
+  cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter, Outlet, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "@/hooks/auth";
 import { AuthClient } from "@/services/auth-api";
@@ -111,13 +112,16 @@ function show(path: string) {
   const router = createMemoryRouter(
     [
       {
-        path: "/ask/:threadId?",
         element: (
           <ConversationsProvider>
             <ConversationList />
-            <ConversationsPage />
+            <Outlet />
           </ConversationsProvider>
         ),
+        children: [
+          { path: "/ask/:threadId?", element: <ConversationsPage /> },
+          { path: "/files", element: <h1>Tệp cá nhân</h1> },
+        ],
       },
     ],
     { initialEntries: [path] },
@@ -136,6 +140,9 @@ function ask(text: string) {
   });
   fireEvent.click(screen.getByTestId("chat-send"));
 }
+
+const frame = (name: string, value: unknown) =>
+  `event: ${name}\ndata: ${JSON.stringify(value)}\n\n`;
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -436,5 +443,134 @@ describe("ConversationsPage", () => {
     expect(screen.queryByText("Câu hỏi của máy A")).not.toBeInTheDocument();
     expect(screen.queryByTestId("chat-answer")).not.toBeInTheDocument();
     expect(screen.getByTestId("chat-send")).toBeInTheDocument();
+  });
+
+  it("shows collapsed tool calls and reopens saved result details", async () => {
+    const histories: Record<string, unknown[]> = {};
+    const { streams } = serve(histories);
+    const router = show("/ask/chat-a");
+    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    ask("Lỗi E12");
+    await waitFor(() => expect(streams).toHaveLength(1));
+    const list = {
+      id: "list",
+      name: "list_knowledge_bases",
+      state: "results",
+      count: 1,
+      catalog: [{ name: "maintenance", title: "Bảo trì" }],
+    };
+    const source = {
+      kb: "maintenance",
+      source_id: "016fbe12-6d56-7ed2-af5f-1d21779fabc5",
+      source_kind: "upload",
+      title: "Sổ tay nguồn",
+      reference: { type: "page", page: 7 },
+    };
+    const result = {
+      rank: 1,
+      chunk_id: "016fbe12-6d56-7ed2-af5f-1d21779fabc6",
+      title: "Kiểm tra cảm biến",
+      status: "draft",
+      sources: [source],
+    };
+    const search = {
+      id: "search",
+      name: "search_knowledge",
+      state: "results",
+      kb: "maintenance",
+      query: "E12 áp suất",
+      count: 1,
+      results: [result],
+    };
+    const description = "Sổ tay bảo trì cho máy ép.";
+    const secondResult = {
+      ...result,
+      rank: 2,
+      chunk_id: "016fbe12-6d56-7ed2-af5f-1d21779fabc9",
+      title: "Kết quả chỉ hiển thị trực tiếp",
+      sources: [],
+    };
+    streams[0].push(frame("tool", {
+      tool: { ...list, catalog: [{ ...list.catalog[0], description }] },
+    }));
+    streams[0].push(frame("tool", { tool: { ...search, state: "running", results: [] } }));
+    streams[0].push(frame("tool", {
+      tool: {
+        ...search,
+        count: 2,
+        results: [{ ...result, excerpt: "Trích đoạn trực tiếp" }, secondResult],
+      },
+    }));
+    const rows = await screen.findAllByTestId("chat-tool-call");
+    expect(rows).toHaveLength(2);
+    rows[0].setAttribute("open", "");
+    expect(rows[1]).not.toHaveAttribute("open");
+    expect(rows[1].querySelector("summary")).toHaveTextContent("E12 áp suất");
+    rows[1].setAttribute("open", "");
+    expect(within(rows[1]).getByText("Trích đoạn trực tiếp")).toBeVisible();
+    expect(within(rows[1]).getByRole("link", { name: "Sổ tay nguồn · trang 7" })).toHaveAttribute(
+      "href", `/knowledge/maintenance/sources/upload/${source.source_id}`,
+    );
+    const citations = [{
+      marker: "S1", evidence_id: result.chunk_id, title: result.title,
+      excerpt: "Trích đoạn đã dẫn", sources: [source],
+    }];
+    const reply = {
+      reply_id: "016fbe12-6d56-7ed2-af5f-1d21779fabc7",
+      citations, tools: [list, { ...search, count: 2, truncated: true }],
+    };
+    streams[0].push(frame("complete", { ...reply, answer: "Kiểm tra [S1]." }));
+    const answer = screen.getByTestId("chat-answer");
+    await waitFor(() => expect(answer).toHaveAttribute("data-status", "saved"));
+    expect(within(rows[0]).getByText(description)).toBeVisible();
+    expect(within(rows[1]).getByText(secondResult.title)).toBeVisible();
+    expect(within(rows[1]).getByText("Trích đoạn trực tiếp")).toBeVisible();
+    expect(within(answer).getByTestId("answer-text")).not.toHaveTextContent("Trích đoạn trực tiếp");
+    histories["chat-a"] = [{ role: "assistant", text: "Kiểm tra [S1].", ...reply }];
+    await router.navigate("/files");
+    await screen.findByText("Tệp cá nhân");
+    await router.navigate("/ask/chat-a");
+    const reopened = (await screen.findAllByTestId("chat-tool-call"))[1];
+    expect(reopened).not.toHaveAttribute("open");
+    reopened.setAttribute("open", "");
+    expect(within(reopened).getByText("Trích đoạn đã dẫn")).toBeVisible();
+    expect(within(reopened).queryByText(secondResult.title)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Mở nguồn S1" }));
+    expect(within(screen.getByTestId("citation-card")).getByRole("link")).toHaveAttribute(
+      "href", `/knowledge/maintenance/sources/upload/${source.source_id}`,
+    );
+  });
+
+  it("restores thinking only for the matching saved reply after navigating away", async () => {
+    const histories: Record<string, unknown[]> = {};
+    const { streams } = serve(histories);
+    const router = show("/ask/chat-a");
+    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    ask("Lỗi E12");
+    await waitFor(() => expect(streams).toHaveLength(1));
+    const reply_id = "016fbe12-6d56-7ed2-af5f-1d21779fabc7";
+    streams[0].push(frame("reasoning", { delta: "Suy nghĩ cho lần trả lời này." }));
+    streams[0].push(frame("complete", { answer: "Kiểm tra.", reply_id }));
+    await waitFor(() => expect(screen.getByTestId("chat-answer")).toHaveAttribute("data-status", "saved"));
+    histories["chat-a"] = [
+      { role: "assistant", text: "Kiểm tra.", reply_id: "016fbe12-6d56-7ed2-af5f-1d21779fabc8" },
+      { role: "assistant", text: "Kiểm tra.", reply_id },
+    ];
+    histories["chat-b"] = [{ role: "assistant", text: "Kiểm tra.", reply_id }];
+    await router.navigate("/files");
+    await screen.findByText("Tệp cá nhân");
+    await router.navigate("/ask/chat-b");
+    await screen.findByTestId("chat-answer");
+    expect(screen.queryByTestId("thinking-block")).not.toBeInTheDocument();
+    await router.navigate("/ask/chat-a");
+    await waitFor(() => expect(screen.getAllByTestId("chat-answer")).toHaveLength(2));
+    const answers = screen.getAllByTestId("chat-answer");
+    expect(within(answers[0]).queryByTestId("thinking-block")).not.toBeInTheDocument();
+    fireEvent.click(within(answers[1]).getByRole("button", { name: /Đã suy nghĩ/ }));
+    expect(screen.getByText("Suy nghĩ cho lần trả lời này.")).toBeVisible();
+    cleanup();
+    show("/ask/chat-a");
+    await waitFor(() => expect(screen.getAllByTestId("chat-answer")).toHaveLength(2));
+    expect(screen.queryByTestId("thinking-block")).not.toBeInTheDocument();
   });
 });

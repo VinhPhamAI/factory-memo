@@ -10,7 +10,9 @@ The migrated databases use `EMBEDDING_DIM=3`; query embeddings are 3-dimensional
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 from uuid import UUID, uuid4
@@ -36,7 +38,26 @@ from backend.src.storage.repositories import ExtractionRunRepository, KnowledgeS
 from backend.src.storage.repositories.chunks import _lexical_candidates
 from backend.tests.test_chunk_retrieval import OTHER_VECTOR, QUERY_VECTOR, FakeEmbeddings, RetrievalTest
 from backend.tests.test_database_migrations import DATABASE_URL, EMBEDDING_DIM, MigratedDatabaseTest
+from backend.tests.test_file_types import PDF
 from backend.tests.test_phase7_knowledge_management import TestAccounts
+
+
+class ChunkApplicabilityTest(unittest.TestCase):
+    """Verify how public applicability is derived from stored chunk details."""
+
+    def test_allowlists_bounds_and_ignores_invalid_context(self) -> None:
+        """Only publish recognized nonempty strings from a context object."""
+
+        from backend.src.storage.repositories.chunks import _search_applicability
+
+        self.assertEqual(_search_applicability({"context": {
+            "applies_to": "  Pump P-101  ",
+            "condition": "x" * 250,
+            "private_note": "omit",
+        }}), {"applies_to": "Pump P-101", "condition": "x" * 240})
+        self.assertIsNone(_search_applicability({"context": {"applies_to": " ", "condition": ["dusty"]}}))
+        self.assertIsNone(_search_applicability({"context": "invalid context"}))
+
 
 class ChunkSearchErrorTest(unittest.TestCase):
     """Verify search error responses without starting PostgreSQL."""
@@ -255,10 +276,13 @@ class ChunkSearchApiTest(MigratedDatabaseTest):
         self.accounts = accounts
         self.worker = {"Authorization": "Bearer worker"}
         self.expert = {"Authorization": "Bearer expert"}
+        storage = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.enterContext(mock.patch.dict(os.environ, {
             "APP_DATABASE_URL": self.database.url,
             "EMBEDDING_DIM": str(EMBEDDING_DIM),
             "EMBEDDING_MODEL": "model-a",
+            "FILE_LIBRARY_DIR": str(storage / "library"),
+            "DOCUMENT_UPLOAD_DIR": str(storage / "uploads"),
         }))
         self.embeddings = mock.patch(
             "backend.src.services.chunk_search.build_embeddings_from_env",
@@ -293,10 +317,12 @@ class ChunkSearchApiTest(MigratedDatabaseTest):
         )
         return source.id
 
-    def add_knowledge(self, source: UUID, claim: str = "Replace the bearing seal.") -> UUID:
+    def add_knowledge(
+        self, source: UUID, claim: str = "Replace the bearing seal.", *, context: dict | None = None,
+    ) -> UUID:
         stored = KnowledgeRecord(
             subject="Pump P-101", claim=claim, type="rule", embedding=list(QUERY_VECTOR),
-            context={"equipment": "P-101"},
+            context=context if context is not None else {"equipment": "P-101"},
         )
         self.call(self.manager.chunks.add_records, self.kb_id, source, [stored])
         return stored.id
@@ -331,11 +357,27 @@ class ChunkSearchApiTest(MigratedDatabaseTest):
         self.assertIsInstance(evidence["references"], list)
         self.assertEqual(set(result), {
             "rank", "chunk_id", "citation", "kind", "status", "title", "content", "scores", "evidence",
+            "applicability",
         })
         self.assertEqual(set(evidence), {
             "source_id", "source_title", "source_kind", "references", "original_url",
         })
         self.assertNotIn("search_text", response.text)
+        self.assertIsNone(result["applicability"])
+
+    def test_applicability_copies_only_recorded_public_context(self) -> None:
+        """Project short applicability strings without returning arbitrary context."""
+
+        self.add_knowledge(self.add_source(), context={
+            "applies_to": "  Pump P-101  ",
+            "condition": "x" * 250,
+            "private_note": "do not include",
+        })
+        response = self.search()
+        self.assertEqual(response.status_code, 200, response.text)
+        (result,) = response.json()["results"]
+        self.assertEqual(result["applicability"], {"applies_to": "Pump P-101", "condition": "x" * 240})
+        self.assertNotIn("private_note", response.text)
 
     def test_a_text_source_has_no_original_url(self) -> None:
         self.add_knowledge(self.add_source())
@@ -421,6 +463,41 @@ class ChunkSearchApiTest(MigratedDatabaseTest):
         )
         self.assertEqual(removed.status_code, 204)
         self.assertEqual(self.search().json()["results"], [])
+
+    def test_saved_source_opens_after_library_removal_until_kb_source_is_removed(self) -> None:
+        """Distinguish file-library deletion from removing published KB evidence."""
+        manual = PDF
+        upload = self.api.post(
+            "/v1/files", headers=self.expert,
+            files={"file": ("manual.pdf", manual, "application/pdf")},
+        )
+        self.assertEqual(upload.status_code, 201, upload.text)
+        file_id = upload.json()["id"]
+        attached = self.api.post(
+            f"/v1/documents/{self.kb}/files", headers=self.expert,
+            json={"file_id": file_id},
+        )
+        self.assertEqual(attached.status_code, 201, attached.text)
+        source_id = UUID(attached.json()["id"])
+        self.add_knowledge(source_id)
+        hit = self.search().json()["results"][0]
+        original = hit["evidence"][0]["original_url"]
+        self.assertEqual(self.api.get(original).status_code, 401)
+        self.assertEqual(self.api.get(original, headers=self.worker).content, manual)
+
+        removed_file = self.api.delete(f"/v1/files/{file_id}", headers=self.expert)
+        self.assertEqual(removed_file.status_code, 204, removed_file.text)
+        self.assertEqual(self.search().json()["results"], [])
+        still_published = self.api.get(original, headers=self.worker)
+        self.assertEqual(still_published.status_code, 200)
+        self.assertEqual(still_published.content, manual)
+
+        removed_source = self.api.delete(
+            f"/v1/knowledge-management/{self.kb}/sources/upload/{source_id}",
+            headers=self.expert,
+        )
+        self.assertEqual(removed_source.status_code, 204, removed_source.text)
+        self.assertEqual(self.api.get(original, headers=self.worker).status_code, 404)
 
 
 if __name__ == "__main__":

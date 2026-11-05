@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from denso_agent.schemas.citations import Citation, SearchStatus
+from denso_agent.schemas.tools import ToolActivity
 
 
 class Event(BaseModel):
@@ -37,6 +38,12 @@ class TextEvent(Event):
     delta: str
 
 
+class ToolEvent(Event):
+    """Report an accepted tool call or its public result."""
+
+    tool: ToolActivity
+
+
 class CompleteEvent(Event):
     """Return the full answer after generation and checkpoint saving succeed."""
 
@@ -44,6 +51,10 @@ class CompleteEvent(Event):
     answer: str
     citations: list[Citation] = []
     search: SearchStatus = "not_used"
+    reply_id: UUID | None = Field(default=None, exclude_if=lambda value: value is None)
+    tools: list[ToolActivity] = Field(
+        default_factory=list, max_length=2, exclude_if=lambda value: not value
+    )
 
 
 class ErrorEvent(Event):

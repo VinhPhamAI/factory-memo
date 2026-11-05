@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from denso_agent.schemas.citations import Citation, SearchScope
+from denso_agent.schemas.tools import ToolActivity
 
 MAX_IMAGE_BYTES = 3 * 1024 * 1024
 
@@ -52,7 +53,7 @@ class ImageAttachment(AttachmentRef):
 class ChatRequest(BaseModel):
     """Accept one caller-owned conversation, a bounded message and search scope.
 
-    Without `search_scope` the model is not offered knowledge search.
+    A supplied `search_scope` limits otherwise authorized knowledge operations.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -81,6 +82,10 @@ class HistoryMessage(BaseModel):
     text: str
     citations: list[Citation] = []
     attachment: AttachmentRef | None = None
+    reply_id: UUID | None = Field(default=None, exclude_if=lambda value: value is None)
+    tools: list[ToolActivity] = Field(
+        default_factory=list, max_length=2, exclude_if=lambda value: not value
+    )
 
 
 class ChatHistory(BaseModel):

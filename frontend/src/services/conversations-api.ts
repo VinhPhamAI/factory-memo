@@ -1,4 +1,12 @@
 import { apiBaseUrl } from "./config";
+import {
+  parseChatSources,
+  parseChatTool,
+  parseChatTools,
+  parseReplyId,
+  type ChatSource,
+  type ChatTool,
+} from "./chat-tools";
 
 /** A conversation in the signed-in user's list (backend `/v1/conversations`). */
 export type Conversation = {
@@ -15,6 +23,7 @@ export type Citation = {
   title: string;
   excerpt: string;
   location: string | null;
+  sources?: ChatSource[];
 };
 
 /** not_used: no search; empty: nothing matched; unavailable: search failed. */
@@ -24,6 +33,9 @@ export type HistoryMessage = {
   role: "user" | "assistant";
   text: string;
   citations?: Citation[];
+  reply_id?: string | null;
+  search?: SearchStatus;
+  tools?: ChatTool[];
   /** A photo saved with a user message; open it through the file service. */
   attachment?: { file_id: string; media_type: string } | null;
 };
@@ -45,11 +57,14 @@ export type StreamEvent =
   | { type: "status" }
   | { type: "reasoning"; delta: string }
   | { type: "text"; delta: string }
+  | { type: "tool"; tool: ChatTool }
   | {
       type: "complete";
       answer: string;
       citations: Citation[];
       search: SearchStatus;
+      reply_id?: string;
+      tools?: ChatTool[];
     }
   | { type: "error"; code: string; message: string; retryable: boolean }
   | { type: "interrupted" };
@@ -96,6 +111,12 @@ const SEARCH_STATUSES: SearchStatus[] = [
   "unavailable",
 ];
 
+export function parseSearchStatus(value: unknown): SearchStatus {
+  return SEARCH_STATUSES.includes(value as SearchStatus)
+    ? (value as SearchStatus)
+    : "not_used";
+}
+
 /** Keep only well-formed citations; anything else is dropped, never guessed. */
 export function parseCitations(value: unknown): Citation[] {
   if (!Array.isArray(value)) return [];
@@ -111,7 +132,16 @@ export function parseCitations(value: unknown): Citation[] {
           item.location === undefined ||
           typeof item.location === "string"),
     )
-    .map((item) => ({ ...item, location: item.location ?? null }));
+    .map((item) => ({
+      marker: item.marker,
+      evidence_id: item.evidence_id,
+      title: item.title,
+      excerpt: item.excerpt,
+      location: item.location ?? null,
+      ...(item.sources !== undefined
+        ? { sources: parseChatSources(item.sources) }
+        : {}),
+    }));
 }
 
 function parseEvent(name: string, data: string): StreamEvent | null {
@@ -127,15 +157,21 @@ function parseEvent(name: string, data: string): StreamEvent | null {
     return { type: "text", delta: value.delta };
   if (name === "reasoning" && typeof value.delta === "string")
     return { type: "reasoning", delta: value.delta };
-  if (name === "complete" && typeof value.answer === "string")
+  if (name === "tool") {
+    const tool = parseChatTool(value.tool);
+    return tool ? { type: "tool", tool } : null;
+  }
+  if (name === "complete" && typeof value.answer === "string") {
+    const replyId = parseReplyId(value.reply_id);
     return {
       type: "complete",
       answer: value.answer,
       citations: parseCitations(value.citations),
-      search: SEARCH_STATUSES.includes(value.search as SearchStatus)
-        ? (value.search as SearchStatus)
-        : "not_used",
+      search: parseSearchStatus(value.search),
+      ...(replyId ? { reply_id: replyId } : {}),
+      ...(Array.isArray(value.tools) ? { tools: parseChatTools(value.tools) } : {}),
     };
+  }
   if (name === "error")
     return {
       type: "error",

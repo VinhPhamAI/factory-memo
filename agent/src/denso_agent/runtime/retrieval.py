@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from denso_agent.schemas.citations import SearchScope, SearchStatus
+from denso_agent.schemas.tools import SourceRef
 
 MAX_QUERY_CHARACTERS = 500
 SEARCH_TOOL = {
@@ -58,6 +59,9 @@ class Evidence:
     title: str
     excerpt: str
     location: str | None
+    status: str | None = None
+    sources: tuple[SourceRef, ...] = ()
+    applicability: dict[str, str] | None = None
 
 
 class Retrieval(Protocol):
@@ -128,6 +132,18 @@ def evidence_message(evidence: list[Evidence]) -> dict:
             "title": item.title,
             "location": item.location,
             "excerpt": item.excerpt,
+            **({"review_status": item.status} if item.status else {}),
+            **({"applicability": item.applicability} if item.applicability else {}),
+            **(
+                {
+                    "sources": [
+                        source.model_dump(mode="json", exclude_none=True)
+                        for source in item.sources
+                    ]
+                }
+                if item.sources
+                else {}
+            ),
         }
         for number, item in enumerate(evidence, start=1)
     ]
@@ -158,6 +174,16 @@ def cited(answer: str, evidence: list[Evidence]) -> list[dict]:
                 "title": item.title,
                 "excerpt": item.excerpt,
                 "location": item.location,
+                **(
+                    {
+                        "sources": [
+                            source.model_dump(mode="json", exclude_none=True)
+                            for source in item.sources
+                        ]
+                    }
+                    if item.sources
+                    else {}
+                ),
             }
         )
     return citations

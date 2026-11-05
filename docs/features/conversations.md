@@ -3,9 +3,8 @@
 Scope: the implemented `/v1/conversations` API that lets a signed-in user chat
 with the [standalone agent](../../agent/README.md). The backend stores the
 conversation list (`conversations` table in the application database); the agent
-stores the messages in its own `agent_memory` checkpoints. The agent supports
-knowledge search with citations and photo input, but neither is connected yet
-(see [Limits](#limits)), so answers currently cite no sources.
+stores the messages in its own `agent_memory` checkpoints. Knowledge-base tools
+and citations are available when enabled in both services. See [settings](#settings).
 
 Owners: routes in `backend/api/conversations.py`, queries in
 `backend/src/storage/conversations.py`, agent client in `backend/src/clients/agent.py`,
@@ -21,7 +20,9 @@ frontend tests next to those files and `frontend/e2e/qa.spec.ts`.
 2. The backend authenticates the user, then checks that the conversation is
    active and owned by that user. Anything else returns `404` before the agent is called.
 3. The backend closes its database session, then calls the agent with the shared
-   service token (`AGENT_API_TOKEN`). The browser never receives that token.
+   service token (`AGENT_API_TOKEN`). With KB tools enabled, it also forwards
+   the current employee access token for knowledge-base calls. The browser
+   never receives the service token.
 4. The agent reads or writes the checkpoint whose thread ID is the conversation ID.
 
 ## Endpoints
@@ -34,7 +35,7 @@ Every route requires a bearer access token (`401` without one).
 | `POST /v1/conversations` | `{title}` | `201` `Conversation` |
 | `PATCH /v1/conversations/{id}` | `{title}` | `200` `Conversation` |
 | `DELETE /v1/conversations/{id}` | — | `204`; soft delete |
-| `GET /v1/conversations/{id}/history` | — | `200` `{conversation_id, messages: [{role, text}], truncated}` |
+| `GET /v1/conversations/{id}/history` | — | `200` `{conversation_id, messages, truncated}` with saved citations and tool summaries |
 | `POST /v1/conversations/{id}/stream` | `{message}` | `200` `text/event-stream` |
 | `POST /v1/speech/transcriptions` | multipart `file` (PCM16 WAV, at most 120 s and 16 MB) | `200` `{text}` for the composer; nothing is stored |
 
@@ -50,7 +51,7 @@ renaming moves `updated_at`.
 ## Stream and history
 
 - The stream forwards the agent's SSE events unchanged and unbuffered: `status`,
-  `reasoning` (model thinking, when the model reasons), `text` (provisional
+  `reasoning` (model thinking, when the model reasons), `tool` (KB activity), `text` (provisional
   `delta`), then one final `complete` (`answer`) or `error`
   (`code`, `message`, `retryable`). See the [agent API](../../agent/docs/api.md#handle-the-stream).
 - Replace provisional text with `complete.answer`; `complete` is sent only after
@@ -58,18 +59,23 @@ renaming moves `updated_at`.
   answer unconfirmed: reopen history to see what was saved.
 - The UI shows reasoning in a collapsed "Đang suy nghĩ…" block that becomes
   "Đã suy nghĩ trong N giây" once the answer starts; clicking it shows the text.
-  Reasoning is not saved, so reopened history shows only answers. Reasoning
-  models can think for 10 seconds or more before the first answer word.
+  The current app session keeps thinking for up to 20 completed replies across
+  navigation. Reloading or ending the session clears this memory. The agent
+  never saves reasoning in history.
 - Closing the browser request closes the agent stream, which stops generation and
   frees the conversation for a new message. Nothing is resent automatically.
-- History comes from the agent checkpoint: `{role, text, citations, attachment}`
-  for saved user inputs and completed answers, oldest first, newest 200 messages
+- History comes from the agent checkpoint. Saved inputs and completed answers
+  appear oldest first, newest 200 messages
   at most (`truncated` marks omitted older ones). A failed turn shows the user
-  input with no answer.
-- `complete` and history carry the same saved `citations`
-  (`{marker, evidence_id, title, excerpt, location}`); the UI links only those
-  `[Sn]` markers and shows the excerpt. `complete.search` tells an empty search
-  (`empty`) from a failed one (`unavailable`).
+  input with no answer. Completed replies can include a `reply_id` and `tools`.
+- Tool cards show catalog and search progress, matches, and source references.
+  Reopened cards use the saved summary and cited excerpts. Uncited excerpts
+  are available only from the current stream. An empty search and an unavailable
+  search have distinct statuses.
+- The UI links validated `[Sn]` markers and result references through
+  authenticated source routes. Removing the file from the personal library
+  can leave an active KB source available to authorized users. Removing the
+  KB source itself makes the source unavailable. Saved citation text remains.
 - Speech: the composer's microphone records a clip, the backend transcribes it
   through the AI services gateway (`SPEECH_API_URL`, `POST /v1/audio/transcriptions`),
   and the text is placed in the composer for editing; the user sends it like typed
@@ -93,19 +99,47 @@ renaming moves `updated_at`.
 | Variable | Purpose |
 |---|---|
 | `APP_DATABASE_URL` | Application database (same as authentication). |
-| `AGENT_BASE_URL` | Agent address; native default `http://127.0.0.1:8010`. In Compose, `API_AGENT_BASE_URL` overrides the host default (`http://agent:8010` with `deployments/agent.compose.yml`). |
+| `AGENT_BASE_URL` | Native backend-to-agent address. The example uses `http://127.0.0.1:8010`. Set `API_AGENT_BASE_URL=http://agent:8010` when both run in Compose. |
 | `AGENT_API_TOKEN` | Must equal `AGENT_API_TOKEN` in `agent/.env`. |
+| `AGENT_KB_TOOLS_ENABLED` | Backend opt-in. Defaults to `false`. Set to `true` to enable the employee-scoped KB calls. |
+| `AGENT_KB_BACKEND_URL` | Native agent-to-backend address. The agent example uses `http://127.0.0.1:8005`. For Compose, override `AGENT_CONTAINER_KB_BACKEND_URL` if the default `http://api:8005` does not apply. |
 
 Without `AGENT_BASE_URL` and `AGENT_API_TOKEN`, list/create/rename/delete work and
 history/stream return `503`.
 
 ## Run locally
 
-1. Apply migrations to the application database ([database migrations](../development/database-migrations.md)).
-2. Set up and start the agent: `denso-agent setup-db`, then `denso-agent serve` ([agent setup](../../agent/README.md)).
-3. Set `AGENT_BASE_URL` and `AGENT_API_TOKEN` in `.env`, then start the backend
-   (`uv run uvicorn backend.app:app --port 8005`; on Windows add `--loop asyncio:SelectorEventLoop`).
-4. Start the frontend in API mode and sign in; `/ask` lists your conversations.
+Run commands from the repository root unless a step specifies another directory.
+Use Python 3.12+, `uv`, Docker with Compose, Node.js 22.12+, and Bash for the
+migration script.
+
+1. **Configure the backend.** On first setup, copy `.env.example` to `.env`.
+   Keep the example local database and agent addresses when using the default
+   ports. Generate a random `AGENT_API_TOKEN` and set
+   `AGENT_KB_TOOLS_ENABLED=true` for local KB chat with a trusted agent.
+   Configure `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, and `EMBEDDING_DIM` to
+   match the embedding provider used by the KB. Supply its API key if required.
+2. **Prepare PostgreSQL.** Run `uv sync`, then `bash deployments/migrate.sh`.
+   The script starts local PostgreSQL and applies application migrations.
+   See [database migrations](../development/database-migrations.md) for manual
+   steps or an existing database.
+3. **Start the agent.** Follow [agent setup](../../agent/README.md#local-setup)
+   to create `agent/.env` and `agent/.env.setup`, set ModelArk credentials and
+   database passwords, and run `setup-db` and `serve`. Set the same
+   `AGENT_API_TOKEN` as the backend. Keep
+   `AGENT_KB_BACKEND_URL=http://127.0.0.1:8005` for the native backend.
+4. **Start the backend.** In a separate terminal, run
+   `uv run uvicorn backend.app:app --host 127.0.0.1 --port 8005`. On Windows, add
+   `--loop asyncio:SelectorEventLoop`. For a new upload, also start the
+   [ingestion worker](knowledge-management.md#job-queue-and-workers). An
+   already-ingested KB is sufficient to test chat search.
+5. **Start the frontend.** From `frontend/`, run `npm ci` on first setup,
+   then `npm run dev -- --port 5180 --strictPort`. The UI defaults to API mode.
+   Open `http://127.0.0.1:5180/ask` and sign in.
+6. **Try a known search.** Ask the agent to search a named, ingested KB for a
+   term present in its sources. Expand the search row and open a citation.
+   If the chat works but tool rows never appear, check both KB settings and
+   restart the backend and agent after changing them.
 
 ## Limits
 
@@ -113,13 +147,12 @@ history/stream return `503`.
   can take all `AGENT_MAX_CONCURRENT_REQUESTS` slots, and others then get `429`.
 - One agent process: the one-active-answer rule per conversation is enforced in
   that process only.
-- Knowledge search is not connected: the agent has no live retrieval client and
-  the backend sends no `search_scope` until the knowledge search API contract
-  (authentication, fields, errors, source links) is agreed. Citations cannot open
-  their source document yet.
-- Photos are not connected: the agent accepts a validated photo per message, but
-  the backend has no per-user files API to authorize and read one, and the
-  configured model's image support is unverified.
+- Knowledge-base operations use the employee's current access token. If it
+  expires mid-turn or the KB API is unavailable, the tool can report
+  `unavailable`.
+- The [personal file library](file-library.md) is available. Sending a library
+  photo from chat still needs backend attachment handling and verification with
+  the configured model.
 - Speech-to-text has been tested against a controlled gateway only; no real
   Vietnamese recording has been checked, because the speech models run outside
   this laptop.
