@@ -1,12 +1,9 @@
 """Extraction runs of knowledge sources in the application database.
 
-The same rules as `storage/extraction_runs.py`, on the ORM `extraction_runs`
-table and scoped to one knowledge base: a running or done run blocks
-extracting the same normalized content in the same mode again within the
-knowledge base. A unique partial index guarantees this for one extraction
-fingerprint; a transaction lock on knowledge base, content and mode serializes
-the check across fingerprints. Runs are history: finished, never deleted, and
-their results are never overwritten.
+A live run of an active source blocks extracting the same normalized content
+in the same mode and knowledge base. A unique partial index covers one
+fingerprint, and an advisory transaction lock serializes starts across
+fingerprints. Removed sources keep their runs for history.
 """
 
 from __future__ import annotations
@@ -32,6 +29,9 @@ from backend.src.storage.orm import (
     new_id,
 )
 from backend.src.storage.repositories.base import Repository
+from backend.src.storage.repositories.lifecycle import (
+    InactiveKnowledgeBase, InactiveSource, lock_kb, lock_source,
+)
 
 
 MAX_ERROR_LENGTH = 2000
@@ -115,14 +115,16 @@ class ExtractionRunRepository(Repository):
         self.stale_after_s = stale_after_from_env() if stale_after_s is None else stale_after_s
 
     def _live(self, runs: Any = _RUNS) -> Any:
-        """Done runs, and running runs updated within `stale_after_s`.
+        """Done and recent running runs whose sources are active.
 
         Stale running runs do not block: the next start marks them failed.
         """
 
         cutoff = func.now() - func.make_interval(0, 0, 0, 0, 0, 0, self.stale_after_s)
-        return (runs.c.status == RunStatus.DONE.value) | (
-            (runs.c.status == RunStatus.RUNNING.value) & (runs.c.updated_at >= cutoff)
+        return ~runs.c.source_removed & (
+            (runs.c.status == RunStatus.DONE.value) | (
+                (runs.c.status == RunStatus.RUNNING.value) & (runs.c.updated_at >= cutoff)
+            )
         )
 
     async def _first(self, *conditions: Any) -> ExtractionRun | None:
@@ -172,7 +174,7 @@ class ExtractionRunRepository(Repository):
         return await self._first(*conditions)
 
     async def find_active_original(self, original: str, mode: str) -> ExtractionRun | None:
-        """Return a done or live running run of a source with the same exact text."""
+        """Find a live run of an active source with the same original bytes."""
 
         return await self._first(
             _RUNS.c.original_sha256 == original, _RUNS.c.mode == mode, self._live()
@@ -224,13 +226,19 @@ class ExtractionRunRepository(Repository):
 
         Raises:
             ValueError: The mode is unknown.
-            RunConflict: Another source has a done or live running run of the content.
+            RunConflict: An active source has a done or live running run of the content.
+            InactiveKnowledgeBase: The knowledge base was removed.
+            InactiveSource: The source was removed or does not belong to this KB.
             KnowledgeStorageUnavailable: The database could not be reached.
         """
 
         _checked(mode)
         try:
             async with self._transaction() as session:
+                if not await lock_kb(session, self.knowledge_base_id):
+                    raise InactiveKnowledgeBase()
+                if await lock_source(session, self.knowledge_base_id, source_id) is None:
+                    raise InactiveSource()
                 await session.execute(
                     text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
                     {"key": f"extraction_runs:{self.knowledge_base_id}:{content}:{mode}"},
@@ -243,6 +251,7 @@ class ExtractionRunRepository(Repository):
                             _RUNS.c.content_sha256 == content,
                             _RUNS.c.mode == mode,
                             _RUNS.c.status.in_(_ACTIVE),
+                            ~_RUNS.c.source_removed,
                         )
                         .order_by(
                             (_RUNS.c.status == RunStatus.DONE.value).desc(), _RUNS.c.created_at
@@ -350,9 +359,8 @@ class ExtractionRunRepository(Repository):
     ) -> list[tuple[ExtractionRun, int]]:
         """Return runs of sources sharing LSH bands with `bands`, most shared bands first.
 
-        Sources with the same content (exact duplicates), `exclude` and other
-        signature versions are left out. Each source comes with its done, or
-        live running, run in `mode`; sources without one are skipped.
+        Removed sources, exact duplicates, `exclude` and other signature versions
+        are left out. Each candidate has a done or live running run in `mode`.
 
         Returns:
             `(run, shared band count)` pairs.

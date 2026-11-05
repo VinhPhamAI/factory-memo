@@ -1040,7 +1040,11 @@ export function KnowledgeManagementPage() {
                     </Button>
                     {user && (canManage || user.id === source.submitted_by) && (
                       <Button variant="outline" size="sm"
-                        disabled={source.processing.job?.status === "running" || source.processing.status === "running"}
+                        disabled={
+                          source.processing.job?.status === "running" ||
+                          source.processing.conflict_job?.status === "running" ||
+                          source.processing.status === "running"
+                        }
                         onClick={() => {
                           setRemoveError("");
                           setRemoving(source);

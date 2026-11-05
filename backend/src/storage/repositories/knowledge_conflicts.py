@@ -10,7 +10,8 @@ Nothing here changes the status of the chunks.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
@@ -26,6 +27,7 @@ from backend.src.storage.knowledge_conflicts import (
 )
 from backend.src.storage.orm import KnowledgeConflict, new_id
 from backend.src.storage.repositories.base import Repository, json_text
+from backend.src.storage.repositories.lifecycle import InactiveKnowledgeBase, lock_kb
 
 
 __all__ = ["ConflictRepository", "ConflictRow", "ordered"]
@@ -67,6 +69,15 @@ class ConflictRepository(Repository):
         super().__init__(sessions)
         self.knowledge_base_id = knowledge_base_id
 
+    @asynccontextmanager
+    async def write_transaction(self) -> AsyncIterator[AsyncSession]:
+        """Protect the active KB while the caller locks and writes both sides of a pair."""
+
+        async with self._transaction() as session:
+            if not await lock_kb(session, self.knowledge_base_id):
+                raise InactiveKnowledgeBase()
+            yield session
+
     def _current_sql(self, where: str = "") -> str:
         """Select the current row of each pair among this KB's rows matching `where`.
 
@@ -83,8 +94,12 @@ class ConflictRepository(Repository):
             "updated_at DESC, id DESC"
         )
 
-    async def _select(self, sql: str, params: dict[str, Any]) -> list[ConflictRow]:
-        async with self._transaction() as session:
+    async def _select(
+        self, sql: str, params: dict[str, Any], session: AsyncSession | None = None,
+    ) -> list[ConflictRow]:
+        """Execute a conflict query scoped to this knowledge base."""
+
+        async with self._transaction(session) as session:
             rows = (await session.execute(text(sql), {"kb": self.knowledge_base_id, **params})).mappings().all()
         return [_row(row) for row in rows]
 
@@ -103,7 +118,7 @@ class ConflictRepository(Repository):
         )
         return {row.pair: row for row in rows}
 
-    async def put(self, row: ConflictRow) -> ConflictRow:
+    async def put(self, row: ConflictRow, *, session: AsyncSession | None = None) -> ConflictRow:
         """Store a judgement; a reviewer's decision on the same content is kept as is.
 
         Returns:
@@ -124,7 +139,7 @@ class ConflictRepository(Repository):
         placeholders = ", ".join(
             f"CAST(:{column} AS jsonb)" if column in _JSON_COLUMNS else f":{column}" for column in _INSERTED
         )
-        async with self._transaction() as session:
+        async with self._transaction(session) as session:
             stored = (await session.execute(text(
                 f"INSERT INTO {_TABLE} ({', '.join(_INSERTED)}) VALUES ({placeholders}) "
                 "ON CONFLICT (a_id, b_id, judge_fingerprint) DO UPDATE SET "
@@ -144,14 +159,14 @@ class ConflictRepository(Repository):
         return _row(stored)
 
     async def current(
-        self, pairs: Iterable[tuple[UUID, UUID]]
+        self, pairs: Iterable[tuple[UUID, UUID]], *, session: AsyncSession | None = None,
     ) -> dict[tuple[UUID, UUID], ConflictRow]:
         """Return the current row of each ordered pair, under any judge fingerprint."""
 
         params = _pair_params(pairs)
         if not params["a_ids"]:
             return {}
-        rows = await self._select(self._current_sql(_PAIRS_SQL), params)
+        rows = await self._select(self._current_sql(_PAIRS_SQL), params, session)
         return {row.pair: row for row in rows}
 
     async def get_row(self, conflict_id: UUID) -> ConflictRow | None:
@@ -228,7 +243,8 @@ class ConflictRepository(Repository):
         )
 
     async def set_review(
-        self, conflict_id: UUID, status: str, *, linked: bool, event: dict[str, Any]
+        self, conflict_id: UUID, status: str, *, linked: bool, event: dict[str, Any],
+        session: AsyncSession | None = None,
     ) -> ConflictRow | None:
         """Store a reviewer's decision and append it to the row's `review` history.
 
@@ -246,5 +262,6 @@ class ConflictRepository(Repository):
             "review = review || CAST(:event AS jsonb) "
             "WHERE knowledge_base_id = :kb AND id = :id RETURNING *",
             {"id": conflict_id, "status": status, "linked": linked, "event": json_text([event])},
+            session,
         )
         return rows[0] if rows else None

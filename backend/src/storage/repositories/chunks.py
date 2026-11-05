@@ -359,12 +359,14 @@ class ChunkRepository(Repository):
         self,
         knowledge_base_id: UUID,
         updates: Sequence[KnowledgeLinkUpdate],
+        *,
+        session: AsyncSession | None = None,
     ) -> None:
-        """Apply record links and supersessions without replacing prior history."""
+        """Apply links and supersessions, joining the caller's transaction when supplied."""
 
         if not updates:
             return
-        async with self._transaction() as session:
+        async with self._transaction(session) as session:
             await self._apply_updates(session, knowledge_base_id, updates)
 
     async def _apply_updates(
@@ -415,19 +417,23 @@ class ChunkRepository(Repository):
             row.details = details
 
     async def get_records(
-        self, knowledge_base_id: UUID, ids: Sequence[UUID], *, embeddings: bool = False
+        self, knowledge_base_id: UUID, ids: Sequence[UUID], *, embeddings: bool = False,
+        session: AsyncSession | None = None, for_update: bool = False,
     ) -> list[KnowledgeRecord]:
         """Return non-deleted records by ID in the requested order, skipping unknown IDs.
 
         Deprecated and superseded records are returned, as citations need them.
+        Writers can supply their transaction and lock records in ID order.
         """
 
         if not ids:
             return []
-        async with self._transaction() as session:
+        async with self._transaction(session) as session:
             query = select(KnowledgeChunk)
             if embeddings:
                 query = query.add_columns(cast(KnowledgeChunk.embedding, Text))
+            if for_update:
+                query = query.order_by(KnowledgeChunk.id).with_for_update()
             found = (
                 await session.execute(
                     query.where(

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -535,7 +536,7 @@ class ExtractionRunRepositoryTest(RepositoryTest):
                                            mode="knowledge", fingerprint="f1", settings={})
         self.assertEqual(elsewhere.status, "running")
         self.assertEqual((await self.runs.find_active(H_C1, "knowledge")).id, run.id)
-        with self.assertRaises(IntegrityError):
+        with self.assertRaises(InactiveSource):
             await other_runs.start(source_id=a, content=H_C9, mode="knowledge", fingerprint="f1", settings={})
 
     async def test_retried_job_takes_over_and_finished_runs_are_history(self) -> None:
@@ -553,6 +554,34 @@ class ExtractionRunRepositoryTest(RepositoryTest):
         self.assertEqual((conflict.exception.run.status, conflict.exception.run.result),
                          ("done", {"stored": 2}))
         self.assertEqual([item.status for item in await self.runs.for_source(a)], ["failed"])
+
+    async def test_removed_source_releases_content_without_rewriting_its_run(self) -> None:
+        """Allow a replacement source to extract the same content and fingerprint."""
+
+        old, replacement, duplicate = [await self.add_source() for _ in range(3)]
+        original = "b" * 64
+        run = await self.start(old, original_sha256=original)
+        await self.runs.finish(run.id, "done", result={"stored": 2})
+        await self.signatures.put(old, content=H_C1, version="v1", shingle_count=1, bands=["0:x"])
+        (history,) = await self.runs.for_source(old)
+
+        self.assertTrue(await SourceRepository(self.sessions).remove(
+            self.kb.id, old, actor_id=self.user.id, role=self.user.role,
+        ))
+        self.assertIsNone(await self.runs.find_active(H_C1, "knowledge"))
+        self.assertIsNone(await self.runs.find_active_original(original, "knowledge"))
+        self.assertEqual(await self.runs.overlap_candidates(
+            ["0:x"], "knowledge", version="v1", content=H_NEW,
+        ), [])
+        fresh = await self.start(replacement, original_sha256=original)
+        self.assertEqual(fresh.source_id, replacement)
+        (removed_history,) = await self.runs.for_source(old)
+        self.assertEqual(replace(removed_history, updated_at=history.updated_at), history)
+        with self.assertRaises(InactiveSource):
+            await self.start(old)
+        with self.assertRaises(RunConflict) as conflict:
+            await self.start(duplicate, fingerprint="f2")
+        self.assertEqual(conflict.exception.run.id, fresh.id)
 
     async def test_stale_running_run_stops_blocking(self) -> None:
         a, b = await self.add_source(), await self.add_source()

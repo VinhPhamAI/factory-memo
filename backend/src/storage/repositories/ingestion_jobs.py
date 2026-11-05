@@ -6,8 +6,9 @@ instead of a KB name and a source kind. Enqueueing calls `pg_notify` in the
 inserting transaction; workers LISTEN and also poll, and claim with
 `FOR UPDATE SKIP LOCKED`. Finishing a job and creating its next stage happen
 in one transaction. The source `status` follows its jobs in the same
-transactions: `processing` once claimed, `processed` after the last stage and
-`failed` when a job fails without a retry.
+transactions: `processing` once claimed, `processed` after the last ingestion
+stage, and `failed` when ingestion fails without a retry. Conflict detection
+has a separate status on its job.
 """
 
 from __future__ import annotations
@@ -195,6 +196,11 @@ class IngestionJobRepository(Repository):
     async def _set_source_status(
         self, session: AsyncSession, job: Job | Mapping[str, Any], status: SourceStatus
     ) -> None:
+        """Update ingestion status independently of any conflict check."""
+
+        stage = job["stage"] if isinstance(job, Mapping) else job.stage
+        if stage == JobStage.CONFLICT.value:
+            return
         source_id = job["source_id"] if isinstance(job, Mapping) else job.source_id
         await session.execute(
             _SOURCES.update()
@@ -220,6 +226,24 @@ class IngestionJobRepository(Repository):
         if row is None:
             raise JobLeaseLost(f"Job {job.id} is no longer owned by {worker}")
         return row
+
+    async def lock_lease(self, session: AsyncSession, job: Job) -> None:
+        """Protect one running attempt from lease recovery until the write commits.
+
+        Raises:
+            JobLeaseLost: A worker has released or reclaimed this attempt.
+        """
+
+        owned = await session.scalar(
+            select(_JOBS.c.id).where(
+                _JOBS.c.id == job.id,
+                _JOBS.c.status == JobStatus.RUNNING.value,
+                _JOBS.c.locked_by == job.locked_by,
+                _JOBS.c.attempts == job.attempts,
+            ).with_for_update(read=True)
+        )
+        if owned is None:
+            raise JobLeaseLost(f"Job {job.id} is no longer owned by this attempt")
 
     async def enqueue(
         self,
@@ -373,6 +397,8 @@ class IngestionJobRepository(Repository):
             if not continue_pipeline or not job.next_stages:
                 await self._set_source_status(session, job, SourceStatus.PROCESSED)
                 return None
+            if job.next_stages[0] == JobStage.CONFLICT.value:
+                await self._set_source_status(session, job, SourceStatus.PROCESSED)
             return await self._insert(
                 session, knowledge_base_id=job.knowledge_base_id, source_id=job.source_id,
                 stage=job.next_stages[0], mode=job.mode, next_stages=job.next_stages[1:],

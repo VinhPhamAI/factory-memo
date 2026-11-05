@@ -15,6 +15,7 @@ import type {
   KnowledgeConflict,
 } from "@/services/knowledge-conflicts";
 import type { SourceJob } from "@/services/knowledge-management";
+import { sessionClient } from "@/services/auth-api";
 
 const side = (id: string, claim: string): ConflictSide => ({
   id,
@@ -85,12 +86,19 @@ function show(onChanged = vi.fn()) {
 }
 const loaded = () =>
   screen.findByRole("button", { name: "Xác nhận mâu thuẫn" });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  sessionClient.accessToken = null;
+  vi.unstubAllGlobals();
+});
 
 describe("conflict review", () => {
   it("compares evidence and confirms without approving the draft records", async () => {
+    sessionClient.accessToken = "conflict-review-test-token";
     const onChanged = vi.fn();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer conflict-review-test-token",
+      );
       if (url.endsWith("/review")) {
         expect(JSON.parse(init?.body as string)).toEqual({
           decision: "confirm",

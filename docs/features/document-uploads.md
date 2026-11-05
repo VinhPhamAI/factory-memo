@@ -48,7 +48,8 @@ returns `201` with the new source ID and saved file metadata. An identical activ
 file in the same KB returns `200` with the existing source ID, file metadata and
 `duplicate: true`. Duplicate uploads discard the extra copy of the bytes and leave
 the existing source's jobs as they are. After the source is removed, the same bytes
-can be uploaded as a new source.
+can be uploaded and extracted as a new source. The removed source retains its
+original file and extraction history.
 
 Errors include `401` for an unusable token, `404` for an unknown or deleted KB,
 `422` for missing or empty files or invalid filenames, `413` for a file over the

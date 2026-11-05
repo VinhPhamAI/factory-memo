@@ -1,9 +1,7 @@
 """Knowledge bases created at runtime, e.g. from the UI.
 
-A created knowledge base copies a built-in template's policy (prompts, typed
-extraction schema, embedding settings) and gets its own `kb_<name>` database;
-only its name, title and description differ. Definitions are persisted by
-`backend.src.storage.kb_registry` and rebuilt here on start-up.
+A created knowledge base copies a template's extraction and retrieval policy.
+The application catalog rebuilds that policy from its database row.
 """
 
 from __future__ import annotations
@@ -12,6 +10,7 @@ import dataclasses
 
 from backend.knowledge_bases import general
 from backend.knowledge_bases.base import KnowledgeBaseSpec
+from backend.knowledge_bases.general.conflicts import conflict_detector
 
 # Templates a created knowledge base may copy. Industrial QA depends on its
 # equipment catalog, manuals and benchmark, so it is not offered as a template.
@@ -37,4 +36,7 @@ def custom_spec(
     if len(description) > MAX_DESCRIPTION_LENGTH:
         raise ValueError(f"Description must be at most {MAX_DESCRIPTION_LENGTH} characters")
     # replace() re-runs validation, including the name pattern.
-    return dataclasses.replace(base, name=name, title=title, description=description)
+    return dataclasses.replace(
+        base, name=name, title=title, description=description,
+        conflict_factory=conflict_detector,
+    )

@@ -31,7 +31,7 @@ from backend.src.storage.knowledge_conflicts import STATUSES as CONFLICT_STATUSE
 from backend.src.storage.models import KnowledgeLinkUpdate, KnowledgeStatus
 from backend.src.storage.repositories.chunks import ChunkRepository
 from backend.src.storage.repositories.extraction_runs import ExtractionRunRepository
-from backend.src.storage.repositories.ingestion_jobs import IngestionJobRepository, JobConflict
+from backend.src.storage.repositories.ingestion_jobs import IngestionJobRepository, Job, JobConflict
 from backend.src.storage.repositories.knowledge_conflicts import ConflictRepository
 from backend.src.storage.repositories.sources import (
     SourceEntry, SourceJobRunning, SourceRemovalForbidden, SourceRepository,
@@ -43,6 +43,12 @@ PREVIEW_CHARS = 100_000
 DECISIONS = {"approve": "approved", "reject": "deprecated", "reset": "draft"}
 CONFLICT_DECISIONS = {"confirm": "confirmed", "dismiss": "dismissed", "supersede": "resolved"}
 CONFLICT_PAGE_SIZE = 50
+CONFLICT_SUMMARY_FIELDS = (
+    "judge_mode", "judge_fingerprint", "pairs", "judged", "cached", "rechecked", "closed",
+    "truncated", "no_conflict", "open", "pending", "needs_review", "linked", "reviewed",
+    "llm_calls", "skipped_pairs",
+)
+BLOCKED_EXTRACTION_STATES = {"duplicate_content": "duplicate", "near_duplicate": "near_duplicate"}
 CLAIMING_STATUSES = ("open", "pending", "needs_review", "confirmed")
 RECHECK_SCAN_LIMIT = 1000
 OVERLAP_CANDIDATES = 20
@@ -96,15 +102,32 @@ class ApplicationKnowledgeManagementService:
         return can_convert_file(source.file.content_type, source.file.filename)
 
     @staticmethod
-    def _processing(source: SourceEntry, job: Any | None) -> dict[str, Any]:
+    def _processing(source: SourceEntry, job: Job | None) -> dict[str, Any]:
+        """Expose conflict progress separately from the extraction state."""
+
         state = dict(
             source.metadata.get("management")
             or source.metadata.get("ingestion")
             or {}
         )
-        if job is not None:
+        if job is not None and job.stage == "conflict":
+            state["conflict_job"] = job.to_json()
+            if job.status == "done" and job.result and "skipped" not in job.result:
+                state["conflicts"] = {
+                    **{key: job.result[key] for key in CONFLICT_SUMMARY_FIELDS if key in job.result},
+                    "status": "done",
+                    "job_id": str(job.id),
+                    "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+                }
+            elif "conflicts" in source.metadata:
+                state["conflicts"] = source.metadata["conflicts"]
+        elif job is not None:
             state["job"] = job.to_json()
             state["status"] = job.status
+            if job.stage == "extract" and job.status == "done":
+                state["status"] = BLOCKED_EXTRACTION_STATES.get(
+                    job.result.get("skipped"), job.status
+                )
             if job.mode:
                 state["mode"] = job.mode
             if job.error:
@@ -112,10 +135,17 @@ class ApplicationKnowledgeManagementService:
         return state
 
     def _summary(self, kb: str, source: SourceEntry, job: Any | None) -> dict[str, Any]:
+        """Describe the source stage, including completed jobs that skipped extraction."""
+
         counts = dict(source.chunk_counts)
-        extracted = source.status == "processed" or bool(sum(counts.values()))
         converted = source.extracted_text is not None
         processing = self._processing(source, job)
+        previous = (source.metadata.get("management") or {}).get("status")
+        blocked = (
+            previous in BLOCKED_EXTRACTION_STATES.values()
+            or processing.get("status") in BLOCKED_EXTRACTION_STATES.values()
+        )
+        extracted = bool(sum(counts.values())) or (source.status == "processed" and not blocked)
         mode = job.mode if job is not None else processing.get("mode")
         if mode is None and source.metadata.get("extraction_mode") in {
             "knowledge", "documents",
@@ -557,57 +587,66 @@ class ApplicationKnowledgeManagementService:
         row = await conflicts.get_row(conflict_id)
         if row is None:
             raise HTTPException(404, "Conflict not found")
-        current = (await conflicts.current([row.pair])).get(row.pair)
-        if current is not None and current.id != row.id:
-            raise HTTPException(409, "A newer judgement of this pair exists; reload the list")
-        if row.status == "resolved":
-            raise HTTPException(409, "This conflict was already resolved")
-        records = {
-            record.id: record
-            for record in await self.chunks.get_records(knowledge_base_id, list(row.pair))
-        }
-        if len(records) < 2:
-            raise HTTPException(409, "A record of this pair no longer exists")
-        first, second = records[row.a_id], records[row.b_id]
-        status = CONFLICT_DECISIONS[decision]
-        event = {
-            "action": "conflict_reviewed",
-            "decision": decision,
-            "status": status,
-            "note": note.strip() or None,
-            "actor": str(reviewer_id) if reviewer_id else None,
-            "at": datetime.now(timezone.utc).isoformat(),
-            "conflict_id": str(row.id),
-            "pair": [str(row.a_id), str(row.b_id)],
-        }
-        linked = row.linked
-        if decision == "supersede":
-            if keep_id not in records:
-                raise HTTPException(422, "keep_id must be one of the two records")
-            retired = second if keep_id == first.id else first
-            if retired.status is KnowledgeStatus.DEPRECATED or retired.superseded_by is not None:
-                raise HTTPException(409, "The other record is already retired")
-            event = {**event, "kept": str(keep_id), "retired": str(retired.id)}
-            updates = [
-                KnowledgeLinkUpdate(retired.id, superseded_by=keep_id, event=event),
-                KnowledgeLinkUpdate(keep_id, event=event),
-            ]
-        else:
-            linked = decision == "confirm"
-            updates = link_updates(first, second, records, linked=linked, event=event)
-            touched = {update.record_id for update in updates}
-            updates += [
-                KnowledgeLinkUpdate(record_id, event=event)
-                for record_id in row.pair if record_id not in touched
-            ]
-        await self.chunks.apply_updates(knowledge_base_id, updates)
-        reviewed = await conflicts.set_review(
-            row.id, status, linked=linked, event=event
-        )
-        refreshed = {
-            record.id: record
-            for record in await self.chunks.get_records(knowledge_base_id, list(row.pair))
-        }
+        async with conflicts.write_transaction() as session:
+            records = {
+                record.id: record
+                for record in await self.chunks.get_records(
+                    knowledge_base_id, row.pair, session=session, for_update=True
+                )
+            }
+            if len(records) < 2:
+                raise HTTPException(409, "A record of this pair no longer exists")
+            current = (await conflicts.current([row.pair], session=session)).get(row.pair)
+            if current is None or current.id != row.id or current.updated_at != row.updated_at:
+                raise HTTPException(409, "A newer judgement of this pair exists; reload the list")
+            row = current
+            if row.status == "resolved":
+                raise HTTPException(409, "This conflict was already resolved")
+            if stale(row, records):
+                raise HTTPException(409, "A record changed since this judgement; recheck the pair")
+            first, second = records[row.a_id], records[row.b_id]
+            status = CONFLICT_DECISIONS[decision]
+            event = {
+                "action": "conflict_reviewed",
+                "decision": decision,
+                "status": status,
+                "note": note.strip() or None,
+                "actor": str(reviewer_id) if reviewer_id else None,
+                "at": datetime.now(timezone.utc).isoformat(),
+                "conflict_id": str(row.id),
+                "pair": [str(row.a_id), str(row.b_id)],
+            }
+            linked = row.linked
+            if decision == "supersede":
+                if keep_id not in records:
+                    raise HTTPException(422, "keep_id must be one of the two records")
+                kept = records[keep_id]
+                if kept.status is KnowledgeStatus.DEPRECATED or kept.superseded_by is not None:
+                    raise HTTPException(409, "The selected record is already retired")
+                retired = second if keep_id == first.id else first
+                if retired.status is KnowledgeStatus.DEPRECATED or retired.superseded_by is not None:
+                    raise HTTPException(409, "The other record is already retired")
+                event = {**event, "kept": str(keep_id), "retired": str(retired.id)}
+                updates = [
+                    KnowledgeLinkUpdate(retired.id, superseded_by=keep_id, event=event),
+                    KnowledgeLinkUpdate(keep_id, event=event),
+                ]
+            else:
+                linked = decision == "confirm"
+                updates = link_updates(first, second, records, linked=linked, event=event)
+                touched = {update.record_id for update in updates}
+                updates += [
+                    KnowledgeLinkUpdate(record_id, event=event)
+                    for record_id in row.pair if record_id not in touched
+                ]
+            await self.chunks.apply_updates(knowledge_base_id, updates, session=session)
+            reviewed = await conflicts.set_review(
+                row.id, status, linked=linked, event=event, session=session
+            )
+            refreshed = {
+                record.id: record
+                for record in await self.chunks.get_records(knowledge_base_id, row.pair, session=session)
+            }
         return self._conflict_json(reviewed, refreshed)
 
     async def recheck_conflicts(

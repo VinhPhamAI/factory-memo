@@ -145,7 +145,7 @@ def default_ingestion_factory(spec: KnowledgeBaseSpec, store: KnowledgeStore):
         normalizer=spec.record_normalizer,
         verifier=KnowledgeVerifier.from_env(os.getenv("VOICE_VERIFY", "quotes")),
         consolidator=(
-            KnowledgeConsolidator.from_env(store)
+            KnowledgeConsolidator.from_env(store, detect_conflicts=spec.conflict_factory is None)
             if _env_flag("VOICE_CONSOLIDATE", True) else None
         ),
     )

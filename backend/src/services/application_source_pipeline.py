@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -23,6 +24,7 @@ from backend.api.voice_capture import default_ingestion_factory
 from backend.src.agents.rag import Document, chunk_document
 from backend.src.agents.rag.indexing import index_config
 from backend.src.services.converters import ConverterError, Segment, convert_file
+from backend.src.services.knowledge_conflicts import link_updates, stale
 from backend.src.services.knowledge_ingestion import transcript_sha256
 from backend.src.services.located_evidence import (
     references_for_chunks,
@@ -55,10 +57,12 @@ from backend.src.storage.embeddings import (
     embedding_model_from_env,
 )
 from backend.src.storage.extraction_runs import content_sha256, extraction_fingerprint
+from backend.src.storage.knowledge_conflicts import ConflictRow
 from backend.src.storage.models import (
     ConversationStatus,
     KnowledgeLinkUpdate,
     KnowledgeRecord,
+    KnowledgeStatus,
     RawConversation,
 )
 from backend.src.storage.repositories.chunks import ChunkRepository
@@ -68,7 +72,7 @@ from backend.src.storage.repositories.extraction_runs import (
     ExtractionRunRepository,
     RunConflict,
 )
-from backend.src.storage.repositories.ingestion_jobs import Job, PreparedJobResult
+from backend.src.storage.repositories.ingestion_jobs import IngestionJobRepository, Job, PreparedJobResult
 from backend.src.storage.repositories.knowledge_conflicts import ConflictRepository
 from backend.src.storage.repositories.sources import FileEntry, SourceEntry, SourceRepository
 
@@ -669,38 +673,68 @@ class ApplicationSourcePipeline:
         )
 
     async def run_conflict(self, job: Job) -> dict[str, Any]:
-        """Judge suspected conflicts and store the source-level result summary."""
+        """Judge suspected conflicts and return the summary for the job result."""
 
         _kb_name, spec, source = await self._source(job)
         detector = spec.conflict_factory(spec) if spec.conflict_factory is not None else None
         if detector is None:
             return {"skipped": "conflict detection disabled"}
         store = self._store(job.knowledge_base_id, source, spec)
-        result = await detector.adetect(
+        conflicts = ConflictRepository(self.sessions, job.knowledge_base_id)
+        return await detector.adetect(
             store,
-            ConflictRepository(self.sessions, job.knowledge_base_id),
+            conflicts,
             source.id,
             job_id=str(job.id),
+            persist=partial(self._persist_conflict, job, conflicts),
         )
-        if "skipped" not in result:
-            counts = (
-                "pairs", "judged", "cached", "rechecked", "closed", "truncated",
-                "no_conflict", "open", "pending", "needs_review", "linked",
-                "reviewed", "llm_calls",
-            )
-            await self.sources.update(
-                job.knowledge_base_id,
-                source.id,
-                metadata={"conflicts": {
-                    "status": "done",
-                    "job_id": str(job.id),
-                    "finished_at": now(),
-                    "judge_mode": result["judge_mode"],
-                    "judge_fingerprint": result["judge_fingerprint"],
-                    **{key: result[key] for key in counts if key in result},
-                }},
-            )
-        return result
+
+    async def _persist_conflict(
+        self, job: Job, conflicts: ConflictRepository, row: ConflictRow,
+    ) -> ConflictRow | None:
+        """Commit a verdict and its links under the job lease and both chunk locks."""
+
+        async with conflicts.write_transaction() as session:
+            await IngestionJobRepository(self.sessions).lock_lease(session, job)
+            records = {
+                record.id: record
+                for record in await self.chunks.get_records(
+                    job.knowledge_base_id, row.pair, session=session, for_update=True
+                )
+            }
+            if len(records) < 2 or stale(row, records):
+                return None
+            previous = (await conflicts.current([row.pair], session=session)).get(row.pair)
+            if previous is not None and not stale(previous, records) and (
+                previous.reviewed
+                or (previous.judge_fingerprint == row.judge_fingerprint and previous.status != "pending")
+            ):
+                return previous
+            if row.status != "no_conflict" and any(
+                record.status is KnowledgeStatus.DEPRECATED or record.superseded_by is not None
+                for record in records.values()
+            ):
+                return None
+            if row.status == "pending" and previous is not None:
+                row = replace(row, linked=previous.linked)
+            stored = await conflicts.put(row, session=session)
+            if stored.status != "pending":
+                event = {
+                    "at": now(),
+                    "action": "conflict_detected" if stored.linked else "conflict_cleared",
+                    "relation": stored.relation,
+                    "status": stored.status,
+                    "aspect": stored.aspect,
+                    "confidence": stored.confidence,
+                    "reason": stored.reason,
+                    "judge_fingerprint": stored.judge_fingerprint,
+                    "job_id": stored.job_id,
+                }
+                updates = link_updates(
+                    records[row.a_id], records[row.b_id], records, linked=stored.linked, event=event,
+                )
+                await self.chunks.apply_updates(job.knowledge_base_id, updates, session=session)
+            return stored
 
     async def aclose(self) -> None:
         """Release cached client references; repositories own no persistent resources."""

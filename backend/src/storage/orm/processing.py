@@ -69,7 +69,7 @@ class ExtractionMode(StrEnum):
 
 
 class RunStatus(StrEnum):
-    """Result of one extraction attempt; running and done runs block repeats."""
+    """Result of one extraction attempt."""
 
     RUNNING = "running"
     DONE = "done"
@@ -95,7 +95,7 @@ class ConflictStatus(StrEnum):
 
 
 ACTIVE_JOB = text("status IN ('queued', 'running')")
-ACTIVE_RUN = text("status IN ('running', 'done')")
+ACTIVE_RUN = text("status IN ('running', 'done') AND NOT source_removed")
 
 
 class IngestionJob(ChangeDates, Base):
@@ -174,9 +174,8 @@ class IngestionJob(ChangeDates, Base):
 class ExtractionRun(ChangeDates, Base):
     """One extraction attempt of a source, kept as history.
 
-    A running or done run blocks extracting the same content in the same mode
-    and logic again within the collection. Runs are finished, never deleted,
-    and their results are never overwritten.
+    A running or done run of an active source blocks extracting the same
+    content in the same mode and logic again within the collection.
     """
 
     __tablename__ = "extraction_runs"
@@ -193,7 +192,7 @@ class ExtractionRun(ChangeDates, Base):
             name="fk_extraction_runs_source",
         ),
         Index(
-            "ix_extraction_runs_active_content",
+            "ix_extraction_runs_live_content",
             "knowledge_base_id",
             "content_sha256",
             "mode",
@@ -202,7 +201,7 @@ class ExtractionRun(ChangeDates, Base):
             postgresql_where=ACTIVE_RUN,
         ),
         Index(
-            "ix_extraction_runs_active_original",
+            "ix_extraction_runs_live_original",
             "knowledge_base_id",
             "original_sha256",
             "mode",
@@ -226,6 +225,8 @@ class ExtractionRun(ChangeDates, Base):
         JSONB, default=dict, server_default=text("'{}'::jsonb")
     )
     status: Mapped[str] = mapped_column(Text)
+    # The source's soft-deletion state, copied so it can be used in index predicates.
+    source_removed: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     job_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("ingestion_jobs.id"), index=True
     )

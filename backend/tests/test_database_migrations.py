@@ -252,15 +252,27 @@ class MigrationRevisionTest(MigratedDatabaseTest):
                     INSERT INTO ingestion_jobs (id, knowledge_base_id, source_id, stage)
                     VALUES (:job, :kb, :source, 'convert')
                 """), {"job": new_id(), "kb": kb_id, "source": second})
+                conn.execute(text("""
+                    INSERT INTO extraction_runs (id, knowledge_base_id, source_id, content_sha256,
+                        mode, fingerprint, status, result)
+                    VALUES (:run, :kb, :source, :sha, 'knowledge', 'fixture', 'done', '{"stored": 2}')
+                """), {"run": new_id(), "kb": kb_id, "source": second, "sha": "a" * 64})
             command.upgrade(config, "head")
         command.check(config)
-        with Session(engine) as session:
+        with Session(engine) as session, session.begin():
             self.assertEqual(session.get(KnowledgeSource, first).original_sha256, "a" * 64)
             self.assertIsNone(session.get(KnowledgeSource, first).deleted_at)
             self.assertIsNotNone(session.get(KnowledgeSource, second).deleted_at)
             self.assertIsNone(session.get(File, first_file).deleted_at)
             self.assertIsNotNone(session.get(File, second_file).deleted_at)
             self.assertEqual(session.scalar(select(IngestionJob.error)), "SOURCE_REMOVED")
+            run = session.scalars(select(ExtractionRun)).one()
+            self.assertEqual((run.source_id, run.source_removed, run.status, run.result),
+                             (second, True, "done", {"stored": 2}))
+            session.add(ExtractionRun(
+                knowledge_base_id=kb_id, source_id=first, content_sha256=run.content_sha256,
+                mode=run.mode, fingerprint=run.fingerprint, status="done",
+            ))
 
     def test_upgrade_refuses_the_service_job_queue_database(self) -> None:
         database = DisposableDatabase(DATABASE_URL or "")

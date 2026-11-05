@@ -13,12 +13,11 @@ Code and configuration take precedence over older documentation.
   [intended architecture](docs/architecture/system-architecture.md) when designing
   behavior across services. The [codebase map](docs/development/codebase-summary.md)
   identifies current entry points; service guides define actual setup commands.
-- The [database schema](docs/architecture/database-schema.md) tables, including the
-  processing tables, exist as models and Alembic revisions in a separate database
-  (`APP_DATABASE_URL`). Only authentication (`users`, `auth_sessions`), agent chat
-  (`conversations`) and the [file library](docs/features/file-library.md) (`files`)
-  use them so far. A merged design document or migration is not proof of working
-  service code.
+- The serving API and worker use the application schema in `APP_DATABASE_URL`
+  for knowledge bases, sources, chunks, processing jobs and conflict review.
+  Authentication uses `users` and `auth_sessions`; agent chat uses `conversations`;
+  the [file library](docs/features/file-library.md) uses `files`.
+  Check the service code for current [schema table](docs/architecture/database-schema.md) usage.
 
 ## Purpose and scope
 
@@ -55,8 +54,10 @@ separate package from the older backend agent.
   an applied one. Put triggers, functions, extensions and changed check constraints
   in a separate hand-written revision.
 - `backend/src/storage/job_queue.py`, `source_pipeline.py` under services and
-  `backend/worker.py`: convert → extract → optional conflict jobs. Preserve leases,
-  retries, one active job per source and transactional next-stage creation.
+  their callers handle legacy processing. `backend/worker.py` uses
+  `application_source_pipeline.py` and the application repositories for
+  convert → extract → optional conflict jobs. Preserve leases, retries, one
+  active job per source and transactional next-stage creation.
 - `backend/src/agents/rag/`: document indexing and hybrid retrieval (document
   mode indexes without LLM extraction);
   `backend/src/agents/agent/`: agent tools, evidence and stream events.

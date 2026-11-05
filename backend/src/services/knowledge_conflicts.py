@@ -32,7 +32,7 @@ import hashlib
 import json
 import random
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum
@@ -511,20 +511,19 @@ class ConflictDetector:
         })
 
     async def _record(self, store: Any, conflicts: Any, pair: _Pair, outcome: _Outcome,
-                      job_id: str | None, previous: ConflictRow | None = None) -> ConflictRow:
+                      job_id: str | None, previous: ConflictRow | None = None,
+                      persist: Callable[[ConflictRow], Awaitable[ConflictRow | None]] | None = None,
+                      ) -> ConflictRow | None:
+        """Save a verdict using the storage adapter's write path."""
+
         a_id, b_id = pair.key
         records = {pair.new.id: pair.new, pair.old.id: pair.old}
         verdict = outcome.final
         conflicting = verdict is not None and verdict.relation in CONFLICTING
-        # Links first: a crash before the row is stored only costs a re-judgement.
-        if outcome.link:
-            await self._link(store, pair, outcome, job_id)
-        elif previous is not None and previous.linked and outcome.status != "pending":
-            await self._unlink(store, pair, outcome, job_id)
         quotes = {}
         if verdict is not None and (verdict.quote_new or verdict.quote_old):
             quotes = {str(pair.new.id): verdict.quote_new, str(pair.old.id): verdict.quote_old}
-        return await conflicts.put(ConflictRow(
+        row = ConflictRow(
             a_id=a_id, b_id=b_id,
             a_hash=content_hash(records[a_id]), b_hash=content_hash(records[b_id]),
             judge_fingerprint=self.fingerprint, status=outcome.status, new_id=pair.new.id,
@@ -534,16 +533,25 @@ class ConflictDetector:
             reason=verdict.reason if verdict else None, quotes=quotes,
             list_verdict=outcome.list_verdict, pair_verdict=outcome.pair_verdict,
             linked=outcome.link, job_id=job_id,
-        ))
+        )
+        if persist is not None:
+            return await persist(row)
+        if outcome.link:
+            await self._link(store, pair, outcome, job_id)
+        elif previous is not None and previous.linked and outcome.status != "pending":
+            await self._unlink(store, pair, outcome, job_id)
+        return await conflicts.put(row)
 
     # ---------------------------------------------------------------------- run
 
     async def adetect(
         self, store: Any, conflicts: Any, evidence_id: UUID, *, job_id: str | None = None,
+        persist: Callable[[ConflictRow], Awaitable[ConflictRow | None]] | None = None,
     ) -> dict[str, Any]:
         """Judge one source's searchable records against the KB; returns the job result.
 
-        `store` is the KB's knowledge store, `conflicts` its conflict store.
+        `store` and `conflicts` provide reads. The optional `persist` callback
+        writes the row and its links atomically, or returns None for a stale pair.
         """
 
         self._calls, self._usage = 0, None
@@ -569,7 +577,8 @@ class ConflictDetector:
         stored = await conflicts.get(keys, self.fingerprint)
         latest = await conflicts.current(keys)
 
-        counts = {"no_conflict": 0, "open": 0, "pending": 0, "needs_review": 0, "linked": 0, "reviewed": 0}
+        counts = {"no_conflict": 0, "open": 0, "pending": 0, "needs_review": 0, "linked": 0,
+                  "reviewed": 0, "skipped_pairs": 0}
         todo: dict[UUID, list[_Pair]] = {}
         cached = 0
         for pair in pairs:
@@ -592,14 +601,18 @@ class ConflictDetector:
             else:
                 outcomes = [await self._decide_pair(pair) for pair in group]
             for pair, outcome in zip(group, outcomes, strict=True):
-                row = await self._record(store, conflicts, pair, outcome, job_id, latest.get(pair.key))
+                row = await self._record(store, conflicts, pair, outcome, job_id, latest.get(pair.key), persist)
+                if row is None:
+                    counts["skipped_pairs"] += 1
+                    continue
                 counts[row.status if row.status in counts else "reviewed"] += 1
                 counts["linked"] += int(row.linked and outcome.link)
         for pair in closed:
             # Edited out of each other's scope: no longer a candidate, the earlier verdict is withdrawn.
             outcome = _Outcome("no_conflict", list_verdict={"closed": "no longer comparable after an edit"})
-            await self._record(store, conflicts, pair, outcome, job_id, latest.get(pair.key))
-            counts["no_conflict"] += 1
+            row = await self._record(store, conflicts, pair, outcome, job_id, latest.get(pair.key), persist)
+            key = "skipped_pairs" if row is None else row.status if row.status in counts else "reviewed"
+            counts[key] += 1
 
         return {
             **result, "pairs": len(pairs), "judged": sum(map(len, todo.values())), "cached": cached,

@@ -51,6 +51,11 @@ selector also exposes pending judgements, evidence needing review, confirmed,
 dismissed, resolved and non-conflicting pairs. Results are paginated. KBs without
 conflict detection show an explanatory empty state.
 
+The application runs conflict detection for knowledge extraction in KBs created
+from the General template, including existing KBs. Conflict jobs, pairs and
+review history are stored in `APP_DATABASE_URL`. Review requires an expert or
+administrator account.
+
 Each pair shows both full claims, their record review states, the judge's quoted
 passages, relation, aspect, confidence and confirmation/link state. Expand
 **Phạm vi và bằng chứng nguồn** for scope, validity dates when present, verbatim
@@ -69,6 +74,11 @@ the judgement (`stale`), review controls are disabled until it is compared again
 **Kiểm tra lại cặp này** queues comparison for that pair's evidence sources;
 **Kiểm tra lại bản ghi đã đổi** asks the backend to queue changed records. These
 are queued jobs, not immediate LLM results, and require a conflict worker.
+To check existing application records that have no verdict yet, send
+`{"record_ids":["<knowledge-chunk UUID>"]}` to the recheck endpoint. It queues
+the source of each supplied record. A request body of `{}` checks for stale pairs.
+Legacy verdicts and review history in per-KB databases require a separate data
+import with verified chunk mappings.
 
 The source list and source detail show conflict job progress/failure separately
 from extraction. Management keeps polling while loaded sources have active
@@ -79,9 +89,9 @@ the conflict filter counts come from the review API.
 
 The UI uses `GET /v1/knowledge-management/{kb}/conflicts`,
 `POST /v1/knowledge-management/{kb}/conflicts/{id}/review` and
-`POST /v1/knowledge-management/{kb}/conflicts/recheck`. Frontend unit tests and
-Playwright checks use mocked API responses; they do not validate a live
-database/LLM deployment.
+`POST /v1/knowledge-management/{kb}/conflicts/recheck`. The backend integration
+test exercises these endpoints and the worker against disposable PostgreSQL
+using controlled extraction and judge responses.
 
 ### Processing and review
 
@@ -267,10 +277,11 @@ location, the located evidence preview.
 
 ## Duplicate content
 
-Extracting **exactly** the same content twice in the same mode is blocked;
-content that is **nearly** the same as an extracted source needs the reviewer's
-confirmation (see [near-duplicate content](#near-duplicate-content)).
-Re-extraction of identical content with changed logic is not implemented.
+An active source with the **same** content and mode blocks a repeat extraction.
+Content that is **nearly** the same as an active extracted source needs the
+reviewer's confirmation. See [near-duplicate content](#near-duplicate-content).
+Once the source is removed, another source can extract that content. The original
+file, extraction history and evidence links are retained.
 
 - **Content fingerprint:** SHA-256 of the evidence text after Unicode NFC and
   whitespace collapse, so re-uploads that differ only in line endings or spacing
@@ -279,17 +290,18 @@ Re-extraction of identical content with changed logic is not implemented.
 - **Extraction fingerprint:** SHA-256 of the mode and its settings: extraction
   provenance (pipeline version, prompt, model and schema/ontology hashes) for
   knowledge items, chunking/index settings for document chunks.
-- **`extraction_runs`** (in the KB database) records each extraction of an
+- **`extraction_runs`** in `APP_DATABASE_URL` records each extraction of an
   evidence row: content and extraction fingerprints, original-byte hash, job ID,
   status (`running`, `done`, `failed`, `duplicate`) and result counts. A unique
-  partial index allows one `running`/`done` run per content, mode and
-  fingerprint; a transaction lock on content + mode serializes starts across
+  partial index allows one `running`/`done` run per KB, content, mode and
+  fingerprint among active sources. A transaction lock serializes starts across
   different fingerprints.
 
 Policy:
 
 | Earlier run of the same content and mode | Effect |
 | --- | --- |
+| Source removed | Not blocking. The run stays in history |
 | `done`, same logic | Blocked: the existing results are reused, not extracted again |
 | `done`, older logic | Blocked, reported as extracted with older logic (re-extraction not implemented) |
 | `running`, started (or taken over) within `EXTRACTION_RUN_STALE_S` (default 3600 s) | Blocked as "being extracted" |
@@ -302,8 +314,8 @@ source name, kind, ID, status, mode, `same_logic` and time). The extract worker
 checks again when the job starts, since two copies can be queued before either
 runs: the second job completes without an LLM call and the source shows
 `processing.status = "duplicate"` with `duplicate_of`. Its evidence stays stored
-and can be extracted later if the earlier run fails. A requeued job of the same
-source takes over its own running run. Runs have no heartbeat, so set
+and can be extracted later if the earlier run fails or its source is removed.
+A requeued job of the same source takes over its own running run. Runs have no heartbeat, so set
 `EXTRACTION_RUN_STALE_S` above the longest expected extraction.
 
 Extractions made before runs existed are backfilled on the next check: processed
@@ -404,13 +416,12 @@ upload (Auto) / Extract on raw ─► convert job ─ NOTIFY ─► convert work
                                   conflict job ─ NOTIFY ─► conflict worker ─► knowledge_conflicts
 ```
 
-The conflict stage runs only for knowledge-mode extraction in a served KB whose
-policy enables it. It compares the new items
-with similar stored items and records suspected conflicts for review; it never
-approves either item. The source stays `processing` through the optional conflict
-stage and becomes `processed` when the last stage completes. A summary is stored
-in source `metadata.conflicts`. See [industrial QA conflict detection](conflict-detection.md)
-for the legacy policy that defines this behavior.
+Knowledge-mode extraction marks the source `processed` and queues the conflict
+stage in the same transaction. The stage compares the new items with similar
+stored items and records suspected conflicts for review. Its status and summary
+come from the conflict job. Each verdict or reviewer decision commits with the
+corresponding link changes. See [conflict detection](conflict-detection.md) for
+the judge and its settings.
 
 - Enqueueing inserts the job and calls `pg_notify` on the stage's channel in one
   transaction. Workers `LISTEN`, claim with `FOR UPDATE SKIP LOCKED` and also
