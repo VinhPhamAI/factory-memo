@@ -84,6 +84,8 @@ test("employee submits a file-backed inquiry; expert asks, employee replies, exp
 
     // Employee adds the evidence file to the library.
     await signIn(employeePage, employee, employeeName, "/files");
+    // Uploads start only after the page has loaded the default knowledge base.
+    await expect(employeePage.getByTestId("files-upload")).toBeEnabled();
     await employeePage.getByTestId("files-input").setInputFiles({
       name: fileName,
       mimeType: "application/pdf",
@@ -172,9 +174,18 @@ test("employee submits a file-backed inquiry; expert asks, employee replies, exp
     await expect(events.nth(2)).toContainText(expertName);
 
     // Employee removes the file from the library; the inquiry keeps its copy.
+    // The Library page only removes KB sources, so the file is deleted through the API.
+    // A fresh token: the one from the start of the test may have expired.
+    const fresh = { Authorization: `Bearer ${await accessToken(employeePage, employee)}` };
+    const listed = await employeePage.request.get("/v1/files", { headers: fresh });
+    const { files } = (await listed.json()) as { files: { id: string; filename: string }[] };
+    const libraryFile = files.find((file) => file.filename === fileName);
+    expect(libraryFile).toBeDefined();
+    const removed = await employeePage.request.delete(`/v1/files/${libraryFile!.id}`, {
+      headers: fresh,
+    });
+    expect(removed.status()).toBe(204);
     await employeePage.goto("/files");
-    await employeePage.getByRole("button", { name: `Xóa ${fileName}` }).click();
-    await employeePage.getByTestId("files-confirm-delete").click();
     await expect(employeePage.getByTestId("files-empty")).toBeVisible();
 
     // Expert still downloads the evidence and gets the original bytes.
