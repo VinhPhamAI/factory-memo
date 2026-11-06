@@ -20,8 +20,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, SecretStr, StringConstraints
 
 from backend.api.auth import AccessCredential, require_current_user
+from backend.api.inquiries import (
+    RULE_ERRORS,
+    InquiryResponse,
+    inquiry_response,
+    rule_violation,
+)
 from backend.src.clients.agent import AgentHistory, AgentRejected, AgentStream, AgentUnavailable
 from backend.src.services.auth import Account
+from backend.src.services.inquiries import InvalidAgentDraft
 from backend.src.storage.conversations import ConversationNotFound, ConversationRecord, ConversationStore
 
 
@@ -233,3 +240,50 @@ async def stream_answer(
             raise HTTPException(status.HTTP_404_NOT_FOUND, _NOT_FOUND) from exc
         raise
     return ConversationStreamResponse(upstream)
+
+
+@router.post("/{conversation_id}/inquiry-draft", status_code=status.HTTP_201_CREATED)
+async def draft_inquiry_from_chat(
+    conversation_id: UUID,
+    request: Request,
+    user: CurrentUser,
+    store: Store,
+    agent: Annotated[Any, Depends(get_agent_client)],
+) -> InquiryResponse:
+    """Draft an inquiry from an owned conversation and save it as a `draft` row.
+
+    The agent writes the text; this route copies its citations and the photos
+    the requester can still read into the saved context. Nothing is saved when
+    the agent fails. Agent 422/409/429/502 keep their status with a
+    `{detail: {code, message}}` body; an unreachable agent gives 503.
+    """
+
+    inquiries = getattr(request.app.state, "inquiry_service", None)
+    if inquiries is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Inquiries are not configured")
+    try:
+        await store.require_active_owner(conversation_id, user.id)
+    except ConversationNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, _NOT_FOUND) from exc
+    try:
+        draft = await agent.create_inquiry_draft(conversation_id)
+    except AgentRejected as exc:
+        return JSONResponse(
+            {"detail": {"code": exc.code, "message": exc.message}}, status_code=exc.status_code
+        )
+    except AgentUnavailable as exc:
+        raise _agent_unavailable(exc) from exc
+
+    try:
+        detail = await inquiries.create_draft_from_agent(user, conversation_id, draft)
+    except ConversationNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, _NOT_FOUND) from exc
+    except InvalidAgentDraft as exc:
+        logger.warning("Agent draft rejected by inquiry limits: %s", type(exc).__name__)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            {"code": "draft_failed", "message": "The generated draft exceeds the inquiry limits"},
+        ) from exc
+    except RULE_ERRORS as exc:
+        raise rule_violation(exc) from exc
+    return inquiry_response(detail)

@@ -26,7 +26,7 @@ Content-Type: application/json
 
 - Authorize user login and conversation ownership.
 - Keep the shared service token out of browsers. It is not a user JWT (login token).
-- For KB tools, forward the authenticated employee's access token in the internal
+- For KB and inquiry chat tools, forward the authenticated employee's access token in the internal
   `X-Employee-Access-Token` header. The agent uses it only for the backend's
   knowledge APIs and keeps it out of model input, events, and history.
 - Use the server-generated request ID for tracing, not duplicate prevention.
@@ -102,8 +102,10 @@ Codes: `timeout`, `provider_error`, `context_limit`, `output_limit`,
 
 When the backend enables KB tools and the agent has a KB backend URL, the model
 can call `list_knowledge_bases` without arguments or `search_knowledge` with a
-KB name and a query (1–500 characters). Each turn runs at most one list and one
-search. The backend authorizes each KB request using the employee access token.
+KB name and a query (1–500 characters). Each turn runs at most one list, followed
+by either one search or one inquiry tool call (see [inquiry draft tools](#inquiry-draft-tools)).
+When the list finds no KB, the model may still call an inquiry tool.
+The backend authorizes each KB request using the employee access token.
 
 | Rule | Behavior |
 |---|---|
@@ -111,11 +113,57 @@ search. The backend authorizes each KB request using the employee access token.
 | Deadline | `AGENT_SEARCH_TIMEOUT_SECONDS` (10) per KB operation. |
 | `search` | `not_used`, `results`, `empty` (nothing matched) or `unavailable` (search failed or timed out, or the model's call was unusable). |
 | `citations` | Each valid `[Sn]` marker carries `marker`, `evidence_id`, `title`, `excerpt`, `location`, and source references when available. Invented markers stay plain text. |
-| `ToolActivity` | `id`, `name`, and `state` (`running`, `results`, `empty`, or `unavailable`). The card can also carry `kb`, `query`, `count`, `truncated`, `catalog`, and ranked `results` with source references. |
-| Retention | The final answer saves its citations and a bounded tool summary. Uncited search excerpts are available only in the live tool event. Internal provider routing messages stay private. |
+| `ToolActivity` | `id`, `name`, and `state` (`running`, `results`, `empty`, `unavailable`, `needs_choice` or `not_draft`). `name` is `list_knowledge_bases`, `search_knowledge`, `create_inquiry_draft` or `update_inquiry_draft`. The card can also carry `kb`, `query`, `count`, `truncated`, `catalog`, and ranked `results` with source references. Inquiry cards carry `inquiry_id` and `title`. |
+| Retention | The final answer saves its citations and a bounded tool summary. Uncited search excerpts are available only in the live tool event. Inquiry draft text is never saved or streamed, except the draft title. Internal provider routing messages stay private. |
 
 See [conversation settings](../../docs/features/conversations.md#settings) to
 enable the backend connection.
+
+## Inquiry draft tools
+
+During a chat turn, the model can save or edit an expert inquiry draft for the
+employee, through the backend's `POST /v1/inquiries` and `PATCH /v1/inquiries/{id}`.
+Behavior and limits: [expert inquiries](../../docs/features/inquiries.md#draft-from-chat-with-agent-tools).
+The agent never submits an inquiry and never chooses an expert.
+
+The tools are offered only when the agent has `AGENT_KB_BACKEND_URL` and the request
+carries `X-Employee-Access-Token`. `update_inquiry_draft` is also offered only while the
+conversation's latest agent-created inquiry is still `draft`. On every turn of such a
+conversation the agent reads that draft once before routing and shows its fields to the
+routing model.
+
+| Tool | Arguments | Result `state` values |
+|---|---|---|
+| `create_inquiry_draft` | `focus` (optional, up to 500 characters) | `results`, `needs_choice`, `unavailable` |
+| `update_inquiry_draft` | `title` (up to 200 characters), `situation`, `observations`, `attempted_actions`, `proposed_fix` (each up to 4000 characters); all optional | `results`, `not_draft`, `unavailable` |
+
+`needs_choice` means nothing was saved because the conversation already has a draft.
+`not_draft` means the inquiry was submitted, so the edit was refused (a status read that is no longer `draft`, or a backend `409`).
+An `update_inquiry_draft` call with no editable draft, or with no changed fields, returns `unavailable` with no search.
+
+Backend requests from these tools use `AGENT_SEARCH_TIMEOUT_SECONDS` (default 10) as each request's limit.
+The routing model sees the rules in `INQUIRY_INSTRUCTION` only when these tools are offered.
+The answer may say a draft was saved or edited only after an outcome of `draft_saved` or `draft_updated`.
+
+Tool event for a created draft, inside the `tool` event envelope:
+
+```json
+{"id":"inquiry","name":"create_inquiry_draft","state":"results","inquiry_id":"33333333-3333-4333-8333-333333333333","title":"Pump vibrates at start-up"}
+```
+
+| Field | Rule |
+|---|---|
+| `id` | `inquiry` for both tools. |
+| `inquiry_id` | UUID of the draft. Present when the draft is known (`results`, `needs_choice`, `not_draft`). |
+| `title` | Up to 200 characters. Present with `inquiry_id`. |
+
+Rules:
+
+- A turn makes at most one inquiry tool call.
+- Draft text is not in tool events, saved history or `complete.tools`. Only `inquiry_id` and `title` are kept.
+- Saved history keeps `inquiry_id` on each `create_inquiry_draft` result, so later turns can find the latest draft.
+- Known risk: if a turn fails after the backend saved the draft (answer error, deadline, checkpoint write failure, or client timeout after the backend commits), the draft is not in saved history. A later create request then saves another draft without asking.
+- The answer must not say an inquiry was sent. The employee submits it in the app.
 
 ## Read saved history
 
@@ -134,6 +182,29 @@ enable the backend connection.
 | Failed turn | The saved user input appears without an answer; provisional text never appears. |
 | Limit | Newest messages within `AGENT_HISTORY_MAX_MESSAGES` (200) and `AGENT_HISTORY_MAX_CHARACTERS` (400000); `truncated` is true when older messages were left out. |
 | Errors | 401 `unauthorized`, 422 `invalid_request` (not a UUID), 503 `unavailable` (runtime or checkpoint read failed; never an empty list). |
+
+## Draft an inquiry
+
+`POST /v1/agent/conversations/{conversation_id}/inquiry-draft` with the same service
+token and no body. The backend calls it only after it confirms the user owns the
+conversation. The agent makes one model call, which must call `write_inquiry_draft`,
+then returns the draft. It saves nothing.
+
+```json
+{"fields":{"title":"Pump vibrates","situation":"Cooling pump vibrates at start-up.","observations":"","attempted_actions":"","proposed_fix":""},"citations":[],"attachments":[{"file_id":"22222222-2222-4222-8222-222222222222","media_type":"image/jpeg"}]}
+```
+
+| Rule | Behavior |
+|---|---|
+| Fields | `title` (up to 200 characters, may be empty), and `situation`, `observations`, `attempted_actions`, `proposed_fix` (each up to 4000 characters, may be empty). |
+| Evidence | `citations` and `attachments` are copied from the saved history, first seen first. The model does not write them. |
+| Concurrency | The conversation is reserved like a chat turn. A running turn or draft gives 409; a full agent gives 429. |
+| History | Same window as the history endpoint. Older messages are not sent to the model. |
+| Model failure | 502 `draft_failed` for a provider error or timeout, no tool call, invalid arguments, or fields out of range. |
+| Errors | 401 `unauthorized`; 409 `conversation_busy`; 422 `empty_conversation` (no model call) or `invalid_request` (not a UUID); 429 `capacity_exceeded`; 502 `draft_failed`; 503 `unavailable` (no provider, or history read failed). |
+
+The forced tool choice is verified in unit tests with a fake provider only. Confirm it
+against the configured model before relying on drafts.
 
 ## Check health
 

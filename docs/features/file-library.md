@@ -25,6 +25,8 @@ The legacy Capture page remains available by URL but is no longer in the main
 navigation. Its upload flow can still save without processing; see
 [document uploads](document-uploads.md).
 
+Expert inquiries read their attached files through their own route; see the Deletion section.
+
 Both flows use the application `files` table. Personal files have flat,
 32-character hexadecimal storage keys under `FILE_LIBRARY_DIR`. KB sources attached
 from the library reference these same file rows and bytes. Direct KB uploads retain
@@ -114,12 +116,16 @@ Delete is a soft delete:
 2. The file disappears from the owner's list, metadata and download (`404`).
 3. The record and the bytes on disk remain. Already attached KB sources stay readable
    and processable. New attachment requires an active personal file.
+4. Inquiries that attached the file keep it. The requester and the assignee of a
+   submitted inquiry can still download it through
+   `GET /v1/inquiries/{id}/files/{file_id}/content`. Other users get `404`
+   ([expert inquiries](inquiries.md#evidence-after-the-library-file-is-deleted)).
 
-The bytes are kept so that readers of existing citations or inquiries can still
-open the original once those features exist. Read access is decided only by
-`FileLibraryService.can_read`. It currently allows the owner while the file is
-not deleted. When citations and inquiries are implemented, add their readers
-there and retest reading a deleted file through them.
+Library reads are decided by `FileLibraryService.can_read`. It allows only the owner
+while the file is not deleted. Inquiry reads are decided by
+`InquiryStore.get_attached_file` in `backend/src/storage/inquiries.py`, which does not
+check `deleted_at`. Citation readers are not implemented yet; when they are, add
+them to `can_read` and retest reading a deleted file through them.
 
 There is no cleanup of deleted files yet, so disk usage only grows.
 

@@ -27,6 +27,21 @@ The schema and these standards are documentation; they do not complete the featu
 Some work can proceed independently once API contracts are clear. Do not require
 a teammate's complete service to exist before writing isolated behavior tests.
 
+## Inquiry workflow status
+
+Implemented: draft (from a chat or directly), submission to an expert, expert
+review, the event timeline, and evidence download. See
+[expert inquiries](../features/inquiries.md). Not complete until the rows marked
+"not run" or "not verified" are recorded.
+
+| Check | Evidence | Last recorded result (2026-11-05) |
+|---|---|---|
+| Backend rules, access, transitions, draft route, smoke | `backend/tests/test_inquiries.py`, `test_inquiry_draft_route.py`, `test_inquiry_smoke.py` | 39 passed (5 offline, 34 PostgreSQL) |
+| Agent draft | `agent/tests/unit/test_inquiry_draft.py` | 15 passed |
+| Frontend | `frontend/src/pages/inquiries.test.tsx`, `frontend/src/services/inquiries-api.test.ts` | 25 passed |
+| Browser smoke, real API and scratch database | `frontend/e2e/inquiries.spec.ts` (`PLAYWRIGHT_SUITE=inquiries`) | 1 passed (draft created through `POST /v1/inquiries`; agent not running) |
+| Live model: pinned draft tool choice | Agent draft against the configured ModelArk model | Not verified |
+
 ## Decisions still needed
 
 - Specific interfaces for retrieval tools and multimodal services.

@@ -30,8 +30,9 @@ from backend.src.storage.orm.base import (
 
 
 class InquiryStatus(StrEnum):
-    """Progress of an inquiry through expert review."""
+    """Progress of an inquiry from the requester's draft through expert review."""
 
+    DRAFT = "draft"
     OPEN = "open"
     IN_REVIEW = "in_review"
     NEEDS_INFO = "needs_info"
@@ -86,8 +87,10 @@ class Inquiry(RecordDates, Base):
     """A self-contained fault description sent to a remote expert.
 
     The submitted title, context, machine and requester are preserved; later
-    corrections are recorded as events. Whether `assigned_to` is an enabled
-    expert or admin is checked by the backend, because roles can change later.
+    corrections are recorded as events. A `draft` is private to the requester
+    and has no assignee; every other status has one. Whether `assigned_to` is an
+    enabled expert (role `expert`, not admin) is checked by the backend at
+    submission, because roles can change later.
     """
 
     __tablename__ = "inquiries"
@@ -97,6 +100,9 @@ class Inquiry(RecordDates, Base):
             ["conversations.id", "conversations.owner_id"],
         ),
         allowed_values("status", InquiryStatus),
+        CheckConstraint(
+            "status = 'draft' OR assigned_to IS NOT NULL", name="draft_or_assigned"
+        ),
         json_object("context"),
         Index(None, "requested_by", "updated_at", "id"),
         Index(None, "assigned_to", "updated_at", "id"),
@@ -105,7 +111,8 @@ class Inquiry(RecordDates, Base):
     id: Mapped[UUID] = uuid_primary_key()
     conversation_id: Mapped[UUID] = mapped_column(index=True)
     requested_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
-    assigned_to: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    # NULL only while the inquiry is a draft.
+    assigned_to: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     machine_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("machines.id"), index=True
     )
@@ -115,9 +122,11 @@ class Inquiry(RecordDates, Base):
     context: Mapped[dict[str, Any]] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(
         Text,
-        default=InquiryStatus.OPEN.value,
-        server_default=InquiryStatus.OPEN.value,
+        default=InquiryStatus.DRAFT.value,
+        server_default=InquiryStatus.DRAFT.value,
     )
+    # Set when the requester submits the draft to an expert.
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     events: Mapped[list[InquiryEvent]] = relationship(
         back_populates="inquiry", lazy="raise", order_by="InquiryEvent.created_at"

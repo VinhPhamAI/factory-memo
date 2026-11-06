@@ -1,5 +1,7 @@
 # Phase 04 — Inquiry draft from chat
 
+> Superseded on 2026-11-05 by [inquiry workflow phase 03](../261105-2138-inquiry-workflow/phase-03-draft-from-chat.md). Kept for history.
+
 ## Prerequisites
 
 - The backend can authorize the conversation owner and the agent can read saved messages.

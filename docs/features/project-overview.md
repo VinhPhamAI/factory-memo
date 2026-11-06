@@ -60,7 +60,8 @@ The system supports assistance without the expert's immediate physical presence.
 | Backend knowledge processing/search and web UI | Existing implementation; some behavior predates this scope |
 | Standalone streamed answering and PostgreSQL memory | Implemented in `agent/` |
 | Refined shared database schema | Proposed; migration not implemented |
-| Standalone-agent retrieval, attachments, and inquiry integration | Work to implement |
+| Expert inquiry workflow: draft, submit, review, evidence | Implemented; see [expert inquiries](inquiries.md). Browser smoke test and live-model draft check not yet recorded. |
+| Standalone-agent retrieval and attachments | Work to implement |
 | Full multimodal extraction and visual assistance | Not established by the current demo |
 
 Verify current code before making delivery claims. Older audio flows and diagrams

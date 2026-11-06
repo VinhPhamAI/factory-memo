@@ -168,6 +168,9 @@ Auth smoke test against a real backend: start the API with a migrated
 `PLAYWRIGHT_SUITE=auth npx playwright test` (optionally with `PLAYWRIGHT_CHANNEL=msedge`).
 It creates a new account on each run. `PLAYWRIGHT_SUITE=files` runs the
 [file library](../docs/features/file-library.md) smoke test the same way; it creates two accounts.
+`PLAYWRIGHT_SUITE=inquiries` runs the [expert inquiry](../docs/features/inquiries.md) smoke
+test (`e2e/inquiries.spec.ts`). It needs `INQUIRY_E2E_DATABASE_URL` pointing to a scratch
+database that the API under test also uses, and it creates two accounts and promotes one to expert.
 
 `playwright.config.ts` uses port 5180 (override with `PLAYWRIGHT_PORT`) and starts the
 dev server if needed. Use a free `PLAYWRIGHT_PORT` when another Vite mode is already

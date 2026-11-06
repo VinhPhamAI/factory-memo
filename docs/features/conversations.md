@@ -11,7 +11,8 @@ Owners: routes in `backend/api/conversations.py`, queries in
 browser client in `frontend/src/services/conversations-api.ts`, live `/ask` page in
 `frontend/src/pages/conversations.tsx`. Tests: `backend/tests/test_conversations.py`
 (PostgreSQL), `backend/tests/test_conversation_streaming.py` (real HTTP), the
-frontend tests next to those files and `frontend/e2e/qa.spec.ts`.
+frontend tests next to those files and `frontend/e2e/qa.spec.ts`. The draft route is
+tested in `backend/tests/test_inquiry_draft_route.py`.
 
 ## Call sequence
 
@@ -37,6 +38,7 @@ Every route requires a bearer access token (`401` without one).
 | `DELETE /v1/conversations/{id}` | — | `204`; soft delete |
 | `GET /v1/conversations/{id}/history` | — | `200` `{conversation_id, messages, truncated}` with saved citations and tool summaries |
 | `POST /v1/conversations/{id}/stream` | `{message}` | `200` `text/event-stream` |
+| `POST /v1/conversations/{id}/inquiry-draft` | — | `201` Inquiry in status `draft`; see [draft an inquiry](#draft-an-inquiry) |
 | `POST /v1/speech/transcriptions` | multipart `file` (PCM16 WAV, at most 120 s and 16 MB) | `200` `{text}` for the composer; nothing is stored |
 
 `Conversation` is `{id, title, created_at, updated_at}`. A message the agent accepts, or
@@ -51,7 +53,7 @@ renaming moves `updated_at`.
 ## Stream and history
 
 - The stream forwards the agent's SSE events unchanged and unbuffered: `status`,
-  `reasoning` (model thinking, when the model reasons), `tool` (KB activity), `text` (provisional
+  `reasoning` (model thinking, when the model reasons), `tool` (KB and inquiry-draft activity), `text` (provisional
   `delta`), then one final `complete` (`answer`) or `error`
   (`code`, `message`, `retryable`). See the [agent API](../../agent/docs/api.md#handle-the-stream).
 - Replace provisional text with `complete.answer`; `complete` is sent only after
@@ -72,6 +74,9 @@ renaming moves `updated_at`.
   Reopened cards use the saved summary and cited excerpts. Uncited excerpts
   are available only from the current stream. An empty search and an unavailable
   search have distinct statuses.
+- Inquiry-draft tool cards open by default once the call finishes. They show the draft title
+  and a link to the inquiry. The agent can create or edit a draft when asked in chat; it never submits one. States and
+  limits: [chat tools](inquiries.md#draft-from-chat-with-agent-tools).
 - The UI links validated `[Sn]` markers and result references through
   authenticated source routes. Removing the file from the personal library
   can leave an active KB source available to authorized users. Removing the
@@ -94,6 +99,28 @@ renaming moves `updated_at`.
 | `422` | Invalid ID or body. |
 | `503` | Application database, agent or agent configuration unavailable. Details are logged by error class only. |
 
+## Draft an inquiry
+
+`POST /v1/conversations/{id}/inquiry-draft` asks the agent to draft an expert
+inquiry from this conversation and saves it at once as a `draft`. Nothing is saved
+when the draft fails. The steps, the copied evidence and the limits are in
+[expert inquiries](inquiries.md#draft-from-chat).
+
+A chat message can also save or edit a draft through agent tools. These run inside
+the chat turn and include the message being sent. See
+[chat tools](inquiries.md#draft-from-chat-with-agent-tools).
+
+| Status | Body code | Meaning |
+|---|---|---|
+| `404` | — | Unknown, deleted or another user's conversation. The agent is not called. |
+| `409` | `conversation_busy` | An answer or draft is already running here. |
+| `422` | `empty_conversation` | The conversation has no messages. |
+| `429` | `capacity_exceeded` | The agent is at capacity. |
+| `502` | `draft_failed` | The model call failed, or the draft exceeds inquiry limits. |
+| `503` | — | The agent is unreachable or returned an unusable response. |
+
+Agent errors keep their status and body `{"detail": {"code", "message"}}`.
+
 ## Settings
 
 | Variable | Purpose |
@@ -101,7 +128,7 @@ renaming moves `updated_at`.
 | `APP_DATABASE_URL` | Application database (same as authentication). |
 | `AGENT_BASE_URL` | Native backend-to-agent address. The example uses `http://127.0.0.1:8010`. Set `API_AGENT_BASE_URL=http://agent:8010` when both run in Compose. |
 | `AGENT_API_TOKEN` | Must equal `AGENT_API_TOKEN` in `agent/.env`. |
-| `AGENT_KB_TOOLS_ENABLED` | Backend opt-in. Defaults to `false`. Set to `true` to enable the employee-scoped KB calls. |
+| `AGENT_KB_TOOLS_ENABLED` | Backend opt-in. Defaults to `false`. Set to `true` to forward the employee token, which enables the employee-scoped KB calls and the inquiry-draft chat tools. |
 | `AGENT_KB_BACKEND_URL` | Native agent-to-backend address. The agent example uses `http://127.0.0.1:8005`. For Compose, override `AGENT_CONTAINER_KB_BACKEND_URL` if the default `http://api:8005` does not apply. |
 
 Without `AGENT_BASE_URL` and `AGENT_API_TOKEN`, list/create/rename/delete work and
@@ -147,9 +174,12 @@ migration script.
   can take all `AGENT_MAX_CONCURRENT_REQUESTS` slots, and others then get `429`.
 - One agent process: the one-active-answer rule per conversation is enforced in
   that process only.
-- Knowledge-base operations use the employee's current access token. If it
-  expires mid-turn or the KB API is unavailable, the tool can report
+- Knowledge-base and inquiry-draft tool operations use the employee's current access
+  token. If it expires mid-turn or the backend API is unavailable, the tool can report
   `unavailable`.
+- A chat turn that fails after the backend saved an inquiry draft is not recorded in
+  history, so the next draft request can create a second draft without asking. See
+  [chat tools](inquiries.md#limits).
 - The [personal file library](file-library.md) is available. Sending a library
   photo from chat still needs backend attachment handling and verification with
   the configured model.

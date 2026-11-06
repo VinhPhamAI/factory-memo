@@ -9,7 +9,9 @@ from pydantic import SecretStr
 
 from denso_agent.api.authentication import authenticate
 from denso_agent.api.stream_response import AgentStreamResponse
+from denso_agent.runtime.inquiry_draft import create_draft
 from denso_agent.schemas.chat import ChatHistory, ChatRequest, ErrorResponse
+from denso_agent.schemas.inquiry_draft import InquiryDraft, InquiryDraftError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -64,6 +66,50 @@ async def history(conversation_id: UUID, request: Request) -> ChatHistory:
         # Log only the class name; driver messages can include connection details.
         logger.warning("History read failed: %s", type(error).__name__)
         raise HTTPException(503, detail=UNAVAILABLE) from error
+
+
+@router.post(
+    "/v1/agent/conversations/{conversation_id}/inquiry-draft",
+    dependencies=[Depends(authenticate)],
+    response_model=InquiryDraft,
+    responses={
+        code: {"model": ErrorResponse} for code in (401, 409, 422, 429, 502, 503)
+    },
+)
+async def inquiry_draft(conversation_id: UUID, request: Request) -> InquiryDraft:
+    """Draft an inquiry from the saved conversation with one model call.
+
+    The conversation is reserved like a chat turn, so a draft cannot overlap
+    an active answer and draft calls count toward request capacity.
+
+    Args:
+        conversation_id: Conversation UUID chosen by the caller.
+        request: Request carrying application-owned runtime resources.
+    Returns:
+        Model-written fields plus citations and attachments from the history.
+    Raises:
+        HTTPException: 409/429 when busy or full, 422 for an empty conversation,
+            502 when the draft fails, 503 when the runtime or store is unavailable.
+    """
+    runtime = request.app.state.runtime
+    if runtime is None or runtime.provider is None:
+        raise HTTPException(503, detail=UNAVAILABLE)
+    key = str(conversation_id)
+    runtime.admission.acquire(key)
+    try:
+        try:
+            saved = await runtime.load_history(conversation_id)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("History read failed: %s", type(error).__name__)
+            raise HTTPException(503, detail=UNAVAILABLE) from error
+        try:
+            return await create_draft(runtime.provider, saved)
+        except InquiryDraftError as error:
+            raise HTTPException(
+                error.status, detail={"code": error.code, "message": error.message}
+            ) from error
+    finally:
+        runtime.admission.release(key)
 
 
 @router.post(

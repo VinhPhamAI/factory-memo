@@ -191,9 +191,10 @@ class FileLibraryService:
         """Decide whether a user may read a file's metadata and bytes.
 
         Currently only the owner may read a file, and only until it is deleted.
-        When citations and inquiries are implemented, readers of a citation or
-        inquiry that references the file are allowed here too, including after
-        the owner deleted it.
+        Inquiry participants do not use this rule: the requester and assignee
+        download an attached file through `/v1/inquiries/{id}/files/{file_id}/content`
+        (`InquiryService.open_evidence`), which also works after the owner
+        deleted the file. Readers of citations are still to be added here.
         """
 
         return record.uploaded_by == user.id and record.deleted_at is None

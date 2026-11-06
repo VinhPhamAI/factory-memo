@@ -16,8 +16,18 @@ from langgraph.runtime import Runtime
 from pydantic import SecretStr
 
 from denso_agent.runtime.errors import AgentError
+from denso_agent.runtime.inquiry_tools import (
+    InquiryTurn,
+    asked_edit_or_new,
+    find_existing,
+    prior_draft_ids,
+)
 from denso_agent.runtime.knowledge import Knowledge, KnowledgeTurn, run_knowledge
-from denso_agent.runtime.prompts import SYSTEM_INSTRUCTION
+from denso_agent.runtime.prompts import (
+    INQUIRY_INSTRUCTION,
+    NO_INQUIRY_INSTRUCTION,
+    SYSTEM_INSTRUCTION,
+)
 from denso_agent.runtime.retrieval import (
     SearchScope,
     cited,
@@ -31,6 +41,9 @@ _COMMON = (
     "Explain uncertainty and ask for the missing equipment details or approved instructions. "
     "Distinguish suggested actions from completed repairs and verified outcomes."
     " Without relevant evidence, do not give factory-specific settings or procedures."
+    " Never say that an inquiry or ticket was created or sent, and never invent a"
+    ' ticket number. To reach an expert, the user presses "Tạo yêu cầu chuyên gia"'
+    " in the chat."
 )
 _SEARCH_INSTRUCTIONS = {
     "results": (
@@ -126,8 +139,48 @@ def _chat(messages: list) -> list[dict]:
     ]
 
 
+async def _inquiry_turn(inquiries, messages, thread_id, credential, settings):
+    """Collect the conversation and prior drafts for the inquiry tools.
+
+    While the conversation has an agent-created inquiry, each turn reads it once
+    before routing; a conversation without one makes no inquiry request.
+
+    Returns:
+        Turn data, or None when the thread is not a conversation UUID.
+    """
+    try:
+        conversation_id = UUID(str(thread_id))
+    except ValueError:
+        return None
+    prior_ids = prior_draft_ids(messages)
+    existing = None
+    if prior_ids:
+        existing = await find_existing(
+            inquiries, credential, prior_ids, settings.search_timeout
+        )
+    return InquiryTurn(
+        backend=inquiries,
+        conversation_id=conversation_id,
+        messages=messages,
+        history_limits=(
+            settings.history_max_messages,
+            settings.history_max_characters,
+        ),
+        prior_ids=prior_ids,
+        existing=existing,
+        timeout=settings.search_timeout,
+        asked=asked_edit_or_new(messages),
+    )
+
+
 def build_graph(
-    provider, saver, settings, retrieval=None, *, knowledge: Knowledge | None = None
+    provider,
+    saver,
+    settings,
+    retrieval=None,
+    *,
+    knowledge: Knowledge | None = None,
+    inquiries=None,
 ):
     """Compile a single answer node against the supplied checkpoint saver.
 
@@ -139,6 +192,8 @@ def build_graph(
             `search_scope` in the run configuration, the model is never asked
             to use the legacy single-query path.
         knowledge: Optional backend catalog and search client.
+        inquiries: Optional backend inquiry client. With it and a knowledge
+            client, the model may save or edit the employee's inquiry drafts.
 
     Returns:
         A graph supporting custom streams and synchronous checkpoint durability.
@@ -152,6 +207,7 @@ def build_graph(
         image = configurable.get("image")
         writer = get_stream_writer()
         turn = KnowledgeTurn()
+        inquiry = None
         current = runtime.context
         live = (
             knowledge is not None
@@ -159,6 +215,17 @@ def build_graph(
             and current.employee_access is not None
         )
         if live:
+            inquiry = (
+                await _inquiry_turn(
+                    inquiries,
+                    state["messages"],
+                    configurable.get("thread_id"),
+                    current.employee_access,
+                    settings,
+                )
+                if inquiries is not None
+                else None
+            )
             turn = await run_knowledge(
                 provider,
                 context,
@@ -167,6 +234,7 @@ def build_graph(
                 scope,
                 settings,
                 writer,
+                inquiry,
             )
         elif retrieval is not None and isinstance(scope, SearchScope):
             routing = [{"role": "system", "content": ROUTING_INSTRUCTION}, *context]
@@ -180,6 +248,9 @@ def build_graph(
                         retrieval, query, scope, settings
                     )
         instruction = SYSTEM_INSTRUCTION
+        instruction += (
+            INQUIRY_INSTRUCTION if inquiry is not None else NO_INQUIRY_INSTRUCTION
+        )
         if not live and turn.status != "not_used":
             instruction = _SEARCH_INSTRUCTIONS[turn.status] + _COMMON
         outcome = turn.outcome_message() if live else None

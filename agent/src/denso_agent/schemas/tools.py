@@ -6,8 +6,17 @@ from uuid import UUID
 from pydantic import BaseModel, Field, StringConstraints
 
 KnowledgeBaseName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,59}$")]
-ToolName = Literal["list_knowledge_bases", "search_knowledge"]
-ToolState = Literal["running", "results", "empty", "unavailable"]
+ToolName = Literal[
+    "list_knowledge_bases",
+    "search_knowledge",
+    "create_inquiry_draft",
+    "update_inquiry_draft",
+]
+# needs_choice: the conversation already has a draft, so nothing was created;
+# not_draft: the inquiry was already submitted and cannot be edited.
+ToolState = Literal[
+    "running", "results", "empty", "unavailable", "needs_choice", "not_draft"
+]
 
 
 class CatalogEntry(BaseModel):
@@ -49,7 +58,10 @@ class ToolHit(BaseModel):
 
 
 class ToolActivity(BaseModel):
-    """One accepted KB operation and its public result."""
+    """One accepted KB or inquiry operation and its public result.
+
+    Inquiry tools fill only `inquiry_id` and `title`; draft text is never kept.
+    """
 
     id: str = Field(max_length=64)
     name: ToolName
@@ -60,6 +72,12 @@ class ToolActivity(BaseModel):
     truncated: bool = False
     catalog: list[CatalogEntry] = Field(default_factory=list, max_length=50)
     results: list[ToolHit] = Field(default_factory=list, max_length=20)
+    inquiry_id: UUID | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    title: str | None = Field(
+        default=None, max_length=200, exclude_if=lambda value: value is None
+    )
 
     def for_history(self) -> "ToolActivity":
         """Keep references and visible labels, omitting raw search excerpts."""

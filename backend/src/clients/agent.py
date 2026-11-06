@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT_SECONDS = 5.0
 HISTORY_TIMEOUT_SECONDS = 15.0
+# One model call; the agent's own deadline (120 s by default) ends it first.
+DRAFT_TIMEOUT_SECONDS = 150.0
 # Longest silence between stream chunks; the agent's own request deadline
 # (AGENT_REQUEST_TIMEOUT_SECONDS, 120 s by default) ends a turn first.
 STREAM_READ_TIMEOUT_SECONDS = 180.0
@@ -82,17 +84,27 @@ class ToolResult(BaseModel):
 
 
 class ToolSummary(BaseModel):
-    """Public details of an executed knowledge tool, without raw provider data."""
+    """Public details of an executed knowledge or inquiry tool, without raw provider data.
+
+    Inquiry tools fill only `inquiry_id` and `title`; the agent never sends draft text.
+    """
 
     id: str
-    name: Literal["list_knowledge_bases", "search_knowledge"]
-    state: Literal["running", "results", "empty", "unavailable"]
+    name: Literal[
+        "list_knowledge_bases",
+        "search_knowledge",
+        "create_inquiry_draft",
+        "update_inquiry_draft",
+    ]
+    state: Literal["running", "results", "empty", "unavailable", "needs_choice", "not_draft"]
     kb: str | None = None
     query: str | None = None
     count: int | None = Field(default=None, ge=0)
     truncated: bool = False
     catalog: list[CatalogEntry] = Field(default_factory=list, max_length=50)
     results: list[ToolResult] = Field(default_factory=list)
+    inquiry_id: UUID | None = Field(default=None, exclude_if=lambda value: value is None)
+    title: str | None = Field(default=None, max_length=200, exclude_if=lambda value: value is None)
 
 
 class AttachmentRef(BaseModel):
@@ -119,6 +131,24 @@ class AgentHistory(BaseModel):
     conversation_id: UUID
     messages: list[HistoryMessage]
     truncated: bool
+
+
+class DraftFields(BaseModel):
+    """Model-written text of an inquiry draft."""
+
+    title: str
+    situation: str
+    observations: str
+    attempted_actions: str
+    proposed_fix: str
+
+
+class AgentInquiryDraft(BaseModel):
+    """The agent's draft: text fields, cited evidence and photo references."""
+
+    fields: DraftFields
+    citations: list[Citation] = []
+    attachments: list[AttachmentRef] = []
 
 
 @dataclass(frozen=True)
@@ -199,6 +229,44 @@ class AgentClient:
             return AgentHistory.model_validate_json(response.content)
         except ValidationError as exc:
             raise AgentUnavailable("history response is invalid") from exc
+
+    async def create_inquiry_draft(self, conversation_id: UUID) -> AgentInquiryDraft:
+        """Ask the agent to draft an inquiry from a conversation the caller authorized.
+
+        Returns:
+            The validated draft; nothing is saved by the agent.
+
+        Raises:
+            AgentRejected: HTTP 409, 422 (empty conversation), 429 or 502 (draft failed).
+            AgentUnavailable: Unreachable, 503, 401, or an invalid response.
+        """
+
+        try:
+            response = await self._http.post(
+                f"/v1/agent/conversations/{conversation_id}/inquiry-draft",
+                headers=self._headers,
+                timeout=httpx.Timeout(DRAFT_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
+            )
+        except httpx.HTTPError as exc:
+            raise AgentUnavailable(type(exc).__name__) from exc
+        if response.status_code == 200:
+            try:
+                return AgentInquiryDraft.model_validate_json(response.content)
+            except ValidationError as exc:
+                raise AgentUnavailable("inquiry draft response is invalid") from exc
+        if response.status_code in (409, 422, 429, 502):
+            try:
+                detail = response.json().get("error", {})
+            except (ValueError, AttributeError):
+                detail = {}
+            if not isinstance(detail, dict):
+                detail = {}
+            raise AgentRejected(
+                response.status_code,
+                str(detail.get("code", "rejected")),
+                str(detail.get("message", "The agent could not draft this inquiry.")),
+            )
+        raise AgentUnavailable(f"inquiry draft returned HTTP {response.status_code}")
 
     async def open_stream(
         self, conversation_id: UUID, message: str, *, employee_access: SecretStr | None = None,

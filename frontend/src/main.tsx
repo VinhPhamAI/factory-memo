@@ -69,6 +69,18 @@ const router = createBrowserRouter([
               lazy: async () => ({ Component: (await import("@/pages/knowledge-admin")).KnowledgeAdminPage }),
             },
             {
+              path: "/inquiries",
+              lazy: async () => ({
+                Component: (await import("@/pages/inquiries")).InquiriesPage,
+              }),
+            },
+            {
+              path: "/inquiries/:id",
+              lazy: async () => ({
+                Component: (await import("@/pages/inquiry")).InquiryPage,
+              }),
+            },
+            {
               path: "/knowledge/:kb/sources/:kind/:sourceId",
               lazy: async () => ({
                 Component: (await import("@/pages/knowledge-management"))

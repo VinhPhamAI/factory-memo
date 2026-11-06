@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Literal
 from uuid import UUID
 
 import httpx
 from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
 
+from denso_agent.clients.backend import BackendError, request_json
 from denso_agent.runtime.knowledge import Catalog
 from denso_agent.runtime.retrieval import Evidence, RetrievalUnavailable
 from denso_agent.schemas.tools import CatalogEntry, KnowledgeBaseName, SourceRef
 
-MAX_RESPONSE_BYTES = 1024 * 1024
 CATALOG_LIMIT = 50
 KB_NAME = TypeAdapter(KnowledgeBaseName)
 
@@ -133,25 +132,18 @@ class KnowledgeClient:
         self, method: str, path: str, credential: SecretStr, response_type, **kwargs
     ):
         """Read one bounded JSON response, without following redirects."""
-        headers = {"Authorization": f"Bearer {credential.get_secret_value()}"}
         try:
-            async with asyncio.timeout(self.timeout):
-                async with self.http.stream(
-                    method, path, headers=headers, follow_redirects=False, **kwargs
-                ) as response:
-                    response.raise_for_status()
-                    body = bytearray()
-                    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                        if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
-                            raise RetrievalUnavailable(
-                                "Knowledge response exceeded its limit."
-                            )
-                        body.extend(chunk)
-                    return response_type.model_validate_json(body)
-        except (httpx.HTTPError, TimeoutError, ValidationError) as exc:
-            raise RetrievalUnavailable(
-                "Knowledge request could not be completed."
-            ) from exc
+            return await request_json(
+                self.http,
+                method,
+                path,
+                credential,
+                response_type,
+                timeout=self.timeout,
+                **kwargs,
+            )
+        except BackendError as exc:
+            raise RetrievalUnavailable(str(exc)) from exc
 
     async def list(self, credential: SecretStr) -> Catalog:
         """Read the current employee's active KBs without caching permissions."""
