@@ -10,6 +10,7 @@ from uuid import UUID
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CheckConstraint,
+    Boolean,
     Computed,
     DateTime,
     ForeignKey,
@@ -64,6 +65,10 @@ class KnowledgeBase(RecordDates, Base):
     """A knowledge collection; its content lives in sources and chunks."""
 
     __tablename__ = "knowledge_bases"
+    __table_args__ = (
+        Index("ux_knowledge_bases_default", "is_default", unique=True,
+              postgresql_where=text("is_default AND deleted_at IS NULL")),
+    )
 
     id: Mapped[UUID] = uuid_primary_key()
     # Stable name, unique even after soft deletion.
@@ -72,6 +77,7 @@ class KnowledgeBase(RecordDates, Base):
     description: Mapped[str | None] = mapped_column(Text)
     # Built-in knowledge base whose extraction and retrieval policy this one copies.
     template: Mapped[str] = mapped_column(Text)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
 
 

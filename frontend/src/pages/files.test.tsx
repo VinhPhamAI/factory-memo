@@ -29,9 +29,9 @@ const source = { id: "s1", kb: "knowledge_base_seed1", kind: "upload", name: "ma
 
 function showFiles(handler: Handler, kbNames = ["knowledge_base_seed1"], sourceItems = [source]) {
   const authorizedFetch = vi.fn(async (url: string, init?: RequestInit) =>
-    url.endsWith("/knowledge-agent/knowledge-bases")
-      ? Response.json({ knowledge_bases: kbNames.map((name) => ({ name, title: name, description: "" })) })
-      : url.includes("/sources?offset=") ? Response.json({ sources: sourceItems, next_offset: null, warnings: [], qa_mode: "knowledge" }) : handler(url, init),
+    url.endsWith("/v1/knowledge-bases")
+      ? Response.json({ knowledge_bases: kbNames.map((name) => ({ name, title: name, description: "", is_default: name === "knowledge_base_seed1" })) })
+      : url.includes("/sources?offset=") ? Response.json({ sources: sourceItems.filter((item) => url.includes(`/knowledge-management/${item.kb}/`)), next_offset: null, warnings: [], qa_mode: "knowledge" }) : handler(url, init),
   );
   const client = {
     state: { status: "signed-in" },
@@ -149,7 +149,7 @@ describe("file library page", () => {
 
   it("does not upload without a knowledge base", async () => {
     const fetch = showFiles(() => Response.json({ files: [] }), ["another_kb"]);
-    expect(await screen.findByRole("alert")).toHaveTextContent("knowledge_base_seed1");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Chưa có knowledge base mặc định");
     expect(screen.getByTestId("files-upload")).toBeDisabled();
     pick(new File(["%PDF-"], "manual.pdf"));
     expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
@@ -177,6 +177,16 @@ describe("file library page", () => {
     expect(await screen.findByText("Đang chờ xử lý")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Xem kết quả và chi tiết" })).toHaveAttribute("href", "/knowledge/knowledge_base_seed1/sources/upload/s1");
     expect(screen.queryByRole("button", { name: "Đưa vào xử lý" })).not.toBeInTheDocument();
+  });
+
+  it("keeps an older KB source visible after the Library default changes", async () => {
+    const prior = { ...source, kb: "another_kb" };
+    showFiles(() => Response.json({ files: [manual] }), ["knowledge_base_seed1", "another_kb"], [prior]);
+    await screen.findByTestId("library-file");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Tùy chọn manual.pdf" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Knowledge State" }));
+    expect(await screen.findByText(/KB another_kb/)).toBeInTheDocument();
   });
 
   it("selects files and removes their knowledge source without deleting the library file", async () => {

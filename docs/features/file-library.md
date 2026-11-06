@@ -4,14 +4,14 @@ Scope: the implemented personal file library. A signed-in user uploads, lists,
 downloads and deletes their own files through `/v1/files` and the **Quản lý tài liệu**
 page (`/files`, live mode only).
 
-The page uses the existing `knowledge_base_seed1` KB without a selector. An
-expert or administrator must create it before uploading. Each new file is stored through
+The page uses the administrator-selected default KB without a selector. An
+administrator must select a default before uploading. Each new file is stored through
 `/v1/files`, then attached through `POST /v1/documents/{kb}/files` with knowledge
 extraction requested. The worker converts and extracts it asynchronously. A
 queue or attachment failure leaves the personal file available and is shown on
 the row; a failed attachment can be retried without uploading the bytes again.
 An identical active KB source is linked instead of starting a duplicate job.
-The Library matches files to active KB sources by exact content hash and refreshes
+The Library matches files to active sources across KBs by exact content hash and refreshes
 source state in the background, including after page reload. The card menu opens
 the file, shows knowledge state or removes the source from the KB after confirmation.
 Multiple cards can be selected for source removal. Identical files can refer to the

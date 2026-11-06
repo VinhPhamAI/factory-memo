@@ -13,7 +13,8 @@ import {
 } from "lucide-react";
 import { useAuthClient } from "@/hooks/auth";
 import { attachLibraryFile } from "@/services/document-api";
-import { listKnowledgeBases } from "@/services/knowledge-api";
+import { listConfiguredKnowledgeBases } from "@/services/knowledge-api";
+import type { KnowledgeBase } from "@/types";
 import { FilePreview } from "@/components/file-preview";
 import { listManagedSources, removeManagedSource, sourceLink, type ManagedSource } from "@/services/knowledge-management";
 import {
@@ -45,7 +46,6 @@ const TYPE_LABELS: Record<string, string> = {
     "DOCX",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX",
 };
-const DEFAULT_KB = "knowledge_base_seed1";
 
 const messageOf = (error: unknown) =>
   error instanceof FileApiError
@@ -67,7 +67,9 @@ export function FilesPage() {
   const [loadError, setLoadError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [query, setQuery] = useState("");
-  const [kbReady, setKbReady] = useState(false);
+  const [defaultKb, setDefaultKb] = useState("");
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const kbReady = !!defaultKb;
   const [kbError, setKbError] = useState("");
   const [sources, setSources] = useState<ManagedSource[]>([]);
   const [sourcesError, setSourcesError] = useState("");
@@ -82,12 +84,13 @@ export function FilesPage() {
   useEffect(() => {
     const abort = new AbortController();
     setKbError("");
-    listKnowledgeBases(abort.signal, client)
+    listConfiguredKnowledgeBases(abort.signal, client)
       .then((items) => {
         if (abort.signal.aborted) return;
-        const found = items.some((item) => item.name === DEFAULT_KB);
-        setKbReady(found);
-        if (!found) setKbError(`Knowledge base mặc định “${DEFAULT_KB}” chưa được tạo. Liên hệ quản trị viên để tạo trước khi tải file.`);
+        const found = items.find((item) => item.is_default)?.name ?? "";
+        setKnowledgeBases(items);
+        setDefaultKb(found);
+        if (!found) setKbError("Chưa có knowledge base mặc định. Liên hệ quản trị viên để chọn trước khi tải file.");
       })
       .catch(() => { if (!abort.signal.aborted) setKbError("Không kiểm tra được knowledge base mặc định. Hãy tải lại trang và thử lại."); });
     return () => abort.abort();
@@ -100,12 +103,14 @@ export function FilesPage() {
     const load = async () => {
       try {
         const all: ManagedSource[] = [];
-        let offset: number | null = 0;
-        while (offset !== null) {
-          const page = await listManagedSources(DEFAULT_KB, abort.signal, offset, client);
-          if (!Array.isArray(page.sources) || (page.next_offset !== null && (!Number.isInteger(page.next_offset) || page.next_offset <= offset))) throw new Error("Invalid source page");
-          all.push(...page.sources);
-          offset = page.next_offset;
+        for (const kb of knowledgeBases) {
+          let offset: number | null = 0;
+          while (offset !== null) {
+            const page = await listManagedSources(kb.name, abort.signal, offset, client);
+            if (!Array.isArray(page.sources) || (page.next_offset !== null && (!Number.isInteger(page.next_offset) || page.next_offset <= offset))) throw new Error("Invalid source page");
+            all.push(...page.sources);
+            offset = page.next_offset;
+          }
         }
         if (!abort.signal.aborted) { setSources(all); setSourcesError(""); }
       } catch {
@@ -116,9 +121,10 @@ export function FilesPage() {
     };
     void load();
     return () => { abort.abort(); clearTimeout(timer); };
-  }, [client, kbReady, sourcesRevision]);
+  }, [client, defaultKb, knowledgeBases, sourcesRevision, kbReady]);
 
-  const sourceFor = (file: LibraryFile) => sources.find((source) => source.file_sha256 === file.sha256);
+  const sourcesFor = (file: LibraryFile) => sources.filter((source) => source.file_sha256 === file.sha256);
+  const sourceFor = (file: LibraryFile) => sourcesFor(file).find((source) => source.kb === defaultKb) ?? sourcesFor(file)[0];
 
   useEffect(() => {
     let active = true;
@@ -144,6 +150,19 @@ export function FilesPage() {
   async function upload(selected: File[]) {
     if (!kbReady || uploading) return;
     setUploading(true);
+    try {
+      const current = await listConfiguredKnowledgeBases(new AbortController().signal, client);
+      if (!current.some((item) => item.name === defaultKb && item.is_default)) {
+        setKbError("Knowledge base mặc định đã thay đổi. Hãy tải lại trang trước khi tải file.");
+        setDefaultKb("");
+        setUploading(false);
+        return;
+      }
+    } catch {
+      setKbError("Không kiểm tra được knowledge base mặc định. Hãy tải lại trang và thử lại.");
+      setUploading(false);
+      return;
+    }
     for (const file of selected) {
       let stored: LibraryFile;
       try {
@@ -153,7 +172,7 @@ export function FilesPage() {
         toasts.show("error", `“${file.name}”: ${messageOf(error)}`);
         continue;
       }
-      await queueFile(stored, DEFAULT_KB);
+      await queueFile(stored, defaultKb);
     }
     setUploading(false);
   }
@@ -301,10 +320,10 @@ export function FilesPage() {
           {stateFile && (() => {
             const source = sourceFor(stateFile);
             if (sourcesError) return <p role="alert">{sourcesError}</p>;
-            if (!source) return <><p>File chưa được liên kết với knowledge base hoặc trạng thái đang tải.</p>{rowErrors[stateFile.id] && <Button disabled={!kbReady || uploading} onClick={async () => { setUploading(true); try { await queueFile(stateFile, DEFAULT_KB); } finally { setUploading(false); } }}>Thử lại xử lý</Button>}</>;
+            if (!source) return <><p>File chưa được liên kết với knowledge base hoặc trạng thái đang tải.</p>{rowErrors[stateFile.id] && <Button disabled={!kbReady || uploading} onClick={async () => { setUploading(true); try { await queueFile(stateFile, defaultKb); } finally { setUploading(false); } }}>Thử lại xử lý</Button>}</>;
             const processing = source.processing;
             const label = processing.status === "queued" ? "Đang chờ xử lý" : processing.status === "running" ? "Đang xử lý" : processing.status === "failed" || processing.status === "interrupted" ? "Xử lý thất bại" : source.stage === "extracted" ? "Đã xử lý" : "Chưa hoàn tất xử lý";
-            return <><p><strong>{label}</strong>{source.review === "pending" && " · Tri thức đang chờ duyệt"}</p>{processing.error && <p role="alert">{processing.error}</p>}<Link className="link-button" to={sourceLink(source)}>Xem kết quả và chi tiết</Link></>;
+            return <><p><strong>{label}</strong>{source.review === "pending" && " · Tri thức đang chờ duyệt"} · KB {source.kb}</p>{processing.error && <p role="alert">{processing.error}</p>}<Link className="link-button" to={sourceLink(source)}>Xem kết quả và chi tiết</Link>{sourcesFor(stateFile).filter((other) => other.id !== source.id).map((other) => <p key={other.id}><Link className="link-button" to={sourceLink(other)}>Xem nguồn trong KB {other.kb}</Link></p>)}</>;
           })()}
         </DialogContent>
       </Dialog>
@@ -313,7 +332,7 @@ export function FilesPage() {
           <DialogHeader>
             <DialogTitle>Remove from knowledge base?</DialogTitle>
             <DialogDescription>
-              Gỡ {pendingRemove.length === 1 ? `“${pendingRemove[0].filename}”` : `${pendingRemove.length} file đã chọn`} khỏi knowledge base. File vẫn còn trong Library; tri thức chỉ còn tìm kiếm được nếu có nguồn khác đang hoạt động. Nguồn có thể được dùng chung với file trùng nội dung.
+              Gỡ {pendingRemove.length === 1 ? `“${pendingRemove[0].filename}” khỏi KB ${sourceFor(pendingRemove[0])?.kb ?? ""}` : `${pendingRemove.length} file đã chọn khỏi các KB tương ứng`}. File vẫn còn trong Library; tri thức chỉ còn tìm kiếm được nếu có nguồn khác đang hoạt động. Nguồn có thể được dùng chung với file trùng nội dung.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

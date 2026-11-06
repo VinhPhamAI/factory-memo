@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { Files, LogOut, Menu, MessagesSquare } from "lucide-react";
+import { Files, LogOut, Menu, MessagesSquare, Settings2 } from "lucide-react";
 import { BrandMark } from "./brand";
 import { ConversationList } from "./conversation-list";
 import {
@@ -52,6 +52,11 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
               {label}
             </NavLink>
           ))}
+        {auth.status === "signed-in" && auth.user.role === "admin" && (
+          <NavLink to="/admin/knowledge-bases" onClick={onNavigate} data-testid="nav-admin-knowledge" className={({ isActive }) => cn("sidebar-link", isActive && "active")}>
+            <Settings2 size={16} /> Quản trị knowledge base
+          </NavLink>
+        )}
       </nav>
       <div
         className={cn(

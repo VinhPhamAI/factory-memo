@@ -88,6 +88,8 @@ async function requestDetail(name: string, init?: RequestInit) {
   if (response.status === 404) throw new Error("Không tìm thấy knowledge base.");
   if (response.status === 403)
     throw new Error("Bạn không có quyền thay đổi knowledge base này.");
+  if (response.status === 409)
+    throw new Error("Hãy chọn một knowledge base mặc định khác trước khi xóa.");
   if (!response.ok) throw new ApiError(response.status, "");
   return response;
 }
@@ -118,4 +120,12 @@ export async function updateKnowledgeBase(
 
 export async function deleteKnowledgeBase(name: string) {
   await requestDetail(name, { method: "DELETE" });
+}
+
+/** Persist the Library target; the server requires an administrator. */
+export async function setDefaultKnowledgeBase(name: string) {
+  const response = await sessionClient.authorizedFetch(`${detailPath(name)}/default`, { method: "PUT" });
+  if (response.status === 403) throw new Error("Chỉ quản trị viên có thể chọn knowledge base mặc định.");
+  if (response.status === 404) throw new Error("Knowledge base không còn tồn tại.");
+  if (!response.ok) throw new Error(`Không cập nhật được knowledge base mặc định (HTTP ${response.status}).`);
 }

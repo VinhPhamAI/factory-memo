@@ -42,11 +42,15 @@ export function KnowledgeBaseSettings({
   role,
   revision,
   onChanged,
+  isDefault = false,
+  compact = false,
 }: {
   name: string;
   role?: string;
   revision: number;
   onChanged(): void;
+  isDefault?: boolean;
+  compact?: boolean;
 }) {
   const [detail, setDetail] = useState<KnowledgeBaseDetail>();
   const [dialog, setDialog] = useState<"edit" | "delete">();
@@ -104,10 +108,10 @@ export function KnowledgeBaseSettings({
       {detail && (
         <article className="km-kb-card">
           <header className="km-kb-card-header">
-            <div>
+            {!compact && <div>
               <h2>{detail.title}</h2>
               {detail.description && <p>{detail.description}</p>}
-            </div>
+            </div>}
             {(role === "admin" || role === "expert") && (
               <div className="km-kb-actions">
                 <Button variant="outline" onClick={() => {
@@ -117,7 +121,7 @@ export function KnowledgeBaseSettings({
                   setDialog("edit");
                 }}><Pencil /> Sửa knowledge base</Button>
                 {role === "admin" && (
-                  <Button variant="destructive" onClick={() => {
+                  <Button variant="destructive" disabled={isDefault} title={isDefault ? "Chọn knowledge base mặc định khác trước khi xóa" : undefined} onClick={() => {
                     setConfirmation("");
                     setActionError("");
                     setDialog("delete");
@@ -126,6 +130,7 @@ export function KnowledgeBaseSettings({
               </div>
             )}
           </header>
+          {isDefault && role === "admin" && <p className="vc-muted">Chọn một knowledge base mặc định khác trước khi xóa mục này.</p>}
           <dl className="km-kb-metadata">
             <div><dt>Mã</dt><dd><code>{detail.name}</code></dd></div>
             <div><dt>Mẫu</dt><dd>{detail.template}</dd></div>
@@ -159,7 +164,7 @@ export function KnowledgeBaseSettings({
               <DialogTitle>{dialog === "delete" ? "Xóa knowledge base" : "Sửa knowledge base"}</DialogTitle>
               <DialogDescription>
                 {dialog === "delete"
-                  ? `Nhập mã “${name}” để xác nhận xóa.`
+                  ? `Nhập mã “${name}” để xác nhận xóa. Knowledge base sẽ không còn khả dụng; các tác vụ đang chờ sẽ bị dừng. Dữ liệu và lịch sử được giữ lại.`
                   : `Cập nhật thông tin hiển thị cho ${name}.`}
               </DialogDescription>
             </DialogHeader>

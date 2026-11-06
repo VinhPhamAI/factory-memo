@@ -5,13 +5,14 @@ and reviewing factory knowledge. React, TypeScript, Vite, Tailwind CSS and
 shadcn/ui. API mode requires sign-in; mock mode needs no account.
 
 `api` is the default mode. It offers agent chat (`/ask`), personal document
-management (`/files`), and individual source review pages. **Quản lý tài liệu** attaches new uploads to the existing
-`knowledge_base_seed1` KB and queues conversion and knowledge extraction. An
-expert or administrator must create that KB before uploads can start. Queue failures and duplicates are
-shown explicitly. The legacy capture page (`/capture`) remains reachable by URL
-but is not in the main navigation. See [document uploads](../docs/features/document-uploads.md)
-and [knowledge management](../docs/features/knowledge-management.md). The
-five-step MR-JE-AX167 simulation remains available in `mock` mode.
+management (`/files`), and individual source review pages. Administrators can
+manage KBs and select the Library target at `/admin/knowledge-bases`.
+**Quản lý tài liệu** queues new uploads for conversion and knowledge extraction
+in the selected default KB. Queue failures and duplicates are shown explicitly.
+The legacy `/capture` page remains reachable by URL but is not in the main
+navigation. See [document uploads](../docs/features/document-uploads.md) and
+[knowledge management](../docs/features/knowledge-management.md). The five-step
+MR-JE-AX167 simulation remains available in `mock` mode.
 
 ## Run
 
