@@ -4,19 +4,14 @@ A Vietnamese-language UI for chatting with the standalone agent and capturing
 and reviewing factory knowledge. React, TypeScript, Vite, Tailwind CSS and
 shadcn/ui. API mode requires sign-in; mock mode needs no account.
 
-`api` is the default mode. It offers agent chat (`/ask`) and live voice capture
-(`/capture`): microphone recording with live speaker-lettered transcript. The
-**Quản lý tri thức** tab (`/knowledge`) lists original uploads, converted text and
-extracted results, with per-source mode selection and shared review. TXT files
-can be extracted directly from Raw without a manual Convert step. Recording
-transcripts, speaker labels and audio are reviewed in the same workspace. The **Tải lên tài liệu**
-tab uploads PDF, DOCX, XLSX, PNG and JPEG through the same `/v1/files` API as
-**Thư viện file**, then attaches the saved ID to the selected KB. **Chỉ lưu** keeps
-the source raw; **Auto** queues conversion and extraction. Retrying a failed
-attachment reuses the saved file. See [voice capture](../docs/features/voice-capture.md) and
-[document uploads](../docs/features/document-uploads.md) and
-[knowledge management](../docs/features/knowledge-management.md). The old five-step MR-JE-AX167 simulation remains available explicitly in
-`mock` mode.
+`api` is the default mode. It offers agent chat (`/ask`), personal document
+management (`/files`), and individual source review pages. **Quản lý tài liệu** attaches new uploads to the existing
+`knowledge_base_seed1` KB and queues conversion and knowledge extraction. An
+expert or administrator must create that KB before uploads can start. Queue failures and duplicates are
+shown explicitly. The legacy capture page (`/capture`) remains reachable by URL
+but is not in the main navigation. See [document uploads](../docs/features/document-uploads.md)
+and [knowledge management](../docs/features/knowledge-management.md). The
+five-step MR-JE-AX167 simulation remains available in `mock` mode.
 
 ## Run
 
@@ -70,9 +65,8 @@ owns the client:
 [conversations API](../docs/features/conversations.md); `src/services/conversations-api.ts`
 owns the client and `src/pages/conversations.tsx` the screen.
 
-- API mode uses a left sidebar (a drawer below 860 px): brand, the three sections,
-  with expandable **Quản lý tri thức** links for knowledge bases, sources, search
-  and conflicts, and on `/ask` a new-chat button and the conversation list, with the account and
+- API mode uses a left sidebar (a drawer below 860 px) with chat and document
+  management, and on `/ask` a new-chat button and the conversation list, with the account and
   sign-out at the bottom (`src/components/qa-shell.tsx`, `conversation-list.tsx`).
 - Conversations are saved on the server per account and listed newest activity
   first; each item has rename and delete. The first message of a new chat creates

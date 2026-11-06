@@ -183,7 +183,7 @@ export function CapturePage() {
           <p>
             {mode === "voice"
               ? "Ghi âm trao đổi tại hiện trường. Sau khi lưu transcript, trích xuất (hoặc để Auto chạy) và duyệt trong Quản lý tri thức."
-              : "Lưu tài liệu và hình ảnh vào Thư viện file, liên kết với knowledge base đã chọn. Chọn Auto để tự chuyển đổi và trích xuất sau khi tải lên."}
+              : "Lưu tài liệu và hình ảnh vào Quản lý tài liệu, liên kết với knowledge base đã chọn. Chọn Auto để tự chuyển đổi và trích xuất sau khi tải lên."}
           </p>
         </header>
 
@@ -275,9 +275,7 @@ export function CapturePage() {
           </label>
 
           {kbState === "ready" && !knowledgeBases.length && (
-            <Link to="/knowledge?tab=knowledge-bases" className="link-button">
-              Mở tab Knowledge base
-            </Link>
+            <p className="vc-muted">Chưa có knowledge base để chọn.</p>
           )}
 
           <ProcessingChoice
@@ -348,8 +346,8 @@ export function CapturePage() {
         </form>
 
         <p className="vc-muted">
-          <Link to="/knowledge" className="link-button">
-            Xem và xử lý dữ liệu đã lưu trong Quản lý tri thức
+          <Link to="/files" className="link-button">
+            Mở Quản lý tài liệu
           </Link>
         </p>
 

@@ -128,7 +128,7 @@ describe("document upload tab", () => {
       "more.pdf",
     ]);
     fireEvent.click(
-      screen.getByRole("link", { name: /^Thư viện file$/ }),
+      screen.getByRole("link", { name: /^Quản lý tài liệu$/ }),
     );
     expect(await screen.findAllByTestId("library-file")).toHaveLength(3);
     expect(router.state.location.pathname).toBe("/files");
@@ -202,7 +202,7 @@ describe("document upload tab", () => {
     pick(new File(["pdf"], "manual.pdf"));
     fireEvent.click(screen.getByTestId("document-upload"));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "File đã lưu trong Thư viện file",
+      "File đã lưu trong Quản lý tài liệu",
     );
     fireEvent.click(screen.getByTestId("document-upload"));
     expect(await screen.findByTestId("upload-job")).toHaveTextContent(

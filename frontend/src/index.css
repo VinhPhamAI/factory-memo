@@ -3877,6 +3877,44 @@ button.ref-chip:hover,
 .km-footnote { margin-top: 24px; font-size: 13px; }
 /* File library page (/files). */
 .files-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; }
+.library-page { width: 100%; max-width: none; margin: 0; }
+.library-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-bottom: 20px; border-bottom: 1px solid #eee; }
+.library-heading h1 { margin: 0; color: #181818; font-size: 28px; font-weight: 700; }
+.library-toolbar { display: flex; align-items: center; gap: 16px; }
+.library-search { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid #dedede; border-radius: 999px; color: #777; }
+.library-search input { border: 0; outline: 0; min-width: 170px; background: transparent; color: #222; }
+.library-toolbar .files-upload-button {
+  background: transparent;
+  color: #202020;
+  border-radius: 999px;
+  height: 42px;
+  padding: 0 18px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.library-toolbar .files-upload-button:hover { background: #f3f3f4; color: #a31832; }
+.library-recent { margin-top: 32px; }
+.library-recent h2 { color: #777; font-size: 14px; font-weight: 500; margin: 0 0 16px; }
+.library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 28px 20px; list-style: none; margin: 0; padding: 0; }
+.library-card { min-width: 0; }
+.library-card-image { position: relative; }
+.library-select, .library-menu-trigger { position: absolute; top: 10px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: white; color: #333; box-shadow: 0 1px 5px #0003; opacity: 0; transition: opacity .15s; }
+.library-select { left: 10px; border: 2px solid #ddd; }
+.library-select[aria-pressed="true"] { opacity: 1; background: #245bd6; border-color: #245bd6; color: white; }
+.library-menu-trigger { right: 10px; }
+.library-card:hover .library-select, .library-card:hover .library-menu-trigger, .library-card:focus-within .library-select, .library-card:focus-within .library-menu-trigger, .library-menu-trigger[data-state="open"] { opacity: 1; }
+.library-menu { min-width: 235px; border-radius: 12px; padding: 6px; }
+.library-menu [data-slot="dropdown-menu-item"] { padding: 10px 12px; gap: 10px; cursor: pointer; }
+.library-selection { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; font-size: 14px; }
+@media (hover: none) { .library-select, .library-menu-trigger { opacity: 1; } }
+.library-preview { height: 195px; border: 1px solid #e7e7e7; border-radius: 12px; overflow: hidden; background: #fafafa; display: flex; align-items: flex-start; justify-content: center; }
+.library-preview img { width: 100%; height: 100%; object-fit: contain; object-position: top center; }
+.library-preview pre { background: white; width: 100%; height: 100%; margin: 0; padding: 14px; font: 10px/1.5 system-ui, sans-serif; white-space: pre-wrap; overflow: hidden; overflow-wrap: anywhere; }
+.library-preview > span { align-self: center; display: grid; justify-items: center; gap: 8px; color: #8b8b8b; font-size: 12px; }
+.library-card-content { padding-top: 8px; }
+.library-filename { color: #202020; font-weight: 600; overflow-wrap: anywhere; }
+.library-metadata { font-size: 12px; color: #777; margin: 4px 0; }
+.library-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 /* Popup notifications (components/ui/toast.tsx). */
 .toast-stack { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
 .toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; padding: 12px 12px 12px 14px; border-radius: 10px; font-size: 14px; line-height: 1.5; background: white; border: 1px solid #e1e8f3; box-shadow: 0 8px 24px rgba(23, 45, 75, .14); animation: toast-in .18s ease-out; }
@@ -3952,6 +3990,10 @@ button.ref-chip:hover,
   .chat-focus-topbar .qa-nav { flex-wrap: wrap; gap: 2px; }
   .chat-focus-topbar .qa-nav-link { font-size: 12px; gap: 4px; padding: 0 6px; white-space: nowrap; }
   .km-heading { flex-direction: column; }
+  .library-heading { align-items: flex-start; flex-direction: column; }
+  .library-toolbar { width: 100%; justify-content: space-between; gap: 6px; }
+  .library-search { min-width: 0; }
+  .library-search input { min-width: 0; width: 100%; }
   .km-heading h1 { font-size: 23px; }
   .km-kb-card { padding: 16px; }
   .km-source-list > li { flex-wrap: wrap; gap: 12px; padding: 16px; }

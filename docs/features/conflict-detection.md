@@ -13,15 +13,16 @@ General uses the shared listwise judge with pairwise confirmation, a
 `CONSOLIDATION_*` provider settings with `OPENROUTER_*` fallbacks for the model,
 API key and base URL. Run `uv run python -m backend.worker --stage conflict`
 from the repo root when running stage workers individually.
-See [conflict review](knowledge-management.md#conflict-review) for the UI and
-how to queue a check for existing application records.
+See [conflict review](knowledge-management.md#conflict-review) for the API and
+how to queue a check for existing application records. The review page is not
+exposed in the UI.
 
 ## Industrial QA
 
 > **Trạng thái:** giai đoạn 1 đã triển khai (2026-10-23): stage `conflict`, bảng
 > `knowledge_conflicts`, judge `list` + xác nhận và `pair`, cấu hình, unit test
-> bằng fake. Đã bổ sung API review/recheck và tab **Mâu thuẫn** trong **Quản lý
-> tri thức**, có test frontend bằng API giả lập. Chưa có bộ đánh giá list/pair
+> bằng fake. Đã bổ sung API review/recheck; trang review không còn hiển thị
+> trong UI. Chưa có bộ đánh giá list/pair
 > hoặc backfill. Chưa chạy
 > với LLM thật; các ngưỡng và ước lượng chi phí dưới đây là giả định ban đầu,
 > cần đo lại trên bộ đánh giá.
@@ -300,10 +301,9 @@ rõ. Nếu không đạt thì chuyển mặc định sang `pair`.
    khi retry, quote sai label, phán quyết thiếu → `pending`, bất đồng list/pair).
 2. **Giai đoạn 2 (review đã triển khai):** API
    `GET /v1/knowledge-management/{kb}/conflicts`, POST review và recheck;
-   tab **Mâu thuẫn** trong **Quản lý tri thức** hiển thị hai claim, quote,
-   scope, lý do, trạng thái, lịch sử, lọc và phân trang. Có thao tác xác nhận /
-   bỏ qua / chọn bản ghi giữ lại để supersede; bản ghi stale cần kiểm tra lại
-   trước khi duyệt. Xem [hướng dẫn review](knowledge-management.md#conflict-review).
+   hỗ trợ xác nhận, bỏ qua và chọn bản ghi giữ lại để supersede; bản ghi stale
+   cần kiểm tra lại trước khi duyệt. UI không còn trang review. Xem
+   [hướng dẫn review](knowledge-management.md#conflict-review).
    Bộ đánh giá và so sánh list/pair vẫn chưa triển khai.
 3. **Giai đoạn 3:** backfill KB cũ (cùng blocking), so lại khi record được sửa,
    cảnh báo trong câu trả lời khi trích dẫn record có conflict mở, cân nhắc case × case.

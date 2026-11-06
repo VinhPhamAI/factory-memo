@@ -525,9 +525,6 @@ export function ConversationsPage() {
               </span>
             </div>
           </form>
-          <p className="composer-note">
-            Câu trả lời là gợi ý, không phải quy trình đã duyệt.
-          </p>
         </div>
       </main>
     </div>

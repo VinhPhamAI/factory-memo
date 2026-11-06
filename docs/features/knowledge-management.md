@@ -1,35 +1,21 @@
 # Knowledge management
 
-The **Quản lý tri thức** tab (`/knowledge`) is the shared source inventory and
-review workspace. **Thêm dữ liệu** (`/capture`) captures microphone audio or
-uploads files to the personal library and attaches them to the selected KB,
-without copying their bytes. It links to management after saving. Its **Auto · chạy
-đến Extract** option queues the whole pipeline at save time instead (see
-[Job queue and workers](#job-queue-and-workers)). Existing
-`/capture/<kb>/<conversation_id>` bookmarks redirect to the shared workspace.
+The application API manages knowledge bases, their sources and reviews. The
+knowledge base and source inventory pages are not exposed in the UI; `/knowledge`
+redirects to **Quản lý tài liệu** (`/files`). Individual source details remain
+available through their source links for processing and review. Existing
+`/capture/<kb>/<conversation_id>` bookmarks redirect to the source detail.
+
+The document management page uploads personal files, attaches them to a selected
+KB and requests background processing. The legacy `/capture` page remains
+reachable by URL but is not in the main navigation.
 
 ## Manage a knowledge base
 
-1. Open **Knowledge base** in the **Quản lý tri thức** sidebar. Select a collection
-   to see its name, title, description, template, creator, dates and counts.
-2. Experts and administrators can create a collection and edit its title and
-   description in this tab. The stable name identifies URLs, QA threads and
-   storage keys.
-3. Open **Nguồn dữ liệu** and use **Thêm tài liệu** to upload files into the
-   selected collection. An upload of identical bytes opens the existing source
-   when uploading a single file.
-4. The submitter, an expert or an administrator can use **Gỡ nguồn**. A running
-   job must finish before the source can be removed. Queued jobs fail with
-   `SOURCE_REMOVED`.
-5. In **Knowledge base**, an administrator can delete a collection by typing its
-   name to confirm. Its name stays reserved. The API hides it from QA and capture,
-   drops its in-memory
-   QA threads and fails queued jobs with `KB_DELETED`. A running job for the
-   deleted KB fails without publishing new chunks or queuing a follow-up.
-
-Removal retains the source, its bytes, linked chunks and conflicts for history.
-A chunk remains searchable while it has another active evidence source. The
-original download follows the source and returns `404` after removal.
+KB creation, changes and deletion, source inventory and source removal remain
+available through the API. Removing a source retains its bytes, linked chunks and
+conflicts for history. A chunk remains searchable while it has another active
+evidence source. The original source download returns `404` after removal.
 
 | API | Access | Response |
 |---|---|---|
@@ -46,53 +32,30 @@ permissions and `503` when the application database is unavailable.
 
 ### Conflict review
 
-Select a KB in **Quản lý tri thức**, then open **Mâu thuẫn**, alongside
-**Nguồn dữ liệu**. The default filter is suspected conflicts (`open`); the status
-selector also exposes pending judgements, evidence needing review, confirmed,
-dismissed, resolved and non-conflicting pairs. Results are paginated. KBs without
-conflict detection show an explanatory empty state.
+Conflict detection and review remain available through the API. The management
+UI does not provide a conflict review page.
 
 The application runs conflict detection for knowledge extraction in KBs created
 from the General template, including existing KBs. Conflict jobs, pairs and
 review history are stored in `APP_DATABASE_URL`. Review requires an expert or
 administrator account.
 
-Each pair shows both full claims, their record review states, the judge's quoted
-passages, relation, aspect, confidence and confirmation/link state. Expand
-**Phạm vi và bằng chứng nguồn** for scope, validity dates when present, verbatim
-source evidence and links to the source. Notes and previous review decisions
-remain visible in the review history.
-
-- **Xác nhận mâu thuẫn** adds conflict links; it does not approve either record.
-- **Bỏ qua** dismisses the pair and withdraws conflict links, without approving
-  either record.
-- **Thay thế một bản ghi…** requires explicitly selecting the survivor in a
-  dialog. The other record is retired from search and kept in history. The
-  survivor keeps its existing review status.
-
-Missing records and resolved pairs cannot be reviewed. If a record changed since
-the judgement (`stale`), review controls are disabled until it is compared again.
-**Kiểm tra lại cặp này** queues comparison for that pair's evidence sources;
-**Kiểm tra lại bản ghi đã đổi** asks the backend to queue changed records. These
-are queued jobs, not immediate LLM results, and require a conflict worker.
+A review can confirm or dismiss a suspected conflict, or explicitly supersede
+one record. These decisions do not approve either record. Supersession retires
+the unselected record from search while retaining its history. Missing records
+and resolved pairs cannot be reviewed; stale judgments must be compared again.
+Recheck requests queue background jobs and require a conflict worker.
 To check existing application records that have no verdict yet, send
 `{"record_ids":["<knowledge-chunk UUID>"]}` to the recheck endpoint. It queues
 the source of each supplied record. A request body of `{}` checks for stale pairs.
 Legacy verdicts and review history in per-KB databases require a separate data
 import with verified chunk mappings.
 
-The source list and source detail show conflict job progress/failure separately
-from extraction. Management keeps polling while loaded sources have active
-ingestion/conflict jobs; the conflict list refreshes while those jobs run and when
-their state changes. **Làm mới mâu thuẫn** also fetches the current list manually.
-Source-level counts describe the last detection run, not current review totals;
-the conflict filter counts come from the review API.
-
-The UI uses `GET /v1/knowledge-management/{kb}/conflicts`,
-`POST /v1/knowledge-management/{kb}/conflicts/{id}/review` and
-`POST /v1/knowledge-management/{kb}/conflicts/recheck`. The backend integration
-test exercises these endpoints and the worker against disposable PostgreSQL
-using controlled extraction and judge responses.
+The source list and detail show conflict job progress and failures separately
+from extraction. Source-level counts describe the last detection run, not current
+review totals. The API exposes conflict listing, review and recheck endpoints.
+Backend integration tests exercise these endpoints and the worker against
+disposable PostgreSQL with controlled extraction and judge responses.
 
 ### Processing and review
 
@@ -225,7 +188,7 @@ matches an extracted source and the request has no `confirm_overlap: true`
 
 `POST /v1/knowledge-management/{kb}/search` ranks the searchable chunks of one
 knowledge base and returns each with its active evidence. Any signed-in user can
-call it. The **Tìm kiếm** tab on the management page uses it.
+call it. The management UI does not provide a search page.
 
 Hybrid search combines vector and full-text ranks using reciprocal rank fusion.
 When the requested kinds include `knowledge`, confident hits rank first using

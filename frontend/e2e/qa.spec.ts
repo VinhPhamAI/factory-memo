@@ -30,6 +30,34 @@ async function mockBases(page: Page) {
   );
 }
 
+test("library grid previews files and filters by name", async ({ page }) => {
+  await page.route("**/v1/knowledge-agent/knowledge-bases", (route) =>
+    route.fulfill({ json: { knowledge_bases: [{ name: "knowledge_base_seed1", title: "Default", description: "" }] } }),
+  );
+  await page.route("**/v1/files", (route) => route.fulfill({ json: { files: [
+    { id: "doc1", filename: "manual.docx", content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size_bytes: 120, created_at: "2026-11-06T00:00:00Z", sha256: "a" },
+    { id: "doc2", filename: "pump.pdf", content_type: "application/pdf", size_bytes: 120, created_at: "2026-11-06T00:00:00Z", sha256: "b" },
+  ] } }));
+  await page.route("**/v1/files/*/preview", (route) => route.fulfill({ contentType: "text/plain", body: "Preview content" }));
+  await page.route("**/v1/knowledge-management/knowledge_base_seed1/sources*", (route) => route.fulfill({ json: { sources: [{ id: "s1", kb: "knowledge_base_seed1", kind: "upload", name: "manual.docx", file_sha256: "a", stage: "raw", review: "none", processing: { status: "queued" } }], warnings: [], next_offset: null, qa_mode: "knowledge" } }));
+  await page.goto("/files");
+  await expect(page.getByRole("heading", { name: "Library" })).toBeVisible();
+  await expect(page.getByTestId("library-file")).toHaveCount(2);
+  await expect(page.getByText("Preview content").first()).toBeVisible();
+  const card = page.getByTestId("library-file").first();
+  await card.hover();
+  await expect(card.getByRole("button", { name: "Tùy chọn manual.docx" })).toBeVisible();
+  await card.getByRole("button", { name: "Tùy chọn manual.docx" }).click();
+  await page.getByRole("menuitem", { name: "Knowledge State" }).click();
+  await expect(page.getByRole("dialog")).toContainText("Đang chờ xử lý");
+  await page.keyboard.press("Escape");
+  await card.getByRole("button", { name: "Chọn manual.docx", exact: true }).click();
+  await expect(page.getByText("Đã chọn 1 file")).toBeVisible();
+  await page.getByRole("searchbox", { name: "Search library" }).fill("pump");
+  await expect(page.getByTestId("library-file")).toHaveCount(1);
+  await expect(page.getByTestId("library-file")).toContainText("pump.pdf");
+});
+
 const agentEvent = (type: string, data: Record<string, unknown>) =>
   `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
 
@@ -212,7 +240,7 @@ for (const auto of [false, true]) {
     expect(uploads).toBe(1);
     expect(attachments).toBe(1);
     if (auto) await expect(page.getByTestId("upload-job")).toContainText("Đã xếp hàng");
-    await page.getByRole("note").getByRole("link", { name: "Thư viện file", exact: true }).click();
+    await page.getByRole("note").getByRole("link", { name: "Quản lý tài liệu", exact: true }).click();
     await expect(page.getByTestId("library-file")).toContainText("manual.pdf");
     const downloading = page.waitForEvent("download");
     await page.getByRole("button", { name: "Tải về manual.pdf", exact: true }).click();
@@ -221,140 +249,18 @@ for (const auto of [false, true]) {
 }
 
 for (const width of [1365, 390]) {
-  test(`conflict review compares evidence and supersedes an explicit survivor at ${width}px`, async ({
-    page,
-  }) => {
+  test(`removed knowledge pages are absent at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 950 });
     await mockBases(page);
-    const record = (id: string, claim: string) => ({
-      id,
-      subject: "FX5-PLC9001",
-      claim,
-      type: "rule",
-      status: "draft",
-      context: {
-        machine_id: "FX5-PLC9001",
-        configuration: "CONFLICT-DEMO",
-        condition: "Mất phản hồi nhưng kết nối vẫn được giữ",
-        quotes: [{ turn_id: "T04", quote: claim }],
-      },
-      stated_by: "Chuyên gia",
-      created_at: "2026-10-23T01:00:00Z",
-      superseded_by: null,
-      verify: null,
-      consolidation: null,
-      history: [],
-      evidence_id: `source-${id}`,
-      quote: claim,
-    });
-    const conflict = {
-      id: "pair1",
-      a_id: "record-a",
-      b_id: "record-b",
-      new_id: "record-b",
-      status: "open",
-      relation: "contradiction",
-      aspect: "value",
-      confidence: 0.95,
-      reason:
-        "Hai chuyên gia yêu cầu giá trị D100 khác nhau cho cùng PLC, cấu hình và điều kiện.",
-      quotes: {},
-      linked: true,
-      confirmed_by_pair: true,
-      review: [],
-      stale: false,
-      created_at: "2026-10-23T01:00:00Z",
-      updated_at: "2026-10-23T01:00:00Z",
-      a: record("record-a", "D100 bắt buộc bằng 1000 ms."),
-      b: record("record-b", "D100 bắt buộc bằng 3000 ms."),
-    };
-    let resolved = false;
-    await page.route("**/v1/knowledge-management/*/sources*", (route) =>
-      route.fulfill({
-        json: {
-          sources: [],
-          warnings: [],
-          next_offset: null,
-          qa_mode: "knowledge",
-        },
-      }),
-    );
-    await page.route(
-      "**/v1/knowledge-management/*/conflicts**",
-      async (route) => {
-        if (route.request().method() === "POST") {
-          expect(route.request().postDataJSON()).toEqual({
-            decision: "supersede",
-            note: "Đã đối chiếu hai nguồn",
-            keep_id: "record-b",
-          });
-          resolved = true;
-          await route.fulfill({ json: { ...conflict, status: "resolved" } });
-        } else {
-          await route.fulfill({
-            json: {
-              conflicts: resolved ? [] : [conflict],
-              counts: resolved ? { resolved: 1 } : { open: 1 },
-              enabled: true,
-              offset: 0,
-              limit: 20,
-              next_offset: null,
-            },
-          });
-        }
-      },
-    );
-    await page.goto("/knowledge");
-    await page.getByTestId("management-kb").selectOption("industrial_qa");
+    await page.route("**/v1/files", (route) => route.fulfill({ json: { files: [] } }));
+    await page.goto("/knowledge?tab=conflicts");
+    await expect(page).toHaveURL(/\/files$/);
     if (width < 860) await page.getByTestId("open-menu").click();
-    const knowledgeMenu = page.getByRole("button", { name: "Quản lý tri thức", exact: true });
-    await expect(knowledgeMenu).toHaveAttribute("aria-expanded", "true");
-    await knowledgeMenu.click();
-    await expect(page.getByRole("link", { name: "Mâu thuẫn", exact: true })).toBeHidden();
-    await knowledgeMenu.click();
-    await expect(page.getByRole("link", { name: "Nguồn dữ liệu", exact: true })).toHaveAttribute("aria-current", "page");
-    await page.getByRole("link", { name: "Mâu thuẫn", exact: true }).click();
-    await expect(page).toHaveURL(/tab=conflicts/);
-    if (width < 860) await expect(page.getByRole("dialog")).toBeHidden();
-    await expect(
-      page.getByRole("heading", { name: "Review mâu thuẫn" }),
-    ).toBeVisible();
-    await expect(page.getByRole("region", { name: "Bản ghi A" })).toContainText(
-      "1000 ms",
-    );
-    await expect(page.getByRole("region", { name: "Bản ghi B" })).toContainText(
-      "3000 ms",
-    );
-    await page
-      .getByRole("textbox", { name: "Ghi chú quyết định" })
-      .fill("Đã đối chiếu hai nguồn");
-    await page.getByTestId("knowledge-management").evaluate((element) => {
-      element.scrollTop = 0;
-    });
-    await page.screenshot({
-      path: `/private/tmp/voice-agent-conflict-${width}.png`,
-      fullPage: true,
-    });
-    expect(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= window.innerWidth,
-      ),
-    ).toBe(true);
-    await page.getByRole("button", { name: "Thay thế một bản ghi…" }).click();
-    const dialog = page.getByRole("dialog");
-    await expect(
-      dialog.getByRole("button", { name: "Lưu quyết định thay thế" }),
-    ).toBeDisabled();
-    await dialog.getByRole("radio", { name: /Bản ghi B/ }).check();
-    await dialog
-      .getByRole("button", { name: "Lưu quyết định thay thế" })
-      .click();
-    await expect(dialog).not.toBeVisible();
-    await expect(page.getByRole("status")).toContainText(
-      "Thay thế bản ghi: đã lưu quyết định.",
-    );
-    await expect(
-      page.getByText(/Chưa có cặp nào ở trạng thái này/),
-    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Quản lý tài liệu", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("button", { name: "Quản lý tri thức", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Knowledge base", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Nguồn dữ liệu", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Mâu thuẫn", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Tìm kiếm", exact: true })).toHaveCount(0);
   });
 }

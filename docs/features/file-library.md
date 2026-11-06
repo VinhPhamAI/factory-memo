@@ -1,14 +1,29 @@
 # File library
 
 Scope: the implemented personal file library. A signed-in user uploads, lists,
-downloads and deletes their own files through `/v1/files` and the **Thư viện file**
+downloads and deletes their own files through `/v1/files` and the **Quản lý tài liệu**
 page (`/files`, live mode only).
 
-The Capture page's **Tải lên tài liệu** tab uploads through the same library API,
-then attaches the file to a KB through `POST /v1/documents/{kb}/files` for manual
-or Auto conversion/extraction; see [document uploads](document-uploads.md).
-The library page itself has no KB attachment or extraction controls.
-In-browser library preview and access by citations or inquiries are not implemented.
+The page uses the existing `knowledge_base_seed1` KB without a selector. An
+expert or administrator must create it before uploading. Each new file is stored through
+`/v1/files`, then attached through `POST /v1/documents/{kb}/files` with knowledge
+extraction requested. The worker converts and extracts it asynchronously. A
+queue or attachment failure leaves the personal file available and is shown on
+the row; a failed attachment can be retried without uploading the bytes again.
+An identical active KB source is linked instead of starting a duplicate job.
+The Library matches files to active KB sources by exact content hash and refreshes
+source state in the background, including after page reload. The card menu opens
+the file, shows knowledge state or removes the source from the KB after confirmation.
+Multiple cards can be selected for source removal. Identical files can refer to the
+same source: removing it affects every file sharing that source. Source removal
+keeps the personal file and retains the evidence for history. A running job blocks
+removal, and backend role and ownership rules apply. Failed attachments can be
+retried from Knowledge State in the current page session. Library preview uses
+an authenticated endpoint.
+
+The legacy Capture page remains available by URL but is no longer in the main
+navigation. Its upload flow can still save without processing; see
+[document uploads](document-uploads.md).
 
 Both flows use the application `files` table. Personal files have flat,
 32-character hexadecimal storage keys under `FILE_LIBRARY_DIR`. KB sources attached
@@ -37,10 +52,16 @@ Every endpoint requires `Authorization: Bearer <access_token>` (see [authenticat
 | `GET /v1/files` | `200` `{"files": [metadata, ...]}`, newest first | `401`, `503` |
 | `GET /v1/files/{id}` | `200` metadata | `401`, `404`, `422` (malformed ID), `503` |
 | `GET /v1/files/{id}/content` | `200` original bytes | `401`, `404`, `422`, `503` |
+| `GET /v1/files/{id}/preview` | `200` PNG thumbnail or text excerpt | `401`, `404`, `422`, `503` |
 | `DELETE /v1/files/{id}` | `204` | `401`, `404`, `422`, `503` |
 
 Metadata fields: `id`, `filename`, `content_type`, `size_bytes`, `sha256`, `created_at`.
 The internal storage location is never returned. The list has no pagination.
+Preview requires the same ownership as download and uses `private, no-store`.
+PDF and images render the first page as a PNG up to 480 pixels on the long
+edge. DOCX previews contain up to 30 paragraphs, and XLSX previews contain up
+to 15 rows and 8 columns from the active sheet; both are limited to 4,000
+characters. Corrupt or unreadable files return `422`.
 
 | Code | Meaning |
 |---|---|
@@ -138,17 +159,22 @@ Without `APP_DATABASE_URL`, the API starts, but file library routes return `503`
 
 ## Frontend
 
-The **Thư viện file** navigation link opens `/files`:
+The **Quản lý tài liệu** navigation link opens `/files`:
 
-- Upload one or more files. Each file's result appears as a popup in the bottom-right
-  corner. The browser refuses unsupported extensions, empty files and files over
-  100 MiB before sending them.
-- Each row shows name, type, size and upload time, with **Tải về** and **Xóa**.
-- Delete asks for confirmation in a dialog. A popup confirms the deletion or shows
-  why it failed. If the file is already gone (`404`), its row is also removed.
-- Every failed upload or delete shows a Vietnamese message in a red popup: too large,
-  wrong type, file no longer exists, session expired, server unavailable, or no
-  connection. A failed download shows the message under its row.
+- Upload one or more files to the default KB. Each new source requests knowledge
+  processing. Upload and queue success appear as a popup; attachment, duplicate
+  and queue problems appear on the file row. The browser refuses unsupported
+  extensions, empty files and files over 100 MiB before sending them.
+- The grid shows previews, name, type, size and upload time. Search filters
+  filenames locally. Hover or focus a card to select it or open its menu.
+  Preview requests start near the viewport and report when unavailable.
+- **Open file** opens PDF and images in a new tab; Office files download because
+  browsers do not natively display them. **Knowledge State** shows the latest
+  processing status and links to the source details. **Remove from knowledge
+  base** asks for confirmation; it does not delete the library file. The menu
+  remains disabled for removal when no matching source is known.
+- Upload failures use a popup; queue errors appear on the card. Failed source
+  removals use a popup and leave the source intact.
 - Success popups hide after 4 seconds and error popups after 8 seconds; each has a
   close button. Popups use `frontend/src/components/ui/toast.tsx`.
 - After a `401`, the client refreshes the session once and retries once. If the

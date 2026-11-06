@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { KnowledgeManagementPage } from "./knowledge-management";
+import { ChunkSearchPanel } from "@/components/knowledge/chunk-search";
 import type { SearchResponse, SearchResult } from "@/services/knowledge-search";
 
 const { useAuth } = vi.hoisted(() => ({
@@ -69,7 +69,7 @@ function stubApi(search: (body: Record<string, unknown>) => Response) {
 function show() {
   const router = createMemoryRouter(
     [
-      { path: "/knowledge", element: <KnowledgeManagementPage /> },
+      { path: "/knowledge", element: <><select aria-label="Knowledge base" defaultValue="general"><option value="general">General</option></select><ChunkSearchPanel kb="general" /></> },
       {
         path: "/knowledge/:kb/sources/:kind/:sourceId",
         element: <p data-testid="source-page">source page</p>,
@@ -95,7 +95,7 @@ afterEach(() => {
 });
 
 describe("knowledge search view", () => {
-  it("opens from the URL and sends the chosen mode and filters", async () => {
+  it("sends the chosen mode and filters", async () => {
     const calls = stubApi(() => Response.json(answer([result()])));
     show();
     const user = userEvent.setup();

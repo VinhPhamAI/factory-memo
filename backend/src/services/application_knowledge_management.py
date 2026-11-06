@@ -164,6 +164,7 @@ class ApplicationKnowledgeManagementService:
             "name": source.title,
             "created_at": source.created_at.isoformat(),
             "content_type": source.file.content_type if source.file else "text/plain",
+            "file_sha256": source.file.sha256 if source.file else None,
             "stage": "extracted" if extracted else "converted" if converted else "raw",
             "mode": mode,
             "review": review_state(counts, extracted),

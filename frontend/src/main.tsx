@@ -56,10 +56,7 @@ const router = createBrowserRouter([
             },
             {
               path: "/knowledge",
-              lazy: async () => ({
-                Component: (await import("@/pages/knowledge-management"))
-                  .KnowledgeManagementPage,
-              }),
+              element: <Navigate to="/files" replace />,
             },
             {
               path: "/files",
