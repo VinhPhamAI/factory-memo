@@ -2,6 +2,7 @@ import type { AnswerEvent, Citation, KnowledgeBase, Source } from "@/types";
 import type { KnowledgeClient } from "./chat";
 import { apiBaseUrl } from "./config";
 import { sessionClient } from "./auth-api";
+import type { AuthClient } from "./auth-api";
 import { parseCaseCard, parseScope } from "./case-card";
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -9,8 +10,9 @@ const object = (value: unknown): value is Record<string, unknown> =>
 
 export async function listKnowledgeBases(
   signal: AbortSignal,
+  client: Pick<AuthClient, "authorizedFetch"> = sessionClient,
 ): Promise<KnowledgeBase[]> {
-  const response = await sessionClient.authorizedFetch(
+  const response = await client.authorizedFetch(
     `${apiBaseUrl}/v1/knowledge-agent/knowledge-bases`,
     { signal },
   );

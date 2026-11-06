@@ -1,5 +1,6 @@
 import { apiBaseUrl } from "./config";
 import { sessionClient } from "./auth-api";
+import type { AuthClient } from "./auth-api";
 import type {
   IngestionStatus,
   JobState,
@@ -95,6 +96,7 @@ export interface ManagedSource {
   kind: SourceKind;
   name: string;
   content_type: string;
+  file_sha256?: string | null;
   created_at: string | null;
   stage: "raw" | "converted" | "extracted";
   mode: ExtractionMode | null;
@@ -237,10 +239,10 @@ async function duplicateError(response: Response) {
   return null;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, client: Pick<AuthClient, "authorizedFetch"> = sessionClient): Promise<T> {
   let response: Response;
   try {
-    response = await sessionClient.authorizedFetch(path, init);
+    response = await client.authorizedFetch(path, init);
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
       throw error;
@@ -275,10 +277,11 @@ export const listManagedSources = (
   kb: string,
   signal?: AbortSignal,
   offset = 0,
+  client: Pick<AuthClient, "authorizedFetch"> = sessionClient,
 ) =>
-  request<SourceInventory>(`${base(kb)}/sources?offset=${offset}`, { signal });
-export async function removeManagedSource(source: ManagedSource) {
-  const response = await sessionClient.authorizedFetch(
+  request<SourceInventory>(`${base(kb)}/sources?offset=${offset}`, { signal }, client);
+export async function removeManagedSource(source: ManagedSource, client: Pick<AuthClient, "authorizedFetch"> = sessionClient) {
+  const response = await client.authorizedFetch(
     sourcePath(source.kb, source.kind, source.id), { method: "DELETE" },
   );
   if (response.status === 409) throw new Error("Nguồn đang được xử lý. Hãy thử lại sau.");

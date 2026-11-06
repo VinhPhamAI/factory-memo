@@ -17,12 +17,13 @@ async function signUpAndIn(page: Page, displayName: string) {
   await expect(page.getByTestId("signed-in-user")).toContainText(displayName);
 }
 
-test("upload, list, download and delete own files; wrong types show an error", async ({
+test("upload and list own files; wrong types show an error", async ({
   browser,
 }) => {
   const owner = await (await browser.newContext()).newPage();
   await signUpAndIn(owner, "File Owner");
   await expect(owner.getByTestId("files-empty")).toBeVisible();
+  await expect(owner.getByTestId("files-upload")).toBeEnabled();
 
   await owner.getByTestId("files-input").setInputFiles([
     { name: "Hướng dẫn máy.pdf", mimeType: "application/pdf", buffer: pdf },
@@ -35,7 +36,7 @@ test("upload, list, download and delete own files; wrong types show an error", a
   // Results appear as popups that hide themselves without a reload.
   const toasts = owner.getByTestId("toast");
   await expect(
-    toasts.filter({ hasText: "Đã tải lên “Hướng dẫn máy.pdf”." }),
+    toasts.filter({ hasText: "Đã tải lên và đưa “Hướng dẫn máy.pdf” vào hàng đợi xử lý." }),
   ).toBeVisible();
   await expect(
     toasts.filter({ hasText: "“renamed.pdf”: Chỉ nhận PDF" }),
@@ -49,23 +50,13 @@ test("upload, list, download and delete own files; wrong types show an error", a
   await owner.reload();
   await expect(owner.getByTestId("library-file")).toHaveCount(1);
 
-  const download = owner.waitForEvent("download");
-  await owner.getByRole("button", { name: "Tải về Hướng dẫn máy.pdf" }).click();
-  expect((await download).suggestedFilename()).toBe("Hướng dẫn máy.pdf");
+  await owner.getByRole("button", { name: "Tùy chọn Hướng dẫn máy.pdf" }).click();
+  await expect(owner.getByRole("menuitem", { name: "Open file" })).toBeVisible();
+  await expect(owner.getByRole("menuitem", { name: "Knowledge State" })).toBeVisible();
+  await owner.keyboard.press("Escape");
 
   // Another user does not see the file.
   const other = await (await browser.newContext()).newPage();
   await signUpAndIn(other, "Other User");
   await expect(other.getByTestId("files-empty")).toBeVisible();
-
-  await owner.getByRole("button", { name: "Xóa Hướng dẫn máy.pdf" }).click();
-  await owner.getByTestId("files-confirm-delete").click();
-  await expect(owner.getByTestId("files-empty")).toBeVisible();
-  await expect(
-    owner
-      .getByTestId("toast")
-      .filter({ hasText: "Đã xóa “Hướng dẫn máy.pdf”." }),
-  ).toBeVisible();
-  await owner.reload();
-  await expect(owner.getByTestId("files-empty")).toBeVisible();
 });

@@ -117,6 +117,31 @@ export async function deleteFile(
   });
 }
 
+/** Fetch a small, owner-only file preview as an image or text excerpt. */
+export async function fetchFilePreview(client: FileClient, id: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await send(client, `/v1/files/${encodeURIComponent(id)}/preview`, { signal });
+  return response.blob();
+}
+
+/** Open a PDF or image in a new tab; download Office formats instead. */
+export async function openFile(client: FileClient, file: LibraryFile): Promise<void> {
+  if (!["application/pdf", "image/png", "image/jpeg"].includes(file.content_type)) {
+    return downloadFile(client, file);
+  }
+  const tab = window.open("", "_blank");
+  if (!tab) throw new FileApiError("Trình duyệt đã chặn cửa sổ mới.", 0);
+  tab.opener = null;
+  try {
+    const response = await send(client, `/v1/files/${encodeURIComponent(file.id)}/content`);
+    const url = URL.createObjectURL(await response.blob());
+    tab.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
+  } catch (error) {
+    tab.close();
+    throw error;
+  }
+}
+
 /**
  * Download a file through the authorized client and save it under its
  * original name. A plain link cannot send the bearer token.

@@ -17,7 +17,6 @@ import {
 import type { QaShellOutletContext } from "@/components/qa-shell";
 import type { KnowledgeBase, LocatedReference } from "@/types";
 import { Button } from "@/components/ui/button";
-import { ChunkSearchPanel } from "@/components/knowledge/chunk-search";
 import { CreateKnowledgeBaseDialog } from "@/components/knowledge/create-kb-dialog";
 import { KnowledgeBaseSettings } from "@/components/knowledge/knowledge-base-settings";
 import { DocumentUpload } from "@/components/voice/document-upload";
@@ -37,7 +36,6 @@ import {
 } from "@/components/knowledge/source-review";
 import {
   ConflictJobNote,
-  ConflictReviewPanel,
   conflictRunning,
 } from "@/components/knowledge/conflict-review";
 import { listKnowledgeBases } from "@/services/knowledge-api";
@@ -589,10 +587,7 @@ export function KnowledgeManagementPage() {
   const shell = useOutletContext<QaShellOutletContext | undefined>();
   const setNavigationLocked = shell?.setKnowledgeNavigationLocked;
   const tab = params.get("tab");
-  const view =
-    tab === "knowledge-bases" || tab === "conflicts" || tab === "search"
-      ? tab
-      : "sources";
+  const view = tab === "knowledge-bases" ? tab : "sources";
   const [creatingKb, setCreatingKb] = useState(false);
   const [catalogError, setCatalogError] = useState("");
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
@@ -865,32 +860,6 @@ export function KnowledgeManagementPage() {
             </div>
           )}
 
-          {view === "search" && (
-            <div className="km-tab-panel">
-              {kb ? (
-                <ChunkSearchPanel key={kb} kb={kb} />
-              ) : (
-                !loading && <p className="vc-muted">Chọn knowledge base để tìm kiếm.</p>
-              )}
-            </div>
-          )}
-
-          {view === "conflicts" && (
-            <div className="km-tab-panel">
-              {kb ? (
-                <ConflictReviewPanel
-                  key={kb}
-                  kb={kb}
-                  refreshKey={`${reload}:${sources.map((source) => `${source.processing.conflict_job?.id}:${source.processing.conflict_job?.status}`).join(",")}`}
-                  activeJobs={polling}
-                  onChanged={refresh}
-                />
-              ) : (
-                !loading && <p className="vc-muted">Chọn knowledge base để xem mâu thuẫn.</p>
-              )}
-            </div>
-          )}
-
           {view === "sources" && (
             <div className="km-tab-panel">
               <label className="vc-field km-source-search">
@@ -964,7 +933,7 @@ export function KnowledgeManagementPage() {
                       ? "Không có nguồn phù hợp bộ lọc"
                       : "Chưa có nguồn dữ liệu"}
                   </h2>
-                  <Link to="/capture">Thêm dữ liệu</Link>
+                  <Link to="/files">Tải tài liệu lên</Link>
                 </div>
               ) : (
                 <ul className="km-source-list">
@@ -1311,12 +1280,12 @@ export function KnowledgeSourcePage() {
     preview.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
-  if (!validKind) return <Navigate to="/knowledge" replace />;
+  if (!validKind) return <Navigate to="/files" replace />;
   if (!source)
     return (
       <main className="vc-page km-page">
-        <Link to="/knowledge" className="vc-back">
-          <ArrowLeft size={16} /> Quản lý tri thức
+        <Link to="/files" className="vc-back">
+          <ArrowLeft size={16} /> Quản lý tài liệu
         </Link>
         {error ? (
           <p className="vc-notice error" role="alert">
@@ -1369,8 +1338,8 @@ export function KnowledgeSourcePage() {
 
   return (
     <main className="vc-page km-detail" data-testid="knowledge-source">
-      <Link to="/knowledge" className="vc-back">
-        <ArrowLeft size={16} /> Quản lý tri thức
+      <Link to="/files" className="vc-back">
+        <ArrowLeft size={16} /> Quản lý tài liệu
       </Link>
       <header className="km-heading">
         <div>

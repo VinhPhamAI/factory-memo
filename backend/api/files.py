@@ -15,9 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.datastructures import UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from backend.api.auth import require_current_user
 from backend.src.services.file_library import FileLibraryService, FileNotFound, InvalidFilename
+from backend.src.services.file_preview import create_file_preview
 from backend.src.services.file_types import UnsupportedFileType
 from backend.src.storage.auth import Account
 from backend.src.storage.file_library import EmptyFile, FileRecord, FileTooLarge
@@ -140,6 +142,21 @@ async def download_file(file_id: UUID, user: User, library: Library) -> FileResp
         content_disposition_type="attachment",
         headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
     )
+
+
+@router.get("/{file_id}/preview")
+async def preview_file(file_id: UUID, user: User, library: Library) -> Response:
+    """Return an owner-only first-page image or bounded office text excerpt."""
+
+    try:
+        content = await library.open_content(user, file_id)
+    except FileNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from exc
+    try:
+        body, media_type = await run_in_threadpool(create_file_preview, content.path, content.record.content_type)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "File preview is unavailable") from exc
+    return Response(body, media_type=media_type, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)

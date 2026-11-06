@@ -271,6 +271,63 @@ class OfflineFileApiTest(OfflineLibrary):
         response = self.client.get(f"/v1/files/{created.json()['id']}/content", headers=ALICE_HEADERS)
         self.assertEqual(response.status_code, 404)
 
+    def test_preview_is_owner_only_and_renders_pdf_first_page(self) -> None:
+        import pymupdf
+
+        with pymupdf.open() as pdf:
+            pdf.new_page().insert_text((36, 72), "Preview")
+            content = pdf.tobytes()
+        self.library.max_bytes = 10_000
+        created = self.client.post("/v1/files", headers=ALICE_HEADERS, files={"file": ("a.pdf", content, "application/pdf")})
+        self.assertEqual(created.status_code, 201, created.text)
+        path = f"/v1/files/{created.json()['id']}/preview"
+        self.assertEqual(self.client.get(path, headers=BOB_HEADERS).status_code, 404)
+        preview = self.client.get(path, headers=ALICE_HEADERS)
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.headers["content-type"], "image/png")
+        self.assertTrue(preview.content.startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_preview_rejects_corrupt_content(self) -> None:
+        created = self.client.post("/v1/files", headers=ALICE_HEADERS, files={"file": ("a.pdf", PDF, "application/pdf")})
+        result = self.client.get(f"/v1/files/{created.json()['id']}/preview", headers=ALICE_HEADERS)
+        self.assertEqual(result.status_code, 422)
+
+    def test_png_preview(self) -> None:
+        import pymupdf
+
+        with pymupdf.open() as pdf:
+            image = pdf.new_page(width=40, height=60).get_pixmap().tobytes("png")
+        self.library.max_bytes = 10_000
+        created = self.client.post("/v1/files", headers=ALICE_HEADERS, files={"file": ("image.png", image, "image/png")})
+        self.assertEqual(created.status_code, 201, created.text)
+        preview = self.client.get(f"/v1/files/{created.json()['id']}/preview", headers=ALICE_HEADERS)
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.headers["content-type"], "image/png")
+
+    def test_office_previews_show_content(self) -> None:
+        from docx import Document
+        from openpyxl import Workbook
+
+        document = Document()
+        document.add_paragraph("Machine manual")
+        doc_bytes = io.BytesIO()
+        document.save(doc_bytes)
+        workbook = Workbook()
+        workbook.active.append(["Pressure", 0])
+        xls_bytes = io.BytesIO()
+        workbook.save(xls_bytes)
+        self.library.max_bytes = 100_000
+        for name, content, expected in [
+            ("manual.docx", doc_bytes.getvalue(), "Machine manual"),
+            ("sheet.xlsx", xls_bytes.getvalue(), "Pressure\t0"),
+        ]:
+            with self.subTest(name=name):
+                created = self.client.post("/v1/files", headers=ALICE_HEADERS, files={"file": (name, content, "application/octet-stream")})
+                self.assertEqual(created.status_code, 201, created.text)
+                preview = self.client.get(f"/v1/files/{created.json()['id']}/preview", headers=ALICE_HEADERS)
+                self.assertEqual(preview.status_code, 200, preview.text)
+                self.assertIn(expected, preview.text)
+
 
 class UnconfiguredFileLibraryTest(unittest.TestCase):
     def test_signed_in_requests_report_unavailable_without_a_service(self) -> None:

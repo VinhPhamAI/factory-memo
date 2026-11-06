@@ -1,18 +1,24 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
-  Download,
-  FileText,
   FolderOpen,
   Loader2,
-  RefreshCw,
   Trash2,
-  Upload,
+  CloudUpload,
+  Search,
+  MoreHorizontal,
+  ExternalLink,
+  Activity,
+  Check,
 } from "lucide-react";
 import { useAuthClient } from "@/hooks/auth";
+import { attachLibraryFile } from "@/services/document-api";
+import { listKnowledgeBases } from "@/services/knowledge-api";
+import { FilePreview } from "@/components/file-preview";
+import { listManagedSources, removeManagedSource, sourceLink, type ManagedSource } from "@/services/knowledge-management";
 import {
   ACCEPTED_EXTENSIONS,
-  deleteFile,
-  downloadFile,
+  openFile,
   FileApiError,
   listFiles,
   uploadFile,
@@ -29,6 +35,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ToastStack, useToasts } from "@/components/ui/toast";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 const TYPE_LABELS: Record<string, string> = {
   "application/pdf": "PDF",
@@ -38,6 +45,7 @@ const TYPE_LABELS: Record<string, string> = {
     "DOCX",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX",
 };
+const DEFAULT_KB = "knowledge_base_seed1";
 
 const messageOf = (error: unknown) =>
   error instanceof FileApiError
@@ -57,12 +65,60 @@ export function FilesPage() {
   const [files, setFiles] = useState<LibraryFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [reload, setReload] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [query, setQuery] = useState("");
+  const [kbReady, setKbReady] = useState(false);
+  const [kbError, setKbError] = useState("");
+  const [sources, setSources] = useState<ManagedSource[]>([]);
+  const [sourcesError, setSourcesError] = useState("");
+  const [sourcesRevision, setSourcesRevision] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [stateFile, setStateFile] = useState<LibraryFile | null>(null);
   const toasts = useToasts();
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
-  const [pendingDelete, setPendingDelete] = useState<LibraryFile | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<LibraryFile[]>([]);
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    setKbError("");
+    listKnowledgeBases(abort.signal, client)
+      .then((items) => {
+        if (abort.signal.aborted) return;
+        const found = items.some((item) => item.name === DEFAULT_KB);
+        setKbReady(found);
+        if (!found) setKbError(`Knowledge base mặc định “${DEFAULT_KB}” chưa được tạo. Liên hệ quản trị viên để tạo trước khi tải file.`);
+      })
+      .catch(() => { if (!abort.signal.aborted) setKbError("Không kiểm tra được knowledge base mặc định. Hãy tải lại trang và thử lại."); });
+    return () => abort.abort();
+  }, [client]);
+
+  useEffect(() => {
+    if (!kbReady) return;
+    const abort = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = async () => {
+      try {
+        const all: ManagedSource[] = [];
+        let offset: number | null = 0;
+        while (offset !== null) {
+          const page = await listManagedSources(DEFAULT_KB, abort.signal, offset, client);
+          if (!Array.isArray(page.sources) || (page.next_offset !== null && (!Number.isInteger(page.next_offset) || page.next_offset <= offset))) throw new Error("Invalid source page");
+          all.push(...page.sources);
+          offset = page.next_offset;
+        }
+        if (!abort.signal.aborted) { setSources(all); setSourcesError(""); }
+      } catch {
+        if (!abort.signal.aborted) setSourcesError("Không tải được trạng thái tri thức. Hãy tải lại trang.");
+      } finally {
+        if (!abort.signal.aborted) timer = setTimeout(() => void load(), 5000);
+      }
+    };
+    void load();
+    return () => { abort.abort(); clearTimeout(timer); };
+  }, [client, kbReady, sourcesRevision]);
+
+  const sourceFor = (file: LibraryFile) => sources.find((source) => source.file_sha256 === file.sha256);
 
   useEffect(() => {
     let active = true;
@@ -75,7 +131,7 @@ export function FilesPage() {
     return () => {
       active = false;
     };
-  }, [client, reload]);
+  }, [client]);
 
   const setRowError = (id: string, message: string) =>
     setRowErrors((current) => {
@@ -86,74 +142,84 @@ export function FilesPage() {
     });
 
   async function upload(selected: File[]) {
+    if (!kbReady || uploading) return;
     setUploading(true);
     for (const file of selected) {
+      let stored: LibraryFile;
       try {
-        const stored = await uploadFile(client, file);
+        stored = await uploadFile(client, file);
         setFiles((current) => [stored, ...current]);
-        toasts.show("success", `Đã tải lên “${file.name}”.`);
       } catch (error) {
         toasts.show("error", `“${file.name}”: ${messageOf(error)}`);
+        continue;
       }
+      await queueFile(stored, DEFAULT_KB);
     }
     setUploading(false);
   }
 
-  async function download(file: LibraryFile) {
+  async function queueFile(file: LibraryFile, targetKb: string) {
     setRowError(file.id, "");
     try {
-      await downloadFile(client, file);
+      const result = await attachLibraryFile(client, targetKb, file.id, "knowledge");
+      setSourcesRevision((revision) => revision + 1);
+      if (result.duplicate) {
+        setRowError(file.id, "File đã có trong knowledge base. Xem nguồn hiện có để kiểm tra trạng thái xử lý.");
+      } else if (result.job_error || !result.job) {
+        setRowError(file.id, `File đã lưu nhưng chưa được đưa vào xử lý: ${result.job_error || "Không nhận được xác nhận từ máy chủ."}`);
+      } else {
+        toasts.show("success", `Đã tải lên và đưa “${file.filename}” vào hàng đợi xử lý.`);
+      }
     } catch (error) {
-      setRowError(file.id, messageOf(error));
+      setRowError(file.id, `File đã lưu nhưng chưa được đưa vào xử lý: ${error instanceof Error ? error.message : "Hãy thử lại."}`);
     }
   }
 
-  async function confirmDelete() {
-    if (!pendingDelete) return;
-    const file = pendingDelete;
-    setDeleting(true);
-    const removeRow = () =>
-      setFiles((current) => current.filter((item) => item.id !== file.id));
+  async function open(file: LibraryFile) {
     try {
-      await deleteFile(client, file.id);
-      removeRow();
-      toasts.show("success", `Đã xóa “${file.filename}”.`);
+      await openFile(client, file);
     } catch (error) {
-      // A file that is already gone (for example deleted in another tab)
-      // leaves the list too.
-      if (error instanceof FileApiError && error.status === 404) removeRow();
       toasts.show("error", `“${file.filename}”: ${messageOf(error)}`);
-    } finally {
-      setDeleting(false);
-      setPendingDelete(null);
     }
+  }
+
+  async function confirmRemove() {
+    if (!pendingRemove.length) return;
+    setDeleting(true);
+    const unique = new Map(pendingRemove.map((file) => [sourceFor(file)?.id, file]));
+    for (const file of unique.values()) {
+      const source = sourceFor(file);
+      if (!source) continue;
+      try {
+        await removeManagedSource(source, client);
+        toasts.show("success", `Đã gỡ “${file.filename}” khỏi knowledge base.`);
+      } catch (error) {
+        toasts.show("error", `“${file.filename}”: ${error instanceof Error ? error.message : "Không gỡ được nguồn."}`);
+      }
+    }
+    setSelected(new Set());
+    setPendingRemove([]);
+    setDeleting(false);
+    setSourcesRevision((revision) => revision + 1);
   }
 
   return (
-    <main className="vc-page km-page" data-testid="file-library">
-      <header className="km-heading">
-        <div>
-          <h1>Thư viện file</h1>
-          <p>
-            File riêng của bạn. File trong thư viện chưa được đưa vào knowledge
-            base nào.
-          </p>
-        </div>
-        <div className="files-actions">
+    <main className="vc-page library-page" data-testid="file-library">
+      <header className="library-heading">
+        <h1>Library</h1>
+        <div className="library-toolbar">
+          <label className="library-search">
+            <Search size={18} aria-hidden="true" />
+            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search library" aria-label="Search library" />
+          </label>
           <Button
-            variant="outline"
-            onClick={() => setReload((value) => value + 1)}
-            disabled={loading}
-          >
-            <RefreshCw /> Làm mới
-          </Button>
-          <Button
+            className="files-upload-button"
             onClick={() => input.current?.click()}
-            disabled={uploading}
+            disabled={uploading || !kbReady}
             data-testid="files-upload"
           >
-            {uploading ? <Loader2 className="animate-spin" /> : <Upload />}
-            Tải file lên
+            {uploading ? <Loader2 className="animate-spin" /> : <CloudUpload />}
+            Upload Files
           </Button>
           <input
             ref={input}
@@ -170,9 +236,8 @@ export function FilesPage() {
           />
         </div>
       </header>
-      <p className="vc-muted">
-        Nhận PDF, XLSX, DOCX, JPEG, PNG; tối đa 100 MiB mỗi file.
-      </p>
+      {kbError && <p className="vc-notice error" role="alert">{kbError}</p>}
+      {sourcesError && <p className="vc-notice error" role="alert">{sourcesError}</p>}
 
       {loadError && (
         <p className="vc-notice error" role="alert">
@@ -188,18 +253,32 @@ export function FilesPage() {
         <div className="km-empty" data-testid="files-empty">
           <FolderOpen size={32} />
           <h2>Chưa có file nào</h2>
-          <p>Bấm “Tải file lên” để thêm file đầu tiên.</p>
+          {kbReady && <p>Bấm “Upload Files” để thêm file đầu tiên.</p>}
         </div>
       ) : (
-        <ul className="km-source-list">
-          {files.map((file) => (
-            <li key={file.id} data-testid="library-file">
-              <span className="km-source-icon">
-                <FileText size={20} />
-              </span>
-              <div className="km-source-main">
-                <div className="km-source-name">{file.filename}</div>
-                <p className="vc-muted">
+        <section className="library-recent" aria-labelledby="library-recent-title">
+          <h2 id="library-recent-title">Recently added</h2>
+          {selected.size > 0 && <div className="library-selection"><span>Đã chọn {selected.size} file</span><Button variant="outline" size="sm" disabled={sourcesError !== "" || !files.some((file) => selected.has(file.id) && sourceFor(file))} onClick={() => setPendingRemove(files.filter((file) => selected.has(file.id) && sourceFor(file)))}>Remove from knowledge base</Button><Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>Bỏ chọn</Button></div>}
+          {!files.some((file) => file.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && <p className="vc-muted">Không tìm thấy file phù hợp.</p>}
+        <ul className="library-grid">
+          {files.filter((file) => file.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map((file) => (
+            <li className="library-card" key={file.id} data-testid="library-file">
+              <div className="library-card-image">
+                <FilePreview file={file} />
+                <button type="button" className="library-select" aria-label={`Chọn ${file.filename}`} aria-pressed={selected.has(file.id)} onClick={() => setSelected((current) => { const next = new Set(current); if (!next.delete(file.id)) next.add(file.id); return next; })}>{selected.has(file.id) && <Check size={16} />}</button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild><button type="button" className="library-menu-trigger" aria-label={`Tùy chọn ${file.filename}`}><MoreHorizontal size={20} /></button></DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="library-menu">
+                    <DropdownMenuItem onSelect={() => void open(file)}><ExternalLink /> Open file</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setStateFile(file)}><Activity /> Knowledge State</DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" disabled={!sourceFor(file) || !!sourcesError} onSelect={() => setPendingRemove([file])}><Trash2 /> Remove from knowledge base</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div className="library-card-content">
+                <div className="library-filename" title={file.filename}>{file.filename}</div>
+                <p className="library-metadata">
                   {TYPE_LABELS[file.content_type] ?? file.content_type} ·{" "}
                   {formatSize(file.size_bytes)} ·{" "}
                   {new Date(file.created_at).toLocaleString("vi-VN")}
@@ -210,39 +289,31 @@ export function FilesPage() {
                   </p>
                 )}
               </div>
-              <div className="files-actions">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void download(file)}
-                  aria-label={`Tải về ${file.filename}`}
-                >
-                  <Download /> Tải về
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPendingDelete(file)}
-                  aria-label={`Xóa ${file.filename}`}
-                >
-                  <Trash2 /> Xóa
-                </Button>
-              </div>
             </li>
           ))}
         </ul>
+        </section>
       )}
 
-      <Dialog
-        open={pendingDelete !== null}
-        onOpenChange={(open) => !open && !deleting && setPendingDelete(null)}
-      >
+      <Dialog open={!!stateFile} onOpenChange={(open) => !open && setStateFile(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Knowledge State</DialogTitle><DialogDescription>{stateFile?.filename}</DialogDescription></DialogHeader>
+          {stateFile && (() => {
+            const source = sourceFor(stateFile);
+            if (sourcesError) return <p role="alert">{sourcesError}</p>;
+            if (!source) return <><p>File chưa được liên kết với knowledge base hoặc trạng thái đang tải.</p>{rowErrors[stateFile.id] && <Button disabled={!kbReady || uploading} onClick={async () => { setUploading(true); try { await queueFile(stateFile, DEFAULT_KB); } finally { setUploading(false); } }}>Thử lại xử lý</Button>}</>;
+            const processing = source.processing;
+            const label = processing.status === "queued" ? "Đang chờ xử lý" : processing.status === "running" ? "Đang xử lý" : processing.status === "failed" || processing.status === "interrupted" ? "Xử lý thất bại" : source.stage === "extracted" ? "Đã xử lý" : "Chưa hoàn tất xử lý";
+            return <><p><strong>{label}</strong>{source.review === "pending" && " · Tri thức đang chờ duyệt"}</p>{processing.error && <p role="alert">{processing.error}</p>}<Link className="link-button" to={sourceLink(source)}>Xem kết quả và chi tiết</Link></>;
+          })()}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={pendingRemove.length > 0} onOpenChange={(open) => !open && !deleting && setPendingRemove([])}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Xóa file khỏi thư viện?</DialogTitle>
+            <DialogTitle>Remove from knowledge base?</DialogTitle>
             <DialogDescription>
-              “{pendingDelete?.filename}” sẽ biến mất khỏi thư viện của bạn. Bản
-              gốc vẫn được giữ cho các trích dẫn hoặc yêu cầu đã dùng file này.
+              Gỡ {pendingRemove.length === 1 ? `“${pendingRemove[0].filename}”` : `${pendingRemove.length} file đã chọn`} khỏi knowledge base. File vẫn còn trong Library; tri thức chỉ còn tìm kiếm được nếu có nguồn khác đang hoạt động. Nguồn có thể được dùng chung với file trùng nội dung.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -253,12 +324,12 @@ export function FilesPage() {
             </DialogClose>
             <Button
               variant="destructive"
-              onClick={() => void confirmDelete()}
+              onClick={() => void confirmRemove()}
               disabled={deleting}
               data-testid="files-confirm-delete"
             >
               {deleting && <Loader2 className="animate-spin" />}
-              Xóa
+              Gỡ khỏi knowledge base
             </Button>
           </DialogFooter>
         </DialogContent>

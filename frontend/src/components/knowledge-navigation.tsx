@@ -4,17 +4,13 @@ import {
   ChevronDown,
   Database,
   Files,
-  GitCompareArrows,
   LibraryBig,
-  Search,
 } from "lucide-react";
 import { cn } from "@/utils/cn";
 
 const VIEWS = [
   { value: "knowledge-bases", label: "Knowledge base", icon: Database },
   { value: "sources", label: "Nguồn dữ liệu", icon: Files },
-  { value: "search", label: "Tìm kiếm", icon: Search },
-  { value: "conflicts", label: "Mâu thuẫn", icon: GitCompareArrows },
 ];
 
 /** Expand knowledge links in the main sidebar and retain URL query settings. */

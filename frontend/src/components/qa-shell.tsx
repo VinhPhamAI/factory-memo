@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { Files, FolderPlus, LogOut, Menu, MessagesSquare } from "lucide-react";
+import { Files, LogOut, Menu, MessagesSquare } from "lucide-react";
 import { BrandMark } from "./brand";
-import { KnowledgeNavigation } from "./knowledge-navigation";
 import { ConversationList } from "./conversation-list";
 import {
   Sheet,
@@ -19,18 +18,7 @@ import { cn } from "@/utils/cn";
 
 const SECTIONS = [
   { to: "/ask", label: "Hỏi đáp", icon: MessagesSquare, testId: "nav-ask" },
-  {
-    to: "/capture",
-    label: "Thêm dữ liệu",
-    icon: FolderPlus,
-    testId: "nav-capture",
-  },
-  {
-    to: "/knowledge",
-    label: "Quản lý tri thức",
-    testId: "nav-knowledge-management",
-  },
-  { to: "/files", label: "Thư viện file", icon: Files, testId: "nav-files" },
+  { to: "/files", label: "Quản lý tài liệu", icon: Files, testId: "nav-files" },
 ];
 
 export type QaShellOutletContext = {
@@ -38,13 +26,7 @@ export type QaShellOutletContext = {
 };
 
 /** Show navigation, the current chat list, and account controls. */
-function Sidebar({
-  onNavigate,
-  knowledgeNavigationLocked,
-}: {
-  onNavigate?: () => void;
-  knowledgeNavigationLocked: boolean;
-}) {
+function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const auth = useAuth();
   const authClient = useAuthClient();
   const { pathname } = useLocation();
@@ -56,14 +38,7 @@ function Sidebar({
         <span>Factory memo</span>
       </Link>
       <nav className="sidebar-nav" aria-label="Chức năng">
-        {SECTIONS.map(({ to, label, icon: Icon, testId }) =>
-          to === "/knowledge" ? (
-            <KnowledgeNavigation
-              key={to}
-              disabled={knowledgeNavigationLocked}
-              onNavigate={onNavigate}
-            />
-          ) : (
+        {SECTIONS.map(({ to, label, icon: Icon, testId }) => (
             <NavLink
               key={to}
               to={to}
@@ -76,8 +51,7 @@ function Sidebar({
               {Icon && <Icon size={16} />}
               {label}
             </NavLink>
-          ),
-        )}
+          ))}
       </nav>
       <div
         className={cn(
@@ -140,15 +114,13 @@ export function QaShell() {
   const workspace = useWorkspace();
   const auth = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [knowledgeNavigationLocked, setKnowledgeNavigationLocked] =
-    useState(false);
   return (
     <ConversationsProvider
       key={auth.status === "signed-in" ? auth.user.id : auth.status}
     >
       <div className="app-shell chat-focus-shell" data-testid="chat-focus-root">
         <aside className="app-sidebar">
-          <Sidebar knowledgeNavigationLocked={knowledgeNavigationLocked} />
+          <Sidebar />
         </aside>
         <div className="app-main">
           <header className="app-mobile-bar">
@@ -171,11 +143,7 @@ export function QaShell() {
             </div>
           )}
           <div className="workspace-outlet">
-            <Outlet
-              context={
-                { setKnowledgeNavigationLocked } satisfies QaShellOutletContext
-              }
-            />
+            <Outlet />
           </div>
         </div>
         <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
@@ -184,10 +152,7 @@ export function QaShell() {
               <SheetTitle>Menu</SheetTitle>
               <SheetDescription>Chức năng và cuộc trò chuyện.</SheetDescription>
             </SheetHeader>
-            <Sidebar
-              knowledgeNavigationLocked={knowledgeNavigationLocked}
-              onNavigate={() => setDrawerOpen(false)}
-            />
+            <Sidebar onNavigate={() => setDrawerOpen(false)} />
           </SheetContent>
         </Sheet>
       </div>

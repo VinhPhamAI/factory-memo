@@ -202,7 +202,7 @@ describe("knowledge management", () => {
     fireEvent.change(screen.getByLabelText("Mã xác nhận"), { target: { value: "general" } });
     fireEvent.click(confirm);
     await waitFor(() => expect(screen.getByTestId("management-kb")).toHaveValue("backup"));
-    await user.click(screen.getByRole("link", { name: "Mâu thuẫn" }));
+    await user.click(screen.getByRole("link", { name: "Nguồn dữ liệu" }));
     expect(screen.queryByRole("button", { name: "Sửa knowledge base" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Xóa knowledge base" })).toBeNull();
   });
@@ -953,57 +953,16 @@ describe("knowledge management", () => {
   });
 });
 
-it("opens conflict review inside management and follows the selected KB", async () => {
-  const fetchMock = vi.fn(async (url: string) => {
-    if (url.includes("/v1/knowledge-bases/")) return kbDetail(url.split("/").pop());
-    if (url.endsWith("/knowledge-bases"))
-      return Response.json({
-        knowledge_bases: [
-          {
-            name: "industrial_qa",
-            title: "Industrial QA",
-            description: "Industrial knowledge",
-          },
-          {
-            name: "general",
-            title: "General",
-            description: "General knowledge",
-          },
-        ],
-      });
-    if (url.includes("/conflicts"))
-      return Response.json({
-        conflicts: [],
-        counts: {},
-        enabled: !url.includes("/general/"),
-        offset: 0,
-        limit: 20,
-        next_offset: null,
-      });
-    return Response.json({
-      sources: [],
-      warnings: [],
-      next_offset: null,
-      qa_mode: "knowledge",
+it.each(["search", "conflicts"])("shows the source inventory for the removed %s view", async (tab) => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.endsWith("/knowledge-bases")) return Response.json({
+      knowledge_bases: [{ name: "general", title: "General", description: "" }],
     });
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  show("/knowledge");
+    return Response.json({ sources: [], warnings: [], next_offset: null, qa_mode: "knowledge" });
+  }));
+  show(`/knowledge?tab=${tab}`);
   await screen.findByText("Chưa có nguồn dữ liệu");
-  expect(fetchMock.mock.calls.some(([url]) => url.includes("/conflicts"))).toBe(
-    false,
-  );
-  await userEvent.click(screen.getByRole("link", { name: "Mâu thuẫn" }));
-  await screen.findByText(/Chưa có cặp nào ở trạng thái này/);
-  expect(
-    fetchMock.mock.calls.some(([url]) =>
-      url.includes("industrial_qa/conflicts?status=open"),
-    ),
-  ).toBe(true);
-  fireEvent.change(screen.getByTestId("management-kb"), {
-    target: { value: "general" },
-  });
-  await screen.findByText("Knowledge base này chưa bật phát hiện mâu thuẫn.");
-  await userEvent.click(screen.getByRole("link", { name: "Nguồn dữ liệu" }));
-  await screen.findByText("Chưa có nguồn dữ liệu");
+  expect(screen.queryByRole("link", { name: "Tìm kiếm" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Mâu thuẫn" })).toBeNull();
+  expect(screen.getByRole("link", { name: "Nguồn dữ liệu" })).toHaveAttribute("aria-current", "page");
 });

@@ -6,6 +6,8 @@ import {
   within,
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { AuthProvider } from "@/hooks/auth";
 import type { AuthClient } from "@/services/auth-api";
 import type { LibraryFile } from "@/services/file-api";
@@ -23,9 +25,13 @@ const manual: LibraryFile = {
 type Handler = (url: string, init?: RequestInit) => Response;
 
 /** Render the page with a client whose requests are answered by `handler`. */
-function showFiles(handler: Handler) {
+const source = { id: "s1", kb: "knowledge_base_seed1", kind: "upload", name: "manual.pdf", file_sha256: manual.sha256, stage: "raw", review: "none", processing: { status: "queued" } };
+
+function showFiles(handler: Handler, kbNames = ["knowledge_base_seed1"], sourceItems = [source]) {
   const authorizedFetch = vi.fn(async (url: string, init?: RequestInit) =>
-    handler(url, init),
+    url.endsWith("/knowledge-agent/knowledge-bases")
+      ? Response.json({ knowledge_bases: kbNames.map((name) => ({ name, title: name, description: "" })) })
+      : url.includes("/sources?offset=") ? Response.json({ sources: sourceItems, next_offset: null, warnings: [], qa_mode: "knowledge" }) : handler(url, init),
   );
   const client = {
     state: { status: "signed-in" },
@@ -36,7 +42,7 @@ function showFiles(handler: Handler) {
   } as unknown as AuthClient;
   render(
     <AuthProvider client={client}>
-      <FilesPage />
+      <MemoryRouter><FilesPage /></MemoryRouter>
     </AuthProvider>,
   );
   return authorizedFetch;
@@ -53,6 +59,10 @@ describe("file library page", () => {
     expect(await screen.findByTestId("files-empty")).toHaveTextContent(
       "Chưa có file nào",
     );
+    expect(screen.queryByRole("button", { name: "Làm mới" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nhận PDF, XLSX, DOCX, JPEG, PNG; tối đa 100 MiB mỗi file.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Upload Files" })).toBeInTheDocument();
   });
 
   it("lists files with type, size and actions", async () => {
@@ -61,8 +71,16 @@ describe("file library page", () => {
     expect(row).toHaveTextContent("manual.pdf");
     expect(row).toHaveTextContent("PDF · 2.0 KB");
     expect(
-      within(row).getByRole("button", { name: "Tải về manual.pdf" }),
+      within(row).getByRole("button", { name: "Tùy chọn manual.pdf" }),
     ).toBeInTheDocument();
+  });
+
+  it("filters library cards by filename", async () => {
+    showFiles(() => Response.json({ files: [manual, { ...manual, id: "file-2", filename: "pump.xlsx" }] }));
+    expect(await screen.findAllByTestId("library-file")).toHaveLength(2);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search library" }), { target: { value: "PUMP" } });
+    expect(screen.getAllByTestId("library-file")).toHaveLength(1);
+    expect(screen.getByTestId("library-file")).toHaveTextContent("pump.xlsx");
   });
 
   it("shows a load error", async () => {
@@ -78,7 +96,11 @@ describe("file library page", () => {
       id: "file-2",
       filename: "new.pdf",
     };
-    const fetch = showFiles((_url, init) => {
+    const fetch = showFiles((url, init) => {
+      if (url.endsWith("/v1/documents/knowledge_base_seed1/files")) {
+        expect(JSON.parse(init?.body as string)).toEqual({ file_id: "file-2", extract_mode: "knowledge" });
+        return Response.json({ id: "source-1", kb: "knowledge_base_seed1", job: { id: "job-1", status: "queued" } }, { status: 201 });
+      }
       if (init?.method === "POST") {
         const file = (init.body as FormData).get("file") as File;
         return file.name === "new.pdf"
@@ -88,6 +110,7 @@ describe("file library page", () => {
       return Response.json({ files: [] });
     });
     await screen.findByTestId("files-empty");
+    await waitFor(() => expect(screen.getByTestId("files-upload")).toBeEnabled());
 
     pick(
       new File(["%PDF-"], "new.pdf"),
@@ -97,7 +120,7 @@ describe("file library page", () => {
 
     await waitFor(() => expect(screen.getAllByTestId("toast")).toHaveLength(3));
     const [ok, renamed, notes] = screen.getAllByTestId("toast");
-    expect(ok).toHaveTextContent("Đã tải lên “new.pdf”.");
+    expect(ok).toHaveTextContent("Đã tải lên và đưa “new.pdf” vào hàng đợi xử lý.");
     expect(ok).toHaveAttribute("role", "status");
     expect(renamed).toHaveTextContent("“renamed.pdf”: Chỉ nhận PDF");
     expect(renamed).toHaveAttribute("role", "alert");
@@ -108,78 +131,80 @@ describe("file library page", () => {
     // notes.txt is refused in the browser and never sent.
     expect(
       fetch.mock.calls.filter(([, init]) => init?.method === "POST"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
   });
 
-  it("deletes after confirmation and keeps the file when cancelled", async () => {
-    showFiles((_url, init) =>
-      init?.method === "DELETE"
-        ? new Response(null, { status: 204 })
-        : Response.json({ files: [manual] }),
-    );
-    const row = await screen.findByTestId("library-file");
-
-    fireEvent.click(
-      within(row).getByRole("button", { name: "Xóa manual.pdf" }),
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Hủy" }));
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
-    );
-    expect(screen.getByTestId("library-file")).toBeInTheDocument();
-
-    fireEvent.click(
-      within(row).getByRole("button", { name: "Xóa manual.pdf" }),
-    );
-    fireEvent.click(await screen.findByTestId("files-confirm-delete"));
-    expect(await screen.findByTestId("files-empty")).toBeInTheDocument();
-    expect(screen.getByTestId("toast")).toHaveTextContent(
-      "Đã xóa “manual.pdf”.",
-    );
-  });
-
-  it("shows a row error when download fails and a popup when delete fails", async () => {
+  it("keeps the uploaded file and reports a queue failure", async () => {
     showFiles((url, init) => {
-      if (init?.method === "DELETE") return new Response(null, { status: 500 });
-      if (url.endsWith("/content")) return new Response(null, { status: 503 });
-      return Response.json({ files: [manual] });
+      if (url.endsWith("/v1/documents/knowledge_base_seed1/files"))
+        return Response.json({ id: "source-1", kb: "knowledge_base_seed1", job_error: "Worker unavailable" }, { status: 201 });
+      if (init?.method === "POST") return Response.json(manual, { status: 201 });
+      return Response.json({ files: [] });
     });
-    const row = await screen.findByTestId("library-file");
+    await waitFor(() => expect(screen.getByTestId("files-upload")).toBeEnabled());
+    pick(new File(["%PDF-"], "manual.pdf"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Worker unavailable");
+    expect(screen.getByTestId("library-file")).toHaveTextContent("manual.pdf");
+  });
 
-    fireEvent.click(
-      within(row).getByRole("button", { name: "Tải về manual.pdf" }),
-    );
-    expect(await within(row).findByRole("alert")).toHaveTextContent(
-      "Máy chủ tạm thời không xử lý được",
-    );
+  it("does not upload without a knowledge base", async () => {
+    const fetch = showFiles(() => Response.json({ files: [] }), ["another_kb"]);
+    expect(await screen.findByRole("alert")).toHaveTextContent("knowledge_base_seed1");
+    expect(screen.getByTestId("files-upload")).toBeDisabled();
+    pick(new File(["%PDF-"], "manual.pdf"));
+    expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
 
-    fireEvent.click(
-      within(row).getByRole("button", { name: "Xóa manual.pdf" }),
-    );
-    fireEvent.click(await screen.findByTestId("files-confirm-delete"));
-    expect(await screen.findByTestId("toast")).toHaveTextContent(
-      "“manual.pdf”: Thao tác thất bại (HTTP 500).",
-    );
+  it("reports an existing source without claiming a new job was queued", async () => {
+    showFiles((url, init) => {
+      if (url.endsWith("/v1/documents/knowledge_base_seed1/files"))
+        return Response.json({ id: "existing", kb: "knowledge_base_seed1", duplicate: true }, { status: 200 });
+      if (init?.method === "POST") return Response.json(manual, { status: 201 });
+      return Response.json({ files: [] });
+    });
+    await waitFor(() => expect(screen.getByTestId("files-upload")).toBeEnabled());
+    pick(new File(["%PDF-"], "manual.pdf"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("File đã có trong knowledge base");
+    expect(screen.queryByRole("button", { name: "Đưa vào xử lý" })).toBeNull();
+  });
+
+  it("opens knowledge state from the persisted source after loading the page", async () => {
+    showFiles(() => Response.json({ files: [manual] }));
+    await screen.findByTestId("library-file");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Tùy chọn manual.pdf" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Knowledge State" }));
+    expect(await screen.findByText("Đang chờ xử lý")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Xem kết quả và chi tiết" })).toHaveAttribute("href", "/knowledge/knowledge_base_seed1/sources/upload/s1");
+    expect(screen.queryByRole("button", { name: "Đưa vào xử lý" })).not.toBeInTheDocument();
+  });
+
+  it("selects files and removes their knowledge source without deleting the library file", async () => {
+    const fetch = showFiles((_url, init) => init?.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json({ files: [manual] }));
+    await screen.findByTestId("library-file");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Chọn manual.pdf" }));
+    expect(screen.getByText("Đã chọn 1 file")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove from knowledge base" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("File vẫn còn trong Library");
+    await user.click(screen.getByTestId("files-confirm-delete"));
+    await waitFor(() => expect(fetch.mock.calls.some(([url, init]) => url.endsWith("/sources/upload/s1") && init?.method === "DELETE")).toBe(true));
     expect(screen.getByTestId("library-file")).toBeInTheDocument();
   });
 
-  it("drops a row whose file is already gone and says so", async () => {
-    showFiles((_url, init) =>
-      init?.method === "DELETE"
-        ? new Response(null, { status: 404 })
-        : Response.json({ files: [manual] }),
-    );
-    const row = await screen.findByTestId("library-file");
-
-    fireEvent.click(
-      within(row).getByRole("button", { name: "Xóa manual.pdf" }),
-    );
-    fireEvent.click(await screen.findByTestId("files-confirm-delete"));
-    expect(await screen.findByTestId("toast")).toHaveTextContent(
-      "“manual.pdf”: File không còn tồn tại.",
-    );
-    expect(screen.queryByTestId("library-file")).not.toBeInTheDocument();
+  it("reports a running job and keeps the file when source removal is refused", async () => {
+    showFiles((_url, init) => init?.method === "DELETE" ? new Response(null, { status: 409 }) : Response.json({ files: [manual] }));
+    await screen.findByTestId("library-file");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Tùy chọn manual.pdf" }));
+    const remove = await screen.findByRole("menuitem", { name: "Remove from knowledge base" });
+    await waitFor(() => expect(remove).not.toHaveAttribute("data-disabled"));
+    await user.click(remove);
+    await user.click(await screen.findByTestId("files-confirm-delete"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Nguồn đang được xử lý");
+    expect(screen.getByTestId("library-file")).toBeInTheDocument();
   });
+
 });
 
 describe("formatSize", () => {

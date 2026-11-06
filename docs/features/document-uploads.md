@@ -1,8 +1,8 @@
 # Document uploads
 
-The `/capture` page has a **Tải lên tài liệu** tab. Select a knowledge base,
+The legacy `/capture` page, hidden from main navigation, has a **Tải lên tài liệu** tab. Select a knowledge base,
 one or more files, and **Chỉ lưu** or **Auto · chạy đến Extract**. It uses the
-same `uploadFile` client and `POST /v1/files` API as **Thư viện file**, then
+same `uploadFile` client and `POST /v1/files` API as **Quản lý tài liệu**, then
 attaches the saved file ID through `POST /v1/documents/{kb}/files`.
 The original bytes are stored once in the personal library and are also read by
 KB processing. Files appear in the owner's library. If attachment fails, the
