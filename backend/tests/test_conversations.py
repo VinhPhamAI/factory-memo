@@ -466,6 +466,38 @@ class ConversationHistoryProjectionTest(unittest.TestCase):
         self.assertEqual(message["citations"][0]["sources"], [source])
         self.assertNotIn("raw", str(message))
 
+    def test_history_keeps_inquiry_tool_states_and_draft_link(self) -> None:
+        """Accept every inquiry tool state and keep only its ID and title."""
+
+        inquiry_id = str(uuid4())
+        tools = [
+            {"id": "inquiry", "name": name, "state": state, "inquiry_id": inquiry_id, "title": "E12"}
+            for name, state in (
+                ("create_inquiry_draft", "results"),
+                ("create_inquiry_draft", "needs_choice"),
+                ("update_inquiry_draft", "not_draft"),
+                ("update_inquiry_draft", "unavailable"),
+            )
+        ]
+        raw = {
+            "conversation_id": str(uuid4()), "truncated": False,
+            "messages": [{"role": "assistant", "text": "Draft saved.", "tools": [tool]} for tool in tools],
+        }
+        messages = AgentHistory.model_validate(raw).model_dump(mode="json")["messages"]
+        for message, tool in zip(messages, tools, strict=True):
+            self.assertEqual(
+                {key: message["tools"][0][key] for key in ("name", "state", "inquiry_id", "title")},
+                {key: tool[key] for key in ("name", "state", "inquiry_id", "title")},
+            )
+        knowledge = AgentHistory.model_validate(
+            {"conversation_id": str(uuid4()), "truncated": False, "messages": [{
+                "role": "assistant", "text": "x",
+                "tools": [{"id": "call-1", "name": "list_knowledge_bases", "state": "empty"}],
+            }]}
+        ).model_dump(mode="json")["messages"][0]["tools"][0]
+        self.assertNotIn("inquiry_id", knowledge)
+        self.assertNotIn("title", knowledge)
+
 
 if __name__ == "__main__":
     unittest.main()

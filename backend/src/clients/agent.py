@@ -84,17 +84,27 @@ class ToolResult(BaseModel):
 
 
 class ToolSummary(BaseModel):
-    """Public details of an executed knowledge tool, without raw provider data."""
+    """Public details of an executed knowledge or inquiry tool, without raw provider data.
+
+    Inquiry tools fill only `inquiry_id` and `title`; the agent never sends draft text.
+    """
 
     id: str
-    name: Literal["list_knowledge_bases", "search_knowledge"]
-    state: Literal["running", "results", "empty", "unavailable"]
+    name: Literal[
+        "list_knowledge_bases",
+        "search_knowledge",
+        "create_inquiry_draft",
+        "update_inquiry_draft",
+    ]
+    state: Literal["running", "results", "empty", "unavailable", "needs_choice", "not_draft"]
     kb: str | None = None
     query: str | None = None
     count: int | None = Field(default=None, ge=0)
     truncated: bool = False
     catalog: list[CatalogEntry] = Field(default_factory=list, max_length=50)
     results: list[ToolResult] = Field(default_factory=list)
+    inquiry_id: UUID | None = Field(default=None, exclude_if=lambda value: value is None)
+    title: str | None = Field(default=None, max_length=200, exclude_if=lambda value: value is None)
 
 
 class AttachmentRef(BaseModel):
