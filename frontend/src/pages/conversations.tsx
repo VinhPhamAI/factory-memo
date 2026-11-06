@@ -16,6 +16,12 @@ import { useDictation } from "@/hooks/dictation";
 import { BrandMark } from "@/components/brand";
 import { CitedAnswer } from "@/components/cited-answer";
 import { ChatToolCalls } from "@/components/chat-tool-calls";
+import {
+  DiagnosisToolCard,
+  MachineDiagnosisPanel,
+} from "@/components/diagnosis/machine-diagnosis-panel";
+import { useMachineDiagnosis } from "@/hooks/machine-diagnosis";
+import type { DiagnosisScenario } from "@/services/machine-diagnosis";
 import { ThinkingBlock } from "@/components/thinking-block";
 import { Button } from "@/components/ui/button";
 import {
@@ -50,6 +56,8 @@ type Turn = {
   /** Streamed model reasoning retained in this tab's memory only. */
   reasoning?: string;
   thinkingSeconds?: number;
+  /** Mock diagnosis shown with this answer; kept in this tab only. */
+  diagnosis?: DiagnosisScenario;
 };
 
 const TITLE_LENGTH = 80;
@@ -94,6 +102,8 @@ export function ConversationsPage() {
     },
   );
   const cancelDictation = dictation.cancel;
+  const diagnosis = useMachineDiagnosis();
+  const resetDiagnosis = diagnosis.reset;
 
   useEffect(() => {
     // Switching conversations stops the old answer; it never updates this one.
@@ -106,6 +116,7 @@ export function ConversationsPage() {
       // The draft and any pending transcript belong to the chat being left.
       createdHere.current = undefined;
       cancelDictation();
+      resetDiagnosis();
       setQuery("");
     }
     shown.current = conversationId;
@@ -152,7 +163,7 @@ export function ConversationsPage() {
         setError(errorMessage(cause, "Không tải được cuộc trò chuyện."));
       });
     return () => abort.abort();
-  }, [api, cancelDictation, conversationId, historyReload, thinkingFor]);
+  }, [api, cancelDictation, conversationId, historyReload, resetDiagnosis, thinkingFor]);
 
   useEffect(() => () => controller.current?.abort(), []);
   useEffect(() => {
@@ -201,6 +212,8 @@ export function ConversationsPage() {
     }
     setQuery("");
     const answerKey = crypto.randomUUID();
+    // The mock diagnosis panel runs beside the real agent answer.
+    const scenario = diagnosis.trigger(message, answerKey) ?? undefined;
     const update = (change: Partial<Turn>) => {
       if (shown.current !== id) return;
       setTurns((items) =>
@@ -224,6 +237,7 @@ export function ConversationsPage() {
         text: "",
         status: "streaming",
         citations: [],
+        diagnosis: scenario,
       },
     ]);
     let text = "";
@@ -297,7 +311,9 @@ export function ConversationsPage() {
   }
 
   return (
-    <div className="ask-layout agent-chat-layout">
+    <div
+      className={`ask-layout agent-chat-layout ${diagnosis.state.open && diagnosis.state.scenario ? "with-diagnosis" : ""}`}
+    >
       <main className="chat-area">
         <header className="chat-header">
           <h1 data-testid="chat-title">
@@ -356,6 +372,16 @@ export function ConversationsPage() {
                         reasoning={turn.reasoning}
                         thinking={turn.status === "streaming" && !turn.text}
                         seconds={turn.thinkingSeconds}
+                      />
+                    )}
+                    {turn.diagnosis && (
+                      <DiagnosisToolCard
+                        scenario={turn.diagnosis}
+                        running={
+                          diagnosis.state.turnKey === turn.key &&
+                          diagnosis.state.phase === "running"
+                        }
+                        onOpen={() => diagnosis.show(turn.diagnosis!, turn.key)}
                       />
                     )}
                     {turn.tools && turn.tools.length > 0 && (
@@ -527,6 +553,16 @@ export function ConversationsPage() {
           </form>
         </div>
       </main>
+      {diagnosis.enabled && (
+        <MachineDiagnosisPanel
+          state={diagnosis.state}
+          onClose={diagnosis.close}
+          onOpen={() =>
+            diagnosis.state.scenario &&
+            diagnosis.show(diagnosis.state.scenario, diagnosis.state.turnKey)
+          }
+        />
+      )}
     </div>
   );
 }

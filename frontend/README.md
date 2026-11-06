@@ -48,6 +48,24 @@ already permits the frontend origin via CORS; FastAPI does not enable CORS by
 default. `VITE_*` values are visible in the browser; never put API keys in them.
 Model credentials belong on the backend. Live questions may incur model costs.
 
+## Mock machine-diagnosis panel
+
+Set `VITE_MACHINE_DIAGNOSIS_VIZ=true` in `.env.local` and restart Vite to show a
+3D production-line panel beside the chat. The flag works with both
+`VITE_DATA_MODE=api` and `mock`; any other value, or no value, hides the panel.
+
+- A chat message about a machine fault opens the panel on the right. Keywords
+  (Vietnamese or English) choose one of four scenarios: overheating, robot
+  vibration, feeder jam and inspection rejects. A general diagnosis request opens
+  the overheating scenario.
+- The agent has no diagnosis tool yet. The panel and its inline
+  `machine_diagnosis` card are a front-end mock with synthetic values from
+  `src/services/machine-diagnosis.ts`; they never change the agent's answer and
+  are not saved with the conversation.
+- The 3D view (`src/components/diagnosis/production-line-scene.tsx`, three.js) is
+  loaded only when the panel opens. Drag to orbit, scroll to zoom and click a
+  station or label to focus it. Without WebGL the panel shows a notice instead.
+
 ## Sign-in
 
 API mode shows the sign-in/signup screen until an account is signed in; see the
