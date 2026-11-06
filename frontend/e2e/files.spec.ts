@@ -51,8 +51,8 @@ test("upload and list own files; wrong types show an error", async ({
   await expect(owner.getByTestId("library-file")).toHaveCount(1);
 
   await owner.getByRole("button", { name: "Tùy chọn Hướng dẫn máy.pdf" }).click();
-  await expect(owner.getByRole("menuitem", { name: "Open file" })).toBeVisible();
-  await expect(owner.getByRole("menuitem", { name: "Knowledge State" })).toBeVisible();
+  await expect(owner.getByRole("menuitem", { name: "Mở tệp gốc" })).toBeVisible();
+  await expect(owner.getByRole("menuitem", { name: "Trạng thái xử lý" })).toBeVisible();
   await owner.keyboard.press("Escape");
 
   // Another user does not see the file.

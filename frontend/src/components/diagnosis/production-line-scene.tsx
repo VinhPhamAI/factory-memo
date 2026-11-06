@@ -30,7 +30,7 @@ function homePosition(aspect: number): THREE.Vector3 {
 }
 const FAULT = new THREE.Color("#e0343f");
 const OK = new THREE.Color("#22c55e");
-const SELECT = new THREE.Color("#2563eb");
+const SELECT = new THREE.Color("#2b5fae");
 
 type StationParts = { group: THREE.Group; hit: THREE.Mesh; ring: THREE.Mesh; outline: THREE.LineSegments; lamp: THREE.Mesh; label: HTMLDivElement; top: number };
 
@@ -81,7 +81,7 @@ function buildLine(scene: THREE.Scene, scenario: DiagnosisScenario) {
     yellow: standard("#f2b705", { roughness: 0.45 }),
     robot: standard("#f6c21a", { roughness: 0.38, metalness: 0.2 }),
     glass: new THREE.MeshStandardMaterial({ color: "#d6ebff", transparent: true, opacity: 0.16, roughness: 0.05, metalness: 0.1, depthWrite: false, side: THREE.DoubleSide }),
-    frame: standard("#a3202a", { roughness: 0.4 }),
+    frame: standard("#2c4f7f", { roughness: 0.4 }),
     cardboard: standard("#c99a5b", { roughness: 0.85, metalness: 0 }),
     part: standard("#dfe5ec", { roughness: 0.3, metalness: 0.6 }),
   };
@@ -370,7 +370,7 @@ export default function ProductionLineScene({ scenario, selected, autoRotate, on
     const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environment = environment;
     scene.environmentIntensity = 0.55;
-    scene.fog = new THREE.Fog("#eef2f7", 26, 48);
+    scene.fog = new THREE.Fog("#edf2f8", 26, 48);
 
     const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 120);
     camera.position.copy(homePosition(1.6));
@@ -400,11 +400,11 @@ export default function ProductionLineScene({ scenario, selected, autoRotate, on
     fill.position.set(-8, 6, -6);
     scene.add(fill);
 
-    const floor = new THREE.Mesh(new THREE.CircleGeometry(22, 64), new THREE.MeshStandardMaterial({ color: "#f1f4f8", roughness: 0.95 }));
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(22, 64), new THREE.MeshStandardMaterial({ color: "#eef3f8", roughness: 0.95 }));
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     scene.add(floor);
-    const grid = new THREE.GridHelper(40, 40, "#d3dbe6", "#e3e8ef");
+    const grid = new THREE.GridHelper(40, 40, "#d0dbe8", "#e1e8f1");
     grid.position.y = 0.005;
     (grid.material as THREE.Material).transparent = true;
     (grid.material as THREE.Material).opacity = 0.55;

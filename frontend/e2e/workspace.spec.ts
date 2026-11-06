@@ -26,9 +26,9 @@ test("5-step flow: record → OCR → analyse → approve → ask with sources",
 
   // 1. Ghi âm
   await page.goto(`/record${FAST}`);
-  await expect(page).toHaveTitle(/Factory memo/);
+  await expect(page).toHaveTitle(/Factory Memo/);
   await expect(page.locator(".desktop-sidebar .brand")).toContainText(
-    "Factory memo",
+    "Factory Memo",
   );
   await expect(page.getByTestId("record-state")).toHaveAttribute(
     "data-state",
@@ -123,7 +123,7 @@ test("5-step flow: record → OCR → analyse → approve → ask with sources",
   // 5. Hỏi đáp: only the chat feature, no step shell around it.
   await page.getByTestId("card-ask-cta").click();
   const chatRoot = page.getByTestId("chat-focus-root");
-  await expect(chatRoot).toContainText("Factory memo");
+  await expect(chatRoot).toContainText("Factory Memo");
   await expect(page.locator(".desktop-sidebar")).toHaveCount(0);
   await expect(page.locator(".workspace-breadcrumb")).toHaveCount(0);
   await expect(page.getByText("Mô phỏng")).toHaveCount(0);

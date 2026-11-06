@@ -59,7 +59,7 @@ export function SignInScreen() {
       >
         <div className="flex items-center gap-2 font-semibold">
           <BrandMark small />
-          <span>Factory memo</span>
+          <span>Factory Memo</span>
         </div>
         <h1 className="text-lg font-semibold">
           {signup ? "Đăng ký" : "Đăng nhập"}

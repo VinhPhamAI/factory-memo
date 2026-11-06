@@ -123,6 +123,33 @@ export async function fetchFilePreview(client: FileClient, id: string, signal?: 
   return response.blob();
 }
 
+/**
+ * Fetch a file's original bytes through the authorized client.
+ *
+ * Args:
+ *   client: Signed-in client that adds the bearer token.
+ *   id: Library file ID; the server only returns the owner's files.
+ *   signal: Optional signal that cancels the request.
+ *
+ * Returns:
+ *   The original content as a Blob.
+ *
+ * Raises:
+ *   FileApiError: When the request fails or the file is unavailable.
+ */
+export async function fetchFileContent(
+  client: FileClient,
+  id: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await send(
+    client,
+    `/v1/files/${encodeURIComponent(id)}/content`,
+    { signal },
+  );
+  return response.blob();
+}
+
 /** Open a PDF or image in a new tab; download Office formats instead. */
 export async function openFile(client: FileClient, file: LibraryFile): Promise<void> {
   if (!["application/pdf", "image/png", "image/jpeg"].includes(file.content_type)) {
@@ -132,8 +159,7 @@ export async function openFile(client: FileClient, file: LibraryFile): Promise<v
   if (!tab) throw new FileApiError("Trình duyệt đã chặn cửa sổ mới.", 0);
   tab.opener = null;
   try {
-    const response = await send(client, `/v1/files/${encodeURIComponent(file.id)}/content`);
-    const url = URL.createObjectURL(await response.blob());
+    const url = URL.createObjectURL(await fetchFileContent(client, file.id));
     tab.location.href = url;
     setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
   } catch (error) {
@@ -150,11 +176,7 @@ export async function downloadFile(
   client: FileClient,
   file: LibraryFile,
 ): Promise<void> {
-  const response = await send(
-    client,
-    `/v1/files/${encodeURIComponent(file.id)}/content`,
-  );
-  const url = URL.createObjectURL(await response.blob());
+  const url = URL.createObjectURL(await fetchFileContent(client, file.id));
   try {
     const link = document.createElement("a");
     link.href = url;

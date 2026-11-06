@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { NavLink, useMatch, useNavigate } from "react-router-dom";
-import { Pencil, SquarePen, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { useConversations } from "@/hooks/conversations";
 import { ConversationError } from "@/services/conversations-api";
 import { cn } from "@/utils/cn";
 
 /**
- * Sidebar list of the user's conversations with a new-chat button.
+ * List the user's recent conversations and mark the one that is open.
  * Rename and delete act on one item; deleting the open chat returns to /ask.
  */
 export function ConversationList({ onNavigate }: { onNavigate?: () => void }) {
@@ -48,24 +48,14 @@ export function ConversationList({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <div className="conversation-list">
-      <NavLink
-        to="/ask"
-        end
-        className="new-chat-button"
-        data-testid="new-chat"
-        onClick={onNavigate}
-      >
-        <SquarePen size={16} />
-        Trò chuyện mới
-      </NavLink>
-      <p className="sidebar-section-label">Cuộc trò chuyện</p>
+      <p className="sidebar-section-label">Gần đây</p>
       {(error || actionError) && (
         <p role="alert" className="inline-error sidebar-error">
           {actionError || error}
         </p>
       )}
       {loading ? (
-        <p className="sidebar-empty">Đang tải…</p>
+        <p className="sidebar-empty" aria-busy="true">Đang tải…</p>
       ) : !list.length && !error ? (
         <p className="sidebar-empty">Chưa có cuộc trò chuyện nào.</p>
       ) : (
@@ -92,7 +82,7 @@ export function ConversationList({ onNavigate }: { onNavigate?: () => void }) {
                   aria-label={`Đổi tên ${item.title}`}
                   onClick={() => void renameItem(item.id, item.title)}
                 >
-                  <Pencil size={13} />
+                  <Pencil size={14} aria-hidden="true" />
                 </button>
                 <button
                   type="button"
@@ -100,7 +90,7 @@ export function ConversationList({ onNavigate }: { onNavigate?: () => void }) {
                   data-testid="conversation-delete"
                   onClick={() => void removeItem(item.id, item.title)}
                 >
-                  <Trash2 size={13} />
+                  <Trash2 size={14} aria-hidden="true" />
                 </button>
               </span>
             </li>

@@ -4,10 +4,10 @@ A Vietnamese-language UI for chatting with the standalone agent and capturing
 and reviewing factory knowledge. React, TypeScript, Vite, Tailwind CSS and
 shadcn/ui. API mode requires sign-in; mock mode needs no account.
 
-`api` is the default mode. It offers agent chat (`/ask`), personal document
-management (`/files`), and individual source review pages. Administrators can
-manage KBs and select the Library target at `/admin/knowledge-bases`.
-**Quản lý tài liệu** queues new uploads for conversion and knowledge extraction
+`api` is the default mode. It offers agent chat (`/ask`), the document library
+(`/files`), and individual source review pages. Administrators can manage KBs and
+select the upload target in **Kho kiến thức** (`/admin/knowledge-bases`).
+**Thư viện tài liệu** queues new uploads for conversion and knowledge extraction
 in the selected default KB. Queue failures and duplicates are shown explicitly.
 The legacy `/capture` page remains reachable by URL but is not in the main
 navigation. See [document uploads](../docs/features/document-uploads.md) and
@@ -65,6 +65,9 @@ Set `VITE_MACHINE_DIAGNOSIS_VIZ=true` in `.env.local` and restart Vite to show a
 - The 3D view (`src/components/diagnosis/production-line-scene.tsx`, three.js) is
   loaded only when the panel opens. Drag to orbit, scroll to zoom and click a
   station or label to focus it. Without WebGL the panel shows a notice instead.
+- Labels are in Vietnamese. When the panel overlays the chat (at 1100 px and
+  below, or the mock-mode `/ask` overlay), it acts as a dialog: focus stays inside
+  it until Escape or the close button dismisses it.
 
 ## Sign-in
 
@@ -84,9 +87,16 @@ owns the client:
 [conversations API](../docs/features/conversations.md); `src/services/conversations-api.ts`
 owns the client and `src/pages/conversations.tsx` the screen.
 
-- API mode uses a left sidebar (a drawer below 860 px) with chat and document
-  management, and on `/ask` a new-chat button and the conversation list, with the account and
-  sign-out at the bottom (`src/components/qa-shell.tsx`, `conversation-list.tsx`).
+- API mode shows a left sidebar on every page (`src/components/qa-shell.tsx`,
+  `conversation-list.tsx`): **Trò chuyện mới**, **Thư viện tài liệu**,
+  **Yêu cầu chuyên gia**, admin-only **Kho kiến thức**, recent chats (**Gần đây**)
+  and the account with sign-out. A toggle collapses the sidebar for the current
+  session. At 860 px and below, a tab row (**Hỏi đáp**, **Tài liệu**,
+  **Chuyên gia**, admin **Kho kiến thức**) replaces it, and a menu button opens a
+  drawer with new chat, history and the account.
+- A new chat shows a centered composer with two shortcuts: **Tra mã lỗi** focuses
+  the composer and pre-fills an editable prompt only when it is empty;
+  **Tìm tài liệu** opens `/files`.
 - Conversations are saved on the server per account and listed newest activity
   first; each item has rename and delete. The first message of a new chat creates
   it, titled with the message's first 80 characters.

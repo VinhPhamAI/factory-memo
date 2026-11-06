@@ -61,8 +61,11 @@ export function InquiriesPage() {
   const spec = TABS.find((item) => item.id === tab)!;
   const shown = rows ? rowsFor(tab, rows) : [];
   return (
-    <main className="files-page" data-testid="inquiries-page">
-      <h1>Yêu cầu chuyên gia</h1>
+    <main className="inquiry-page" data-testid="inquiries-page">
+      <header className="inquiry-page-heading">
+        <h1>Yêu cầu chuyên gia</h1>
+        <p>Yêu cầu bạn soạn từ trò chuyện và yêu cầu được giao cho bạn.</p>
+      </header>
       <div role="tablist" aria-label="Hộp thư" className="inquiry-tabs">
         {TABS.map((item) => (
           <button
@@ -71,7 +74,7 @@ export function InquiriesPage() {
             role="tab"
             aria-selected={tab === item.id}
             data-testid={`tab-${item.id}`}
-            className={tab === item.id ? "sidebar-link active" : "sidebar-link"}
+            className="inquiry-tab"
             onClick={() => {
               if ((item.id === "assigned") !== (tab === "assigned"))
                 setRows(null);
@@ -88,7 +91,9 @@ export function InquiriesPage() {
         </p>
       )}
       {rows === null ? (
-        <p aria-busy="true">Đang tải…</p>
+        <p className="field-note" aria-busy="true">
+          Đang tải…
+        </p>
       ) : !shown.length ? (
         !error && (
           <p className="field-note" data-testid="inquiries-empty">
@@ -98,20 +103,24 @@ export function InquiriesPage() {
       ) : (
         <ul className="inquiry-list">
           {shown.map((row) => (
-            <li key={row.id} data-testid="inquiry-row">
-              <Link to={`/inquiries/${row.id}`}>
+            <li key={row.id} data-testid="inquiry-row" className="inquiry-row">
+              {/* The link covers the row; its name stays the title alone. */}
+              <Link to={`/inquiries/${row.id}`} className="inquiry-row-link">
                 <strong>{row.title || "(Chưa có tiêu đề)"}</strong>
-              </Link>{" "}
-              <Badge variant="secondary">
+              </Link>
+              <Badge
+                variant="secondary"
+                className="inquiry-status"
+                data-status={row.status}
+              >
                 {STATUS_LABELS[row.status] ?? row.status}
               </Badge>
-              <span className="field-note">
+              <span className="field-note inquiry-row-meta">
                 {tab === "assigned"
-                  ? ` · Từ ${row.requester_name}`
+                  ? `Từ ${row.requester_name} · `
                   : row.assignee_name
-                    ? ` · Gửi ${row.assignee_name}`
+                    ? `Gửi ${row.assignee_name} · `
                     : ""}
-                {" · "}
                 {new Date(row.updated_at).toLocaleString("vi-VN")}
               </span>
             </li>

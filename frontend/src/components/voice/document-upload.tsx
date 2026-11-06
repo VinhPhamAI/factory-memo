@@ -106,7 +106,7 @@ export function DocumentUpload({
               i === index
                 ? {
                     ...entry,
-                    error: `${libraryFile ? "File đã lưu trong Quản lý tài liệu. " : ""}${
+                    error: `${libraryFile ? "File đã lưu trong Thư viện tài liệu. " : ""}${
                       error instanceof Error ? error.message : String(error)
                     }`,
                   }
@@ -157,14 +157,14 @@ export function DocumentUpload({
         <p>
           {libraryClient && (
             <>
-              File được lưu vào Quản lý tài liệu và liên kết với knowledge base.{" "}
+              File được lưu vào Thư viện tài liệu và liên kết với knowledge base.{" "}
             </>
           )}
           {extractMode
             ? "Auto: sau khi lưu file gốc, worker tự chuyển đổi và trích xuất. Theo dõi và duyệt kết quả trong "
             : "Tải lên chỉ lưu file gốc theo knowledge base. Chuyển đổi, trích xuất và duyệt kết quả trong "}
           <Link to="/files" className="link-button">
-            Quản lý tài liệu
+            Thư viện tài liệu
           </Link>
           .
         </p>

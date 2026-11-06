@@ -48,17 +48,23 @@ test("administrator manages knowledge bases and sets the Library default", async
   });
   await page.goto("/admin/knowledge-bases");
   await expect(page.getByTestId("nav-admin-knowledge")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Knowledge bases", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Kho kiến thức", exact: true })).toBeVisible();
   await page.getByRole("button", { name: /Maintenance/ }).click();
+  const technical = page.getByText("Chi tiết kỹ thuật", { exact: true });
+  await expect(page.getByText("maintenance", { exact: true })).toBeHidden();
+  await technical.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("maintenance", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Đặt làm mặc định" }).click();
-  await expect(page.getByText("Đang dùng cho Library").locator(".." )).toContainText("Maintenance");
-  await expect(page.getByRole("button", { name: "Xóa knowledge base" })).toBeDisabled();
-  await page.getByRole("button", { name: "Tạo knowledge base", exact: true }).click();
+  await expect(page.getByTestId("kb-admin-default")).toContainText("Maintenance");
+  await expect(page.getByRole("button", { name: "Xóa kho" })).toBeDisabled();
+  await page.getByRole("button", { name: "Tạo kho kiến thức", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await expect(page.getByRole("heading", { name: "Knowledge bases", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Kho kiến thức", exact: true })).toBeVisible();
+  await expect(page.getByTestId("mobile-nav-admin")).toHaveAttribute("aria-current", "page");
 });
 
 test("employee cannot open the administration page", async ({ page }) => {
@@ -81,19 +87,28 @@ test("library grid previews files and filters by name", async ({ page }) => {
   await page.route("**/v1/files/*/preview", (route) => route.fulfill({ contentType: "text/plain", body: "Preview content" }));
   await page.route("**/v1/knowledge-management/knowledge_base_seed1/sources*", (route) => route.fulfill({ json: { sources: [{ id: "s1", kb: "knowledge_base_seed1", kind: "upload", name: "manual.docx", file_sha256: "a", stage: "raw", review: "none", processing: { status: "queued" } }], warnings: [], next_offset: null, qa_mode: "knowledge" } }));
   await page.goto("/files");
-  await expect(page.getByRole("heading", { name: "Library" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Thư viện tài liệu" })).toBeVisible();
   await expect(page.getByTestId("library-file")).toHaveCount(2);
   await expect(page.getByText("Preview content").first()).toBeVisible();
   const card = page.getByTestId("library-file").first();
   await card.hover();
   await expect(card.getByRole("button", { name: "Tùy chọn manual.docx" })).toBeVisible();
   await card.getByRole("button", { name: "Tùy chọn manual.docx" }).click();
-  await page.getByRole("menuitem", { name: "Knowledge State" }).click();
+  await page.getByRole("menuitem", { name: "Trạng thái xử lý" }).click();
   await expect(page.getByRole("dialog")).toContainText("Đang chờ xử lý");
   await page.keyboard.press("Escape");
   await card.getByRole("button", { name: "Chọn manual.docx", exact: true }).click();
   await expect(page.getByText("Đã chọn 1 file")).toBeVisible();
-  await page.getByRole("searchbox", { name: "Search library" }).fill("pump");
+  const opener = page.getByRole("button", { name: "Xem trước manual.docx" });
+  await opener.focus();
+  await page.keyboard.press("Enter");
+  const preview = page.getByTestId("library-file-dialog");
+  await expect(preview).toContainText("Trích đoạn");
+  await expect(preview.getByTestId("library-excerpt")).toHaveText("Preview content");
+  await expect(preview.getByRole("button", { name: "Tải xuống" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(opener).toBeFocused();
+  await page.getByRole("searchbox", { name: "Tìm tài liệu" }).fill("pump");
   await expect(page.getByTestId("library-file")).toHaveCount(1);
   await expect(page.getByTestId("library-file")).toContainText("pump.pdf");
 });
@@ -207,6 +222,54 @@ test("agent chat creates a conversation, replaces provisional text and reopens s
   ).toHaveCount(0);
 });
 
+test("shell collapses the sidebar and opens phone history without losing the chat", async ({
+  page,
+}) => {
+  await mockConversations(page, () =>
+    agentEvent("complete", { sequence: 1, finish_reason: "stop", answer: "Đã nhận." }),
+  );
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await page.goto("/ask");
+  await expect(page.getByRole("heading", { name: "Trò chuyện mới" })).toBeVisible();
+  await expect(page.getByTestId("chat-shortcuts")).toBeVisible();
+  await page.getByTestId("chat-input").fill("Lịch bảo dưỡng tuần này");
+  await page.getByTestId("chat-send").click();
+  await expect(page.getByTestId("chat-answer")).toHaveAttribute("data-status", "saved");
+  await page.getByTestId("chat-input").fill("Bản nháp chưa gửi");
+
+  const toggle = page.getByTestId("sidebar-toggle");
+  await toggle.click();
+  await expect(page.locator("#app-sidebar")).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("chat-input")).toHaveValue("Bản nháp chưa gửi");
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#app-sidebar")).toBeVisible();
+  await expect(
+    page.locator("#app-sidebar").getByRole("link", { name: "Lịch bảo dưỡng tuần này" }),
+  ).toHaveAttribute("aria-current", "page");
+
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 760 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await expect(page.getByTestId("mobile-nav-ask")).toHaveAttribute("aria-current", "page");
+  }
+  const menu = page.getByTestId("open-menu");
+  await menu.click();
+  const drawer = page.getByRole("dialog", { name: "Trò chuyện" });
+  await expect(drawer.getByRole("link", { name: "Lịch bảo dưỡng tuần này" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(drawer).toBeHidden();
+  await expect(menu).toBeFocused();
+  await menu.click();
+  await drawer.getByTestId("new-chat").click();
+  await expect(page).toHaveURL(/\/ask$/);
+  await expect(drawer).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Trò chuyện mới" })).toBeVisible();
+});
+
 test("agent chat shows errors and unconfirmed answers without sending again", async ({
   page,
 }) => {
@@ -280,10 +343,11 @@ for (const auto of [false, true]) {
     expect(uploads).toBe(1);
     expect(attachments).toBe(1);
     if (auto) await expect(page.getByTestId("upload-job")).toContainText("Đã xếp hàng");
-    await page.getByRole("note").getByRole("link", { name: "Quản lý tài liệu", exact: true }).click();
+    await page.getByRole("note").getByRole("link", { name: "Thư viện tài liệu", exact: true }).click();
     await expect(page.getByTestId("library-file")).toContainText("manual.pdf");
+    await page.getByRole("button", { name: "Xem trước manual.pdf", exact: true }).click();
     const downloading = page.waitForEvent("download");
-    await page.getByRole("button", { name: "Tải về manual.pdf", exact: true }).click();
+    await page.getByTestId("library-file-dialog").getByRole("button", { name: "Tải xuống" }).click();
     expect((await downloading).suggestedFilename()).toBe("manual.pdf");
   });
 }
@@ -295,8 +359,10 @@ for (const width of [1365, 390]) {
     await page.route("**/v1/files", (route) => route.fulfill({ json: { files: [] } }));
     await page.goto("/knowledge?tab=conflicts");
     await expect(page).toHaveURL(/\/files$/);
-    if (width < 860) await page.getByTestId("open-menu").click();
-    await expect(page.getByRole("link", { name: "Quản lý tài liệu", exact: true })).toHaveAttribute("aria-current", "page");
+    const libraryLink = width < 860
+      ? page.getByTestId("mobile-nav-files")
+      : page.getByRole("link", { name: "Thư viện tài liệu", exact: true });
+    await expect(libraryLink).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("button", { name: "Quản lý tri thức", exact: true })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Knowledge base", exact: true })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Nguồn dữ liệu", exact: true })).toHaveCount(0);

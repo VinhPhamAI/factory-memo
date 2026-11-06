@@ -183,7 +183,7 @@ export function CapturePage() {
           <p>
             {mode === "voice"
               ? "Ghi âm trao đổi tại hiện trường. Sau khi lưu transcript, trích xuất (hoặc để Auto chạy) và duyệt trong Quản lý tri thức."
-              : "Lưu tài liệu và hình ảnh vào Quản lý tài liệu, liên kết với knowledge base đã chọn. Chọn Auto để tự chuyển đổi và trích xuất sau khi tải lên."}
+              : "Lưu tài liệu và hình ảnh vào Thư viện tài liệu, liên kết với knowledge base đã chọn. Chọn Auto để tự chuyển đổi và trích xuất sau khi tải lên."}
           </p>
         </header>
 
@@ -347,7 +347,7 @@ export function CapturePage() {
 
         <p className="vc-muted">
           <Link to="/files" className="link-button">
-            Mở Quản lý tài liệu
+            Mở Thư viện tài liệu
           </Link>
         </p>
 
@@ -407,10 +407,10 @@ function ProcessingChoice({
             data-testid="capture-extract-mode"
           >
             <option value="knowledge">
-              Knowledge items · Trích xuất tri thức bằng AI
+              Mục tri thức · AI trích xuất tri thức
             </option>
             <option value="documents">
-              Document chunks · Chia đoạn văn bản
+              Đoạn tài liệu · Chia văn bản thành đoạn
             </option>
           </select>
           <small>

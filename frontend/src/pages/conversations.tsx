@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowUp,
+  FileText,
+  Hash,
   ImageIcon,
   Loader2,
   Mic,
@@ -20,6 +22,7 @@ import { CitedAnswer } from "@/components/cited-answer";
 import { ChatToolCalls } from "@/components/chat-tool-calls";
 import {
   DiagnosisToolCard,
+  diagnosisOverlayOpen,
   MachineDiagnosisPanel,
 } from "@/components/diagnosis/machine-diagnosis-panel";
 import { useMachineDiagnosis } from "@/hooks/machine-diagnosis";
@@ -63,6 +66,8 @@ type Turn = {
 };
 
 const TITLE_LENGTH = 80;
+/** Editable starter text placed by the error-code shortcut. */
+const ERROR_CODE_PROMPT = "Máy báo mã lỗi ";
 
 const errorMessage = (cause: unknown, fallback: string) =>
   cause instanceof ConversationError ? cause.message : fallback;
@@ -311,8 +316,22 @@ export function ConversationsPage() {
         });
     } finally {
       release();
-      composer.current?.focus();
+      // A diagnosis overlay that covers the chat keeps focus until it closes.
+      if (!diagnosisOverlayOpen()) composer.current?.focus();
     }
+  }
+
+  /** Focus the composer and offer an editable error-code prompt if it is empty. */
+  function startErrorCodeLookup() {
+    const field = composer.current;
+    const next = query.trim() ? query : ERROR_CODE_PROMPT;
+    if (!query.trim()) setQuery(next);
+    if (!field) return;
+    field.focus();
+    // Put the caret after the prompt once React has applied the new value.
+    requestAnimationFrame(() =>
+      field.setSelectionRange(next.length, next.length),
+    );
   }
 
   async function createInquiry() {
@@ -333,16 +352,22 @@ export function ConversationsPage() {
     }
   }
 
+  // A chat with nothing to show centers the composer and its shortcuts.
+  const isNewChat = historyState === "idle" && !turns.length;
+
   return (
     <div
       className={`ask-layout agent-chat-layout ${diagnosis.state.open && diagnosis.state.scenario ? "with-diagnosis" : ""}`}
     >
-      <main className="chat-area">
-        <header className="chat-header">
-          <h1 data-testid="chat-title">
-            {current?.title ?? (conversationId ? "" : "Trò chuyện mới")}
-          </h1>
-          {conversationId && (
+      <main className={`chat-area ${isNewChat ? "is-new-chat" : ""}`}>
+        {!conversationId ? (
+          <header className="chat-welcome">
+            <BrandMark />
+            <h1 data-testid="chat-title">Trò chuyện mới</h1>
+          </header>
+        ) : (
+          <header className="chat-header">
+            <h1 data-testid="chat-title">{current?.title ?? ""}</h1>
             <Button
               type="button"
               variant="outline"
@@ -355,26 +380,19 @@ export function ConversationsPage() {
               {drafting ? <Loader2 size={14} className="animate-spin" /> : null}
               {drafting ? "Đang soạn…" : "Tạo yêu cầu chuyên gia"}
             </Button>
-          )}
-          {draftError && (
-            <p role="alert" className="inline-error" data-testid="draft-error">
-              {draftError}
-            </p>
-          )}
-        </header>
+          </header>
+        )}
+        {draftError && (
+          <p role="alert" className="inline-error chat-draft-error" data-testid="draft-error">
+            {draftError}
+          </p>
+        )}
         <div className="chat-scroll" ref={scroll}>
           {historyState === "loading" ? (
             <div className="chat-empty" aria-busy="true">
               <p>Đang tải cuộc trò chuyện…</p>
             </div>
-          ) : !turns.length ? (
-            <div className="chat-empty">
-              <h2>Máy đang gặp vấn đề gì?</h2>
-              <p>
-                Mô tả sự cố và cung cấp mã lỗi hoặc thông tin về máy nếu có.
-              </p>
-            </div>
-          ) : (
+          ) : !turns.length ? null : (
             <div className="message-list">
               {truncated && (
                 <p className="field-note" data-testid="history-truncated">
@@ -407,7 +425,7 @@ export function ConversationsPage() {
                   >
                     <div className="assistant-label">
                       <BrandMark small />
-                      <span>Factory memo</span>
+                      <span>Factory Memo</span>
                     </div>
                     {turn.reasoning && (
                       <ThinkingBlock
@@ -518,7 +536,7 @@ export function ConversationsPage() {
               rows={2}
               aria-label="Đặt câu hỏi"
               data-testid="chat-input"
-              placeholder="Mô tả máy, mã lỗi hoặc hiện tượng…"
+              placeholder="Nhập câu hỏi hoặc mã lỗi…"
               value={query}
               maxLength={20000}
               onChange={(event) => setQuery(event.target.value)}
@@ -534,12 +552,12 @@ export function ConversationsPage() {
               }}
             />
             <div className="composer-bottom">
-              <span>
+              <span role="status">
                 {dictation.state === "recording"
                   ? "Đang ghi âm… bấm lại để dừng (tối đa 2 phút)"
                   : dictation.state === "transcribing"
                     ? "Đang nhận dạng giọng nói…"
-                    : "Thêm mã lỗi hoặc kiểu máy nếu có"}
+                    : ""}
               </span>
               <span className="composer-actions">
                 <Button
@@ -593,6 +611,22 @@ export function ConversationsPage() {
               </span>
             </div>
           </form>
+          {isNewChat && (
+            <div className="chat-shortcuts" data-testid="chat-shortcuts">
+              <button
+                type="button"
+                className="chat-shortcut"
+                onClick={startErrorCodeLookup}
+              >
+                <Hash size={15} aria-hidden="true" />
+                Tra mã lỗi
+              </button>
+              <Link to="/files" className="chat-shortcut">
+                <FileText size={15} aria-hidden="true" />
+                Tìm tài liệu
+              </Link>
+            </div>
+          )}
         </div>
       </main>
       {diagnosis.enabled && (

@@ -5,7 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { AuthProvider } from "@/hooks/auth";
@@ -53,6 +53,120 @@ const pick = (...files: File[]) =>
     target: { files },
   });
 
+const docx: LibraryFile = {
+  ...manual,
+  id: "file-2",
+  filename: "huong-dan.docx",
+  content_type:
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  sha256: "b".repeat(64),
+};
+const photo = (id: string, size: number): LibraryFile => ({
+  ...manual,
+  id,
+  filename: `${id}.png`,
+  content_type: "image/png",
+  size_bytes: size,
+  sha256: id.padEnd(64, "c"),
+});
+// jsdom Blobs do not cross into fetch Responses, so set the type by header.
+const pngResponse = () =>
+  new Response("png", { headers: { "content-type": "image/png" } });
+
+describe("library file preview", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Answer file list, preview and original requests and record their paths. */
+  function serveLibrary(items: LibraryFile[], preview: (id: string) => Response) {
+    const requested: string[] = [];
+    // jsdom lacks object URLs; install restorable stubs.
+    URL.createObjectURL ??= () => "";
+    URL.revokeObjectURL ??= () => {};
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    showFiles((url) => {
+      requested.push(url);
+      const id = url.match(/\/v1\/files\/([^/]+)\//)?.[1];
+      if (url.endsWith("/preview") && id) return preview(id);
+      if (url.endsWith("/content")) return pngResponse();
+      return Response.json({ files: items });
+    });
+    return requested;
+  }
+
+  it("labels an Office excerpt and returns focus to the filename", async () => {
+    serveLibrary([docx], () =>
+      new Response("Bước 1. Ngắt nguồn.", {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      }),
+    );
+    const user = userEvent.setup();
+    const opener = await screen.findByRole("button", {
+      name: "Xem trước huong-dan.docx",
+    });
+    await user.click(opener);
+    const dialog = await screen.findByTestId("library-file-dialog");
+    expect(dialog).toHaveTextContent("Trích đoạn");
+    expect(await within(dialog).findByTestId("library-excerpt")).toHaveTextContent(
+      "Bước 1. Ngắt nguồn.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Tải xuống" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Mở PDF" })).toBeNull();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  it("shows the first PDF page with open and download actions", async () => {
+    const requested = serveLibrary([manual], () => pngResponse());
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "Xem trước manual.pdf" }),
+    );
+    const dialog = await screen.findByTestId("library-file-dialog");
+    expect(await within(dialog).findByRole("img")).toHaveAttribute(
+      "alt",
+      "Trang đầu của manual.pdf",
+    );
+    expect(within(dialog).getByRole("button", { name: "Mở PDF" })).toBeInTheDocument();
+    expect(requested.some((url) => url.endsWith("/file-1/content"))).toBe(false);
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview"),
+    );
+  });
+
+  it("loads small originals and keeps large images on the bounded preview", async () => {
+    const requested = serveLibrary(
+      [photo("small", 2048), photo("large", 40 * 1024 * 1024)],
+      () => pngResponse(),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Xem trước small.png" }));
+    let dialog = await screen.findByTestId("library-file-dialog");
+    expect(await within(dialog).findByRole("img")).toHaveAttribute("alt", "Ảnh gốc của small.png");
+    expect(requested.some((url) => url.endsWith("/small/content"))).toBe(true);
+    expect(within(dialog).queryByRole("button", { name: "Mở ảnh gốc" })).toBeNull();
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("button", { name: "Xem trước large.png" }));
+    dialog = await screen.findByTestId("library-file-dialog");
+    expect(await within(dialog).findByRole("img")).toHaveAttribute("alt", "Ảnh thu nhỏ của large.png");
+    expect(requested.some((url) => url.endsWith("/large/content"))).toBe(false);
+    expect(within(dialog).getByRole("button", { name: "Mở ảnh gốc" })).toBeInTheDocument();
+  });
+
+  it("explains when a file has no preview", async () => {
+    serveLibrary([docx], () => new Response(null, { status: 422 }));
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "Xem trước huong-dan.docx" }),
+    );
+    expect(
+      await within(await screen.findByTestId("library-file-dialog")).findByRole("alert"),
+    ).toHaveTextContent("Tệp này không có bản xem trước");
+  });
+});
+
 describe("file library page", () => {
   it("shows an upload prompt when the library is empty", async () => {
     showFiles(() => Response.json({ files: [] }));
@@ -62,7 +176,7 @@ describe("file library page", () => {
     expect(screen.queryByRole("button", { name: "Làm mới" })).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByText("Nhận PDF, XLSX, DOCX, JPEG, PNG; tối đa 100 MiB mỗi file.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Upload Files" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tải tài liệu lên" })).toBeInTheDocument();
   });
 
   it("lists files with type, size and actions", async () => {
@@ -78,7 +192,7 @@ describe("file library page", () => {
   it("filters library cards by filename", async () => {
     showFiles(() => Response.json({ files: [manual, { ...manual, id: "file-2", filename: "pump.xlsx" }] }));
     expect(await screen.findAllByTestId("library-file")).toHaveLength(2);
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search library" }), { target: { value: "PUMP" } });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Tìm tài liệu" }), { target: { value: "PUMP" } });
     expect(screen.getAllByTestId("library-file")).toHaveLength(1);
     expect(screen.getByTestId("library-file")).toHaveTextContent("pump.xlsx");
   });
@@ -149,7 +263,7 @@ describe("file library page", () => {
 
   it("does not upload without a knowledge base", async () => {
     const fetch = showFiles(() => Response.json({ files: [] }), ["another_kb"]);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Chưa có knowledge base mặc định");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Chưa có kho kiến thức mặc định");
     expect(screen.getByTestId("files-upload")).toBeDisabled();
     pick(new File(["%PDF-"], "manual.pdf"));
     expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
@@ -164,7 +278,7 @@ describe("file library page", () => {
     });
     await waitFor(() => expect(screen.getByTestId("files-upload")).toBeEnabled());
     pick(new File(["%PDF-"], "manual.pdf"));
-    expect(await screen.findByRole("alert")).toHaveTextContent("File đã có trong knowledge base");
+    expect(await screen.findByRole("alert")).toHaveTextContent("File đã có trong kho kiến thức");
     expect(screen.queryByRole("button", { name: "Đưa vào xử lý" })).toBeNull();
   });
 
@@ -173,7 +287,7 @@ describe("file library page", () => {
     await screen.findByTestId("library-file");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Tùy chọn manual.pdf" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Knowledge State" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Trạng thái xử lý" }));
     expect(await screen.findByText("Đang chờ xử lý")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Xem kết quả và chi tiết" })).toHaveAttribute("href", "/knowledge/knowledge_base_seed1/sources/upload/s1");
     expect(screen.queryByRole("button", { name: "Đưa vào xử lý" })).not.toBeInTheDocument();
@@ -185,8 +299,8 @@ describe("file library page", () => {
     await screen.findByTestId("library-file");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Tùy chọn manual.pdf" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Knowledge State" }));
-    expect(await screen.findByText(/KB another_kb/)).toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitem", { name: "Trạng thái xử lý" }));
+    expect(await screen.findByText(/Kho another_kb/)).toBeInTheDocument();
   });
 
   it("selects files and removes their knowledge source without deleting the library file", async () => {
@@ -195,8 +309,8 @@ describe("file library page", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Chọn manual.pdf" }));
     expect(screen.getByText("Đã chọn 1 file")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Remove from knowledge base" }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent("File vẫn còn trong Library");
+    await user.click(screen.getByRole("button", { name: "Gỡ khỏi kho kiến thức" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("File vẫn còn trong Thư viện tài liệu");
     await user.click(screen.getByTestId("files-confirm-delete"));
     await waitFor(() => expect(fetch.mock.calls.some(([url, init]) => url.endsWith("/sources/upload/s1") && init?.method === "DELETE")).toBe(true));
     expect(screen.getByTestId("library-file")).toBeInTheDocument();
@@ -207,7 +321,7 @@ describe("file library page", () => {
     await screen.findByTestId("library-file");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Tùy chọn manual.pdf" }));
-    const remove = await screen.findByRole("menuitem", { name: "Remove from knowledge base" });
+    const remove = await screen.findByRole("menuitem", { name: "Gỡ khỏi kho kiến thức" });
     await waitFor(() => expect(remove).not.toHaveAttribute("data-disabled"));
     await user.click(remove);
     await user.click(await screen.findByTestId("files-confirm-delete"));

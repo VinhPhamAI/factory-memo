@@ -77,9 +77,9 @@ import {
 import { cn } from "@/utils/cn";
 
 const STAGES = {
-  raw: "Raw · Dữ liệu gốc",
-  converted: "Converted · Đã có text",
-  extracted: "Extracted · Đã trích xuất",
+  raw: "Đã nhận tài liệu",
+  converted: "Đã có văn bản",
+  extracted: "Đã trích xuất",
 };
 const REVIEWS = {
   none: "Chưa có kết quả cần duyệt",
@@ -87,10 +87,21 @@ const REVIEWS = {
   reviewed: "Đã duyệt xong",
   rejected: "Đã loại",
 };
-const MODES = { knowledge: "Knowledge items", documents: "Document chunks" };
+const MODES = { knowledge: "Mục tri thức", documents: "Đoạn tài liệu" };
 const MODE_OPTIONS = {
-  knowledge: "Knowledge items · Trích xuất tri thức bằng AI",
-  documents: "Document chunks · Chia đoạn văn bản",
+  knowledge: "Mục tri thức · AI trích xuất tri thức",
+  documents: "Đoạn tài liệu · Chia văn bản thành đoạn",
+};
+/** Short names for the content types the library accepts. */
+const TYPE_NAMES: Record<string, string> = {
+  "application/pdf": "PDF",
+  "image/png": "Ảnh PNG",
+  "image/jpeg": "Ảnh JPEG",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+    "Word (DOCX)",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+    "Excel (XLSX)",
+  "text/plain": "Văn bản",
 };
 const PROGRESS = {
   convert: ["Đang chờ chuyển đổi", "Đang chuyển đổi"],
@@ -1285,7 +1296,7 @@ export function KnowledgeSourcePage() {
     return (
       <main className="vc-page km-page">
         <Link to="/files" className="vc-back">
-          <ArrowLeft size={16} /> Quản lý tài liệu
+          <ArrowLeft size={16} /> Thư viện tài liệu
         </Link>
         {error ? (
           <p className="vc-notice error" role="alert">
@@ -1339,13 +1350,13 @@ export function KnowledgeSourcePage() {
   return (
     <main className="vc-page km-detail" data-testid="knowledge-source">
       <Link to="/files" className="vc-back">
-        <ArrowLeft size={16} /> Quản lý tài liệu
+        <ArrowLeft size={16} /> Thư viện tài liệu
       </Link>
       <header className="km-heading">
         <div>
           <h1>{source.name}</h1>
           <p>
-            KB {kb} · {source.content_type}
+            {TYPE_NAMES[source.content_type ?? ""] ?? "Tài liệu"} · Kho {kb}
           </p>
         </div>
         <div className="km-actions">
@@ -1398,22 +1409,25 @@ export function KnowledgeSourcePage() {
             {running ? (
               <p data-testid="source-progress">
                 <Loader2 size={16} className="animate-spin" />{" "}
-                <strong>{progressLabel(source.processing)}</strong>. Worker xử
-                lý nền; có thể rời trang này.
+                <strong>{progressLabel(source.processing)}</strong>. Hệ thống
+                xử lý nền; bạn có thể rời trang này.
               </p>
             ) : source.stage === "raw" && !source.can_convert ? (
               <p>{source.conversion_note}</p>
             ) : source.stage === "raw" ? (
               <p>
-                Trích xuất sẽ tự chọn bộ chuyển đổi theo nội dung file rồi chạy
-                bước Extract, không cần Convert thủ công. Convert chỉ tạo bản
-                text để xem trước. File gốc được giữ nguyên.
+                Bấm trích xuất để chuyển tài liệu thành văn bản và tìm kiến thức
+                trong đó. “Chuyển thành văn bản” chỉ tạo bản xem trước. File gốc
+                được giữ nguyên.
               </p>
             ) : null}
             {canExtract(source) && (
-              <>
+              <details className="km-advanced">
+                <summary>
+                  Cách trích xuất: {MODES[mode]}
+                </summary>
                 <label className="vc-field">
-                  <span>Mode trích xuất cho nguồn này</span>
+                  <span>Cách trích xuất cho tài liệu này</span>
                   <select
                     value={mode}
                     disabled={busy || running}
@@ -1430,11 +1444,11 @@ export function KnowledgeSourcePage() {
                   </select>
                 </label>
                 <p className="vc-muted">
-                  Mode được chọn riêng cho từng nguồn. Hỏi đáp vẫn dùng cấu hình
-                  truy xuất của knowledge base; không phải mọi mode đều được tìm
-                  kiếm trong mọi KB.
+                  Lựa chọn này chỉ áp dụng cho tài liệu này. Hỏi đáp vẫn dùng cấu
+                  hình tìm kiếm của kho; không phải cách trích xuất nào cũng được
+                  tìm kiếm trong mọi kho.
                 </p>
-              </>
+              </details>
             )}
             {(source.can_convert || canExtract(source)) && (
               <div className="km-actions">
@@ -1447,7 +1461,7 @@ export function KnowledgeSourcePage() {
                     }
                     data-testid="convert-source"
                   >
-                    Chuyển thành text
+                    Chuyển thành văn bản
                   </Button>
                 )}
                 {canExtract(source) && (
@@ -1532,14 +1546,14 @@ export function KnowledgeSourcePage() {
               aria-selected={mobileTab === "transcript"}
               onClick={() => setMobileTab("transcript")}
             >
-              Text / Bằng chứng
+              Bằng chứng gốc
             </button>
             <button
               role="tab"
               aria-selected={mobileTab === "knowledge"}
               onClick={() => setMobileTab("knowledge")}
             >
-              Kết quả / Duyệt
+              Kiến thức trích xuất
             </button>
           </div>
           <div className="vc-columns" data-tab={mobileTab}>
@@ -1567,7 +1581,7 @@ export function KnowledgeSourcePage() {
                   <div>
                     <h2>Văn bản nguồn</h2>
                     <p className="vc-muted">
-                      Bản text dùng để trích xuất. File gốc được giữ riêng.
+                      Văn bản dùng để trích xuất. File gốc được giữ riêng.
                     </p>
                   </div>
                 </header>
@@ -1598,8 +1612,8 @@ export function KnowledgeSourcePage() {
                 </pre>
                 {source.text_truncated && (
                   <p className="vc-muted">
-                    Đang xem 100.000 ký tự đầu. Trích xuất document chunks dùng
-                    toàn bộ văn bản.
+                    Đang xem 100.000 ký tự đầu. Bước trích xuất dùng toàn bộ
+                    văn bản.
                   </p>
                 )}
               </section>
@@ -1608,7 +1622,7 @@ export function KnowledgeSourcePage() {
               <section className="vc-panel vc-knowledge">
                 <header className="vc-panel-head">
                   <div>
-                    <h2>Document chunks</h2>
+                    <h2>Đoạn tài liệu</h2>
                     <p className="vc-muted">
                       Mỗi đoạn giữ ID nguồn và lịch sử duyệt. Đoạn bị loại được
                       giữ để truy vết và không xuất hiện trong tìm kiếm.
@@ -1616,7 +1630,7 @@ export function KnowledgeSourcePage() {
                   </div>
                 </header>
                 {!source.chunks.length && (
-                  <p className="vc-muted">Chưa có chunks.</p>
+                  <p className="vc-muted">Chưa có đoạn tài liệu.</p>
                 )}
                 <ul className="vc-records">
                   {source.chunks.map((chunk) => (
@@ -1642,6 +1656,39 @@ export function KnowledgeSourcePage() {
           </div>
         </>
       )}
+      <details className="km-technical" data-testid="source-technical">
+        <summary>Chi tiết kỹ thuật</summary>
+        <dl className="km-kb-metadata">
+          <div>
+            <dt>Kho</dt>
+            <dd>
+              <code>{kb}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>Mã nguồn</dt>
+            <dd>
+              <code>{source.id}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>Loại nguồn</dt>
+            <dd>{source.kind}</dd>
+          </div>
+          <div>
+            <dt>Định dạng</dt>
+            <dd>{source.content_type ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Giai đoạn</dt>
+            <dd>{source.stage}</dd>
+          </div>
+          <div>
+            <dt>Cách trích xuất</dt>
+            <dd>{source.mode ?? "—"}</dd>
+          </div>
+        </dl>
+      </details>
     </main>
   );
 }

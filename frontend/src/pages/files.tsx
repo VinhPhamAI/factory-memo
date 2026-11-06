@@ -10,15 +10,19 @@ import {
   ExternalLink,
   Activity,
   Check,
+  Download,
+  Eye,
 } from "lucide-react";
 import { useAuthClient } from "@/hooks/auth";
 import { attachLibraryFile } from "@/services/document-api";
 import { listConfiguredKnowledgeBases } from "@/services/knowledge-api";
 import type { KnowledgeBase } from "@/types";
 import { FilePreview } from "@/components/file-preview";
+import { LibraryFileDialog } from "@/components/library-file-dialog";
 import { listManagedSources, removeManagedSource, sourceLink, type ManagedSource } from "@/services/knowledge-management";
 import {
   ACCEPTED_EXTENSIONS,
+  downloadFile,
   openFile,
   FileApiError,
   listFiles,
@@ -58,7 +62,7 @@ export function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** The signed-in user's own files: upload, download and delete. */
+/** The signed-in user's own files: upload, preview, download and remove from knowledge. */
 export function FilesPage() {
   const client = useAuthClient();
   const input = useRef<HTMLInputElement>(null);
@@ -76,6 +80,7 @@ export function FilesPage() {
   const [sourcesRevision, setSourcesRevision] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [stateFile, setStateFile] = useState<LibraryFile | null>(null);
+  const [previewFile, setPreviewFile] = useState<LibraryFile | null>(null);
   const toasts = useToasts();
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [pendingRemove, setPendingRemove] = useState<LibraryFile[]>([]);
@@ -90,9 +95,9 @@ export function FilesPage() {
         const found = items.find((item) => item.is_default)?.name ?? "";
         setKnowledgeBases(items);
         setDefaultKb(found);
-        if (!found) setKbError("Chưa có knowledge base mặc định. Liên hệ quản trị viên để chọn trước khi tải file.");
+        if (!found) setKbError("Chưa có kho kiến thức mặc định. Liên hệ quản trị viên để chọn trước khi tải file.");
       })
-      .catch(() => { if (!abort.signal.aborted) setKbError("Không kiểm tra được knowledge base mặc định. Hãy tải lại trang và thử lại."); });
+      .catch(() => { if (!abort.signal.aborted) setKbError("Không kiểm tra được kho kiến thức mặc định. Hãy tải lại trang và thử lại."); });
     return () => abort.abort();
   }, [client]);
 
@@ -153,13 +158,13 @@ export function FilesPage() {
     try {
       const current = await listConfiguredKnowledgeBases(new AbortController().signal, client);
       if (!current.some((item) => item.name === defaultKb && item.is_default)) {
-        setKbError("Knowledge base mặc định đã thay đổi. Hãy tải lại trang trước khi tải file.");
+        setKbError("Kho kiến thức mặc định đã thay đổi. Hãy tải lại trang trước khi tải file.");
         setDefaultKb("");
         setUploading(false);
         return;
       }
     } catch {
-      setKbError("Không kiểm tra được knowledge base mặc định. Hãy tải lại trang và thử lại.");
+      setKbError("Không kiểm tra được kho kiến thức mặc định. Hãy tải lại trang và thử lại.");
       setUploading(false);
       return;
     }
@@ -183,7 +188,7 @@ export function FilesPage() {
       const result = await attachLibraryFile(client, targetKb, file.id, "knowledge");
       setSourcesRevision((revision) => revision + 1);
       if (result.duplicate) {
-        setRowError(file.id, "File đã có trong knowledge base. Xem nguồn hiện có để kiểm tra trạng thái xử lý.");
+        setRowError(file.id, "File đã có trong kho kiến thức. Xem nguồn hiện có để kiểm tra trạng thái xử lý.");
       } else if (result.job_error || !result.job) {
         setRowError(file.id, `File đã lưu nhưng chưa được đưa vào xử lý: ${result.job_error || "Không nhận được xác nhận từ máy chủ."}`);
       } else {
@@ -202,6 +207,14 @@ export function FilesPage() {
     }
   }
 
+  async function download(file: LibraryFile) {
+    try {
+      await downloadFile(client, file);
+    } catch (error) {
+      toasts.show("error", `“${file.filename}”: ${messageOf(error)}`);
+    }
+  }
+
   async function confirmRemove() {
     if (!pendingRemove.length) return;
     setDeleting(true);
@@ -211,7 +224,7 @@ export function FilesPage() {
       if (!source) continue;
       try {
         await removeManagedSource(source, client);
-        toasts.show("success", `Đã gỡ “${file.filename}” khỏi knowledge base.`);
+        toasts.show("success", `Đã gỡ “${file.filename}” khỏi kho kiến thức.`);
       } catch (error) {
         toasts.show("error", `“${file.filename}”: ${error instanceof Error ? error.message : "Không gỡ được nguồn."}`);
       }
@@ -225,11 +238,11 @@ export function FilesPage() {
   return (
     <main className="vc-page library-page" data-testid="file-library">
       <header className="library-heading">
-        <h1>Library</h1>
+        <h1>Thư viện tài liệu</h1>
         <div className="library-toolbar">
           <label className="library-search">
             <Search size={18} aria-hidden="true" />
-            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search library" aria-label="Search library" />
+            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm tài liệu" aria-label="Tìm tài liệu" />
           </label>
           <Button
             className="files-upload-button"
@@ -238,7 +251,7 @@ export function FilesPage() {
             data-testid="files-upload"
           >
             {uploading ? <Loader2 className="animate-spin" /> : <CloudUpload />}
-            Upload Files
+            Tải tài liệu lên
           </Button>
           <input
             ref={input}
@@ -272,31 +285,45 @@ export function FilesPage() {
         <div className="km-empty" data-testid="files-empty">
           <FolderOpen size={32} />
           <h2>Chưa có file nào</h2>
-          {kbReady && <p>Bấm “Upload Files” để thêm file đầu tiên.</p>}
+          {kbReady && <p>Bấm “Tải tài liệu lên” để thêm tài liệu đầu tiên.</p>}
         </div>
       ) : (
         <section className="library-recent" aria-labelledby="library-recent-title">
-          <h2 id="library-recent-title">Recently added</h2>
-          {selected.size > 0 && <div className="library-selection"><span>Đã chọn {selected.size} file</span><Button variant="outline" size="sm" disabled={sourcesError !== "" || !files.some((file) => selected.has(file.id) && sourceFor(file))} onClick={() => setPendingRemove(files.filter((file) => selected.has(file.id) && sourceFor(file)))}>Remove from knowledge base</Button><Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>Bỏ chọn</Button></div>}
+          <h2 id="library-recent-title">Mới thêm gần đây</h2>
+          {selected.size > 0 && <div className="library-selection"><span>Đã chọn {selected.size} file</span><Button variant="outline" size="sm" disabled={sourcesError !== "" || !files.some((file) => selected.has(file.id) && sourceFor(file))} onClick={() => setPendingRemove(files.filter((file) => selected.has(file.id) && sourceFor(file)))}>Gỡ khỏi kho kiến thức</Button><Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>Bỏ chọn</Button></div>}
           {!files.some((file) => file.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && <p className="vc-muted">Không tìm thấy file phù hợp.</p>}
         <ul className="library-grid">
           {files.filter((file) => file.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map((file) => (
             <li className="library-card" key={file.id} data-testid="library-file">
               <div className="library-card-image">
-                <FilePreview file={file} />
+                {/* Pointer shortcut; the filename button is the keyboard target. */}
+                <div className="library-preview-target" onClick={() => setPreviewFile(file)}>
+                  <FilePreview file={file} />
+                </div>
                 <button type="button" className="library-select" aria-label={`Chọn ${file.filename}`} aria-pressed={selected.has(file.id)} onClick={() => setSelected((current) => { const next = new Set(current); if (!next.delete(file.id)) next.add(file.id); return next; })}>{selected.has(file.id) && <Check size={16} />}</button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild><button type="button" className="library-menu-trigger" aria-label={`Tùy chọn ${file.filename}`}><MoreHorizontal size={20} /></button></DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="library-menu">
-                    <DropdownMenuItem onSelect={() => void open(file)}><ExternalLink /> Open file</DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => setStateFile(file)}><Activity /> Knowledge State</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setPreviewFile(file)}><Eye /> Xem trước</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => void open(file)}><ExternalLink /> Mở tệp gốc</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => void download(file)}><Download /> Tải xuống</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setStateFile(file)}><Activity /> Trạng thái xử lý</DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem variant="destructive" disabled={!sourceFor(file) || !!sourcesError} onSelect={() => setPendingRemove([file])}><Trash2 /> Remove from knowledge base</DropdownMenuItem>
+                    <DropdownMenuItem variant="destructive" disabled={!sourceFor(file) || !!sourcesError} onSelect={() => setPendingRemove([file])}><Trash2 /> Gỡ khỏi kho kiến thức</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
               <div className="library-card-content">
-                <div className="library-filename" title={file.filename}>{file.filename}</div>
+                <button
+                  type="button"
+                  id={`library-open-${file.id}`}
+                  className="library-filename"
+                  title={file.filename}
+                  aria-label={`Xem trước ${file.filename}`}
+                  onClick={() => setPreviewFile(file)}
+                >
+                  {file.filename}
+                </button>
                 <p className="library-metadata">
                   {TYPE_LABELS[file.content_type] ?? file.content_type} ·{" "}
                   {formatSize(file.size_bytes)} ·{" "}
@@ -316,23 +343,23 @@ export function FilesPage() {
 
       <Dialog open={!!stateFile} onOpenChange={(open) => !open && setStateFile(null)}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Knowledge State</DialogTitle><DialogDescription>{stateFile?.filename}</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>Trạng thái xử lý</DialogTitle><DialogDescription>{stateFile?.filename}</DialogDescription></DialogHeader>
           {stateFile && (() => {
             const source = sourceFor(stateFile);
             if (sourcesError) return <p role="alert">{sourcesError}</p>;
-            if (!source) return <><p>File chưa được liên kết với knowledge base hoặc trạng thái đang tải.</p>{rowErrors[stateFile.id] && <Button disabled={!kbReady || uploading} onClick={async () => { setUploading(true); try { await queueFile(stateFile, defaultKb); } finally { setUploading(false); } }}>Thử lại xử lý</Button>}</>;
+            if (!source) return <><p>File chưa được liên kết với kho kiến thức hoặc trạng thái đang tải.</p>{rowErrors[stateFile.id] && <Button disabled={!kbReady || uploading} onClick={async () => { setUploading(true); try { await queueFile(stateFile, defaultKb); } finally { setUploading(false); } }}>Thử lại xử lý</Button>}</>;
             const processing = source.processing;
             const label = processing.status === "queued" ? "Đang chờ xử lý" : processing.status === "running" ? "Đang xử lý" : processing.status === "failed" || processing.status === "interrupted" ? "Xử lý thất bại" : source.stage === "extracted" ? "Đã xử lý" : "Chưa hoàn tất xử lý";
-            return <><p><strong>{label}</strong>{source.review === "pending" && " · Tri thức đang chờ duyệt"} · KB {source.kb}</p>{processing.error && <p role="alert">{processing.error}</p>}<Link className="link-button" to={sourceLink(source)}>Xem kết quả và chi tiết</Link>{sourcesFor(stateFile).filter((other) => other.id !== source.id).map((other) => <p key={other.id}><Link className="link-button" to={sourceLink(other)}>Xem nguồn trong KB {other.kb}</Link></p>)}</>;
+            return <><p><strong>{label}</strong>{source.review === "pending" && " · Tri thức đang chờ duyệt"} · Kho {source.kb}</p>{processing.error && <p role="alert">{processing.error}</p>}<Link className="link-button" to={sourceLink(source)}>Xem kết quả và chi tiết</Link>{sourcesFor(stateFile).filter((other) => other.id !== source.id).map((other) => <p key={other.id}><Link className="link-button" to={sourceLink(other)}>Xem nguồn trong kho {other.kb}</Link></p>)}</>;
           })()}
         </DialogContent>
       </Dialog>
       <Dialog open={pendingRemove.length > 0} onOpenChange={(open) => !open && !deleting && setPendingRemove([])}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Remove from knowledge base?</DialogTitle>
+            <DialogTitle>Gỡ khỏi kho kiến thức?</DialogTitle>
             <DialogDescription>
-              Gỡ {pendingRemove.length === 1 ? `“${pendingRemove[0].filename}” khỏi KB ${sourceFor(pendingRemove[0])?.kb ?? ""}` : `${pendingRemove.length} file đã chọn khỏi các KB tương ứng`}. File vẫn còn trong Library; tri thức chỉ còn tìm kiếm được nếu có nguồn khác đang hoạt động. Nguồn có thể được dùng chung với file trùng nội dung.
+              Gỡ {pendingRemove.length === 1 ? `“${pendingRemove[0].filename}” khỏi kho ${sourceFor(pendingRemove[0])?.kb ?? ""}` : `${pendingRemove.length} file đã chọn khỏi các kho tương ứng`}. File vẫn còn trong Thư viện tài liệu; tri thức chỉ còn tìm kiếm được nếu có nguồn khác đang hoạt động. Nguồn có thể được dùng chung với file trùng nội dung.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -348,11 +375,17 @@ export function FilesPage() {
               data-testid="files-confirm-delete"
             >
               {deleting && <Loader2 className="animate-spin" />}
-              Gỡ khỏi knowledge base
+              Gỡ khỏi kho kiến thức
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <LibraryFileDialog
+        file={previewFile}
+        onClose={() => setPreviewFile(null)}
+        onOpenOriginal={(file) => void open(file)}
+        onDownload={(file) => void download(file)}
+      />
       <ToastStack toasts={toasts.toasts} onDismiss={toasts.dismiss} />
     </main>
   );

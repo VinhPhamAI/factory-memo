@@ -187,24 +187,24 @@ describe("knowledge management", () => {
     show("/knowledge");
 
     await screen.findByRole("option", { name: "General" });
-    expect(screen.queryByRole("button", { name: "Sửa knowledge base" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Xóa knowledge base" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sửa thông tin" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Xóa kho" })).toBeNull();
     const user = userEvent.setup();
     await user.click(screen.getByRole("link", { name: "Knowledge base" }));
     expect(await screen.findByText("Đã nhận 2")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Sửa knowledge base" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sửa thông tin" }));
     fireEvent.change(screen.getByLabelText("Tiêu đề"), { target: { value: "Line A" } });
     fireEvent.click(screen.getByRole("button", { name: "Lưu thay đổi" }));
     await screen.findByRole("option", { name: "Line A" });
-    fireEvent.click(screen.getByRole("button", { name: "Xóa knowledge base" }));
+    fireEvent.click(screen.getByRole("button", { name: "Xóa kho" }));
     const confirm = screen.getByRole("button", { name: "Xác nhận xóa" });
     expect(confirm).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Mã xác nhận"), { target: { value: "general" } });
     fireEvent.click(confirm);
     await waitFor(() => expect(screen.getByTestId("management-kb")).toHaveValue("backup"));
     await user.click(screen.getByRole("link", { name: "Nguồn dữ liệu" }));
-    expect(screen.queryByRole("button", { name: "Sửa knowledge base" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Xóa knowledge base" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sửa thông tin" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Xóa kho" })).toBeNull();
   });
 
   it("creates a knowledge base from its own tab and selects the result", async () => {
@@ -236,7 +236,7 @@ describe("knowledge management", () => {
     await user.click(screen.getByTestId("kb-create"));
     await screen.findByRole("option", { name: "Máy ép" });
     expect(screen.getByTestId("management-kb")).toHaveValue("may_ep");
-    expect(screen.queryByRole("button", { name: "Xóa knowledge base" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Xóa kho" })).toBeNull();
   });
 
   it("lets the submitter remove a queued source and disables removal for running jobs", async () => {
@@ -269,7 +269,7 @@ describe("knowledge management", () => {
     show("/knowledge");
     const [allowed, disabled] = await screen.findAllByRole("button", { name: "Gỡ nguồn" });
     expect(disabled).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Sửa knowledge base" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sửa thông tin" })).not.toBeInTheDocument();
     fireEvent.click(allowed);
     fireEvent.click(screen.getByRole("button", { name: "Xác nhận gỡ" }));
     await waitFor(() => expect(screen.queryByText("notes.txt")).not.toBeInTheDocument());
@@ -361,7 +361,7 @@ describe("knowledge management", () => {
       "Chuyển đổi & trích xuất",
     );
     expect(
-      screen.getByText(/tự chọn bộ chuyển đổi theo nội dung file/),
+      screen.getByText(/chuyển tài liệu thành văn bản và tìm kiến thức/),
     ).toBeInTheDocument();
     fireEvent.change(screen.getByTestId("extraction-mode"), {
       target: { value: "documents" },
@@ -832,7 +832,7 @@ describe("knowledge management", () => {
     fireEvent.click(await screen.findByTestId("extract-source"));
     const note = await screen.findByTestId("overlap-note");
     expect(note).toHaveTextContent(
-      "Chưa trích xuất: nội dung gần giống nguồn đã trích xuất (Knowledge items).",
+      "Chưa trích xuất: nội dung gần giống nguồn đã trích xuất (Mục tri thức).",
     );
     const items = note.querySelectorAll("li");
     expect(items[0]).toHaveTextContent(

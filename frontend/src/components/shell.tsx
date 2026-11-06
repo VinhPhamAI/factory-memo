@@ -137,7 +137,7 @@ export function Shell() {
       <Link to="/record" className="brand" onClick={() => setMenuOpen(false)}>
         <BrandMark />
         <span>
-          Factory memo
+          Factory Memo
           <span className="brand-caption">Tri thức từ chuyên gia</span>
         </span>
       </Link>
@@ -242,7 +242,7 @@ export function Shell() {
         <header className="chat-focus-topbar">
           <Link to="/record" className="chat-focus-brand">
             <BrandMark small />
-            <span>Factory memo</span>
+            <span>Factory Memo</span>
           </Link>
         </header>
         {workspace.error && (
@@ -279,7 +279,7 @@ export function Shell() {
               <Menu size={19} />
             </Button>
             <span className="workspace-breadcrumb">
-              Factory memo<span>/</span>
+              Factory Memo<span>/</span>
               <strong>
                 {index >= 0
                   ? `Bước ${index + 1} · ${steps[index].label}`

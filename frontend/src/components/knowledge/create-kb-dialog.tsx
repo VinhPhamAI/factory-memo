@@ -62,7 +62,7 @@ function CreateForm({
 
   const id = nameEdited ? name : suggestKbName(title);
   const nameProblem = kbNameProblem(id, taken);
-  const titleProblem = title.trim() ? "" : "Nhập tên knowledge base.";
+  const titleProblem = title.trim() ? "" : "Nhập tên kho kiến thức.";
 
   async function submit() {
     setTouched(true);
@@ -93,7 +93,7 @@ function CreateForm({
       data-testid="create-kb"
     >
       <DialogHeader>
-        <DialogTitle>Tạo knowledge base mới</DialogTitle>
+        <DialogTitle>Tạo kho kiến thức mới</DialogTitle>
         <DialogDescription>
           Tạo một bộ sưu tập để lưu nguồn dữ liệu, trích xuất tri thức và hỏi đáp.
         </DialogDescription>
@@ -137,7 +137,7 @@ function CreateForm({
           <small className="vc-inline-error">{nameProblem}</small>
         ) : (
           <small>
-            Mã dùng để định danh knowledge base và được cố định sau khi tạo.
+            Mã dùng để định danh kho và được cố định sau khi tạo.
           </small>
         )}
       </label>
@@ -152,10 +152,10 @@ function CreateForm({
           maxLength={MAX_KB_DESCRIPTION}
           disabled={busy}
           onChange={(event) => setDescription(event.target.value)}
-          placeholder="Knowledge base này chứa gì, dành cho ai."
+          placeholder="Kho này chứa gì, dành cho ai."
           data-testid="kb-description"
         />
-        <small>Hiện khi chọn knowledge base để ghi lại hoặc hỏi đáp.</small>
+        <small>Hiện khi chọn kho để ghi lại hoặc hỏi đáp.</small>
       </label>
 
       {error && (
@@ -175,7 +175,7 @@ function CreateForm({
         </Button>
         <Button type="submit" disabled={busy} data-testid="kb-create">
           {busy && <Loader2 className="animate-spin" />}
-          {busy ? "Đang tạo…" : "Tạo knowledge base"}
+          {busy ? "Đang tạo…" : "Tạo kho kiến thức"}
         </Button>
       </div>
     </form>

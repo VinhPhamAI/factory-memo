@@ -219,7 +219,7 @@ describe("ConversationsPage", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("chat-answer")).toHaveTextContent("[S4]");
 
-    expect(document.querySelector("img")).toBeNull();
+    expect(screen.getByTestId("answer-text").querySelector("img")).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Mở nguồn S9" }),
     ).not.toBeInTheDocument();
@@ -231,10 +231,34 @@ describe("ConversationsPage", () => {
     expect(card).toHaveTextContent("E12: kiểm tra cảm biến áp suất.");
   });
 
+  it("offers error-code and library shortcuts on a new chat", async () => {
+    serve({});
+    show("/ask");
+    expect(
+      await screen.findByRole("heading", { name: "Trò chuyện mới" }),
+    ).toBeInTheDocument();
+    const input = screen.getByTestId("chat-input") as HTMLTextAreaElement;
+    expect(input).toHaveAttribute("placeholder", "Nhập câu hỏi hoặc mã lỗi…");
+
+    fireEvent.click(screen.getByRole("button", { name: "Tra mã lỗi" }));
+    expect(input.value).toBe("Máy báo mã lỗi ");
+    expect(input).toHaveFocus();
+
+    // A draft the user already typed is never replaced.
+    fireEvent.change(input, { target: { value: "Máy ép kêu to" } });
+    fireEvent.click(screen.getByRole("button", { name: "Tra mã lỗi" }));
+    expect(input.value).toBe("Máy ép kêu to");
+
+    expect(screen.getByRole("link", { name: "Tìm tài liệu" })).toHaveAttribute(
+      "href",
+      "/files",
+    );
+  });
+
   it("says when the knowledge search found nothing or failed", async () => {
     const { streams } = serve({});
     show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     ask("Lỗi E12");
     await waitFor(() => expect(streams).toHaveLength(1));
     streams[0].push(
@@ -252,7 +276,7 @@ describe("ConversationsPage", () => {
       Response.json({ text: "máy ép báo lỗi e mười hai" }),
     );
     show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     fireEvent.click(screen.getByTestId("dictation"));
     await screen.findByRole("button", { name: "Dừng ghi âm" });
     fireEvent.click(screen.getByTestId("dictation"));
@@ -278,7 +302,7 @@ describe("ConversationsPage", () => {
       () => new Promise<Response>((resolve) => (respond = resolve)),
     );
     const router = show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     fireEvent.click(screen.getByTestId("dictation"));
     await screen.findByRole("button", { name: "Dừng ghi âm" });
     fireEvent.click(screen.getByTestId("dictation"));
@@ -310,7 +334,7 @@ describe("ConversationsPage", () => {
     const open = vi.mocked(MicRecorder.open);
     open.mockClear();
     show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     fireEvent.click(screen.getByTestId("dictation"));
     fireEvent.click(screen.getByTestId("dictation"));
     await screen.findByRole("button", { name: "Dừng ghi âm" });
@@ -390,7 +414,7 @@ describe("ConversationsPage", () => {
   it("marks an answer whose stream ended without a final event as unconfirmed", async () => {
     const { streams } = serve({});
     show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     ask("Lỗi E12");
     await waitFor(() => expect(streams).toHaveLength(1));
     streams[0].push('event: text\ndata: {"delta":"partial"}\n\n');
@@ -407,7 +431,7 @@ describe("ConversationsPage", () => {
   it("shows an agent error without sending again", async () => {
     const { streams, fetch } = serve({});
     show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     ask("Lỗi E12");
     await waitFor(() => expect(streams).toHaveLength(1));
     streams[0].push(
@@ -427,7 +451,7 @@ describe("ConversationsPage", () => {
   it("shows reasoning in a collapsed thinking block that opens on click", async () => {
     const { streams } = serve({});
     show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     ask("Lỗi E12");
     await waitFor(() => expect(streams).toHaveLength(1));
     streams[0].push(
@@ -463,7 +487,7 @@ describe("ConversationsPage", () => {
       "chat-b": [{ role: "user", text: "Câu hỏi của máy B" }],
     });
     const router = show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     ask("Câu hỏi của máy A");
     await waitFor(() => expect(streams).toHaveLength(1));
 
@@ -479,7 +503,7 @@ describe("ConversationsPage", () => {
     const histories: Record<string, unknown[]> = {};
     const { streams } = serve(histories);
     const router = show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     ask("Lỗi E12");
     await waitFor(() => expect(streams).toHaveLength(1));
     const list = {
@@ -575,7 +599,7 @@ describe("ConversationsPage", () => {
     const histories: Record<string, unknown[]> = {};
     const { streams } = serve(histories);
     const router = show("/ask/chat-a");
-    await screen.findByText(/Máy đang gặp vấn đề gì/);
+    await screen.findByTestId("chat-shortcuts");
     ask("Lỗi E12");
     await waitFor(() => expect(streams).toHaveLength(1));
     const reply_id = "016fbe12-6d56-7ed2-af5f-1d21779fabc7";

@@ -67,7 +67,9 @@ describe("MachineDiagnosisPanel", () => {
 
   it("covers the findings while the mock tool is running", () => {
     render(<MachineDiagnosisPanel state={{ ...ready, phase: "running" }} onClose={() => {}} onOpen={() => {}} />);
-    expect(screen.getByTestId("diagnosis-running")).toHaveTextContent("machine_diagnosis");
+    expect(screen.getByTestId("diagnosis-running")).toHaveTextContent("Đang chạy chẩn đoán");
+    // Covered checklist controls cannot take keyboard focus.
+    expect(screen.getByText("Kiểm tra tình trạng bôi trơn").closest("[inert]")).not.toBeNull();
   });
 
   it("closes with Escape and leaves a reopen button", async () => {
@@ -80,6 +82,44 @@ describe("MachineDiagnosisPanel", () => {
     rerender(<MachineDiagnosisPanel state={{ ...ready, open: false }} onClose={onClose} onOpen={onOpen} />);
     await userEvent.click(screen.getByTestId("diagnosis-reopen"));
     expect(onOpen).toHaveBeenCalled();
+  });
+
+  it("holds focus in an overlay and returns it to the opener on close", async () => {
+    const outside = document.createElement("button");
+    outside.textContent = "Xem 3D";
+    document.body.append(outside);
+    outside.focus();
+    const { rerender } = render(
+      <MachineDiagnosisPanel variant="overlay" state={ready} onClose={() => {}} onOpen={() => {}} />,
+    );
+    const panel = screen.getByRole("dialog", { name: "Chẩn đoán máy" });
+    const close = screen.getByRole("button", { name: "Đóng chẩn đoán" });
+    expect(close).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(panel).toContainElement(document.activeElement as HTMLElement);
+    rerender(
+      <MachineDiagnosisPanel variant="overlay" state={{ ...ready, open: false }} onClose={() => {}} onOpen={() => {}} />,
+    );
+    expect(outside).toHaveFocus();
+    outside.remove();
+  });
+
+  it("keeps Tab inside the overlay after a click on non-interactive content", async () => {
+    render(<MachineDiagnosisPanel variant="overlay" state={ready} onClose={() => {}} onOpen={() => {}} />);
+    const panel = screen.getByRole("dialog", { name: "Chẩn đoán máy" });
+    await userEvent.click(screen.getByText("Triệu chứng phát hiện"));
+    expect(panel).toHaveFocus();
+    await userEvent.tab();
+    expect(panel).toContainElement(document.activeElement as HTMLElement);
+    expect(panel).not.toBe(document.activeElement);
+  });
+
+  it("stays a nonmodal region when docked beside the chat", () => {
+    render(<MachineDiagnosisPanel state={ready} onClose={() => {}} onOpen={() => {}} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByTestId("diagnosis-panel")).not.toContainElement(
+      document.activeElement as HTMLElement,
+    );
   });
 
   it("renders nothing before any diagnosis", () => {

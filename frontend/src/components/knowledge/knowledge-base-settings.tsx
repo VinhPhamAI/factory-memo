@@ -37,6 +37,18 @@ function counts(values: Record<string, number>, labels: Record<string, string>) 
     .join(" · ");
 }
 
+/**
+ * Show a knowledge base's contents, edit and delete actions, and its
+ * technical details behind a disclosure.
+ *
+ * Args:
+ *   name: Knowledge base ID.
+ *   role: Signed-in role; admins and experts may edit, only admins delete.
+ *   revision: Changes when the caller wants the details reloaded.
+ *   onChanged: Called after a successful edit or delete.
+ *   isDefault: Whether new uploads go here; the default cannot be deleted.
+ *   compact: Hide the title when the caller already shows it.
+ */
 export function KnowledgeBaseSettings({
   name,
   role,
@@ -98,7 +110,7 @@ export function KnowledgeBaseSettings({
   }
 
   return (
-    <section aria-label="Chi tiết knowledge base">
+    <section aria-label="Thông tin kho kiến thức">
       {loadError && <p className="vc-notice error" role="alert">{loadError}</p>}
       {!detail && !loadError && (
         <p className="vc-muted" role="status">
@@ -119,37 +131,40 @@ export function KnowledgeBaseSettings({
                   setDescription(detail.description);
                   setActionError("");
                   setDialog("edit");
-                }}><Pencil /> Sửa knowledge base</Button>
+                }}><Pencil /> Sửa thông tin</Button>
                 {role === "admin" && (
-                  <Button variant="destructive" disabled={isDefault} title={isDefault ? "Chọn knowledge base mặc định khác trước khi xóa" : undefined} onClick={() => {
+                  <Button variant="destructive" disabled={isDefault} title={isDefault ? "Chọn kho mặc định khác trước khi xóa" : undefined} onClick={() => {
                     setConfirmation("");
                     setActionError("");
                     setDialog("delete");
-                  }}><Trash2 /> Xóa knowledge base</Button>
+                  }}><Trash2 /> Xóa kho</Button>
                 )}
               </div>
             )}
           </header>
-          {isDefault && role === "admin" && <p className="vc-muted">Chọn một knowledge base mặc định khác trước khi xóa mục này.</p>}
-          <dl className="km-kb-metadata">
-            <div><dt>Mã</dt><dd><code>{detail.name}</code></dd></div>
-            <div><dt>Mẫu</dt><dd>{detail.template}</dd></div>
-            <div><dt>Người tạo</dt><dd>{detail.created_by}</dd></div>
-            <div><dt>Ngày tạo</dt><dd>{dateTime(detail.created_at)}</dd></div>
-            <div><dt>Cập nhật</dt><dd>{dateTime(detail.updated_at)}</dd></div>
-          </dl>
+          {isDefault && role === "admin" && <p className="vc-muted">Chọn một kho mặc định khác trước khi xóa kho này.</p>}
           <div className="km-kb-counts">
             <div>
-              <h3>Nguồn dữ liệu</h3>
-              <p>{counts(detail.source_counts, sourceStatus)}</p>
+              <h3>Tài liệu nguồn</h3>
+              <p>{counts(detail.source_counts, sourceStatus) || "Chưa có"}</p>
             </div>
             {Object.entries(detail.chunk_counts).map(([kind, values]) => (
               <div key={kind}>
                 <h3>{chunkKind[kind as keyof typeof chunkKind] ?? kind}</h3>
-                <p>{counts(values, chunkStatus)}</p>
+                <p>{counts(values, chunkStatus) || "Chưa có"}</p>
               </div>
             ))}
           </div>
+          <details className="km-kb-technical">
+            <summary>Chi tiết kỹ thuật</summary>
+            <dl className="km-kb-metadata">
+              <div><dt>Mã</dt><dd><code>{detail.name}</code></dd></div>
+              <div><dt>Mẫu</dt><dd>{detail.template}</dd></div>
+              <div><dt>Người tạo</dt><dd>{detail.created_by}</dd></div>
+              <div><dt>Ngày tạo</dt><dd>{dateTime(detail.created_at)}</dd></div>
+              <div><dt>Cập nhật</dt><dd>{dateTime(detail.updated_at)}</dd></div>
+            </dl>
+          </details>
         </article>
       )}
       <Dialog open={!!dialog} onOpenChange={(open) => {
@@ -161,10 +176,10 @@ export function KnowledgeBaseSettings({
             void submit();
           }}>
             <DialogHeader>
-              <DialogTitle>{dialog === "delete" ? "Xóa knowledge base" : "Sửa knowledge base"}</DialogTitle>
+              <DialogTitle>{dialog === "delete" ? "Xóa kho kiến thức" : "Sửa thông tin kho"}</DialogTitle>
               <DialogDescription>
                 {dialog === "delete"
-                  ? `Nhập mã “${name}” để xác nhận xóa. Knowledge base sẽ không còn khả dụng; các tác vụ đang chờ sẽ bị dừng. Dữ liệu và lịch sử được giữ lại.`
+                  ? `Nhập mã “${name}” để xác nhận xóa. Kho sẽ không còn dùng được; các tác vụ đang chờ sẽ bị dừng. Dữ liệu và lịch sử được giữ lại.`
                   : `Cập nhật thông tin hiển thị cho ${name}.`}
               </DialogDescription>
             </DialogHeader>

@@ -200,7 +200,7 @@ export function RecordPage() {
             </span>
             <h2>Sẵn sàng ghi âm tại Line 11 · Machining cell B</h2>
             <p>
-              Factory memo chuyển giọng nói thành văn bản và tách lời từng người
+              Factory Memo chuyển giọng nói thành văn bản và tách lời từng người
               nói.
               <br />
               Bản demo phát lại cuộc trao đổi thật của case MR-JE-AX167, không

@@ -23,7 +23,10 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { EvidencePanel } from "@/components/evidence-panel";
-import { MachineDiagnosisPanel } from "@/components/diagnosis/machine-diagnosis-panel";
+import {
+  diagnosisOverlayOpen,
+  MachineDiagnosisPanel,
+} from "@/components/diagnosis/machine-diagnosis-panel";
 import { useMachineDiagnosis } from "@/hooks/machine-diagnosis";
 import { BrandMark } from "@/components/brand";
 import { isLive } from "@/services/config";
@@ -267,7 +270,8 @@ export function AskPage() {
         controller.current = null;
         setSending(false);
       }
-      composer.current?.focus();
+      // A diagnosis overlay that covers the chat keeps focus until it closes.
+      if (!diagnosisOverlayOpen()) composer.current?.focus();
     }
   }
 
@@ -450,7 +454,7 @@ export function AskPage() {
                   >
                     <div className="assistant-label">
                       <BrandMark small />
-                      <span>Factory memo</span>
+                      <span>Factory Memo</span>
                       <span className="scope-pill">
                         {isLive ? `KB: ${thread?.kb}` : "Phạm vi: MR-JE-AX167"}
                       </span>

@@ -162,18 +162,27 @@ export function InquiryPage() {
   const attachedIds = new Set(inquiry.files.map((file) => file.file_id));
 
   return (
-    <main className="files-page" data-testid="inquiry-page">
+    <main className="inquiry-page inquiry-detail" data-testid="inquiry-page">
       <p>
-        <Link to="/inquiries">← Yêu cầu chuyên gia</Link>
+        <Link to="/inquiries" className="inquiry-back">
+          ← Yêu cầu chuyên gia
+        </Link>
       </p>
-      <h1>{inquiry.title || "(Chưa có tiêu đề)"}</h1>
-      <p className="field-note">
-        <Badge variant="secondary" data-testid="inquiry-status">
-          {STATUS_LABELS[inquiry.status] ?? inquiry.status}
-        </Badge>{" "}
-        Người gửi: {inquiry.requester_name}
-        {inquiry.assignee_name && ` · Chuyên gia: ${inquiry.assignee_name}`}
-      </p>
+      <header className="inquiry-detail-heading">
+        <h1>{inquiry.title || "(Chưa có tiêu đề)"}</h1>
+        <p className="field-note">
+          <Badge
+            variant="secondary"
+            className="inquiry-status"
+            data-status={inquiry.status}
+            data-testid="inquiry-status"
+          >
+            {STATUS_LABELS[inquiry.status] ?? inquiry.status}
+          </Badge>{" "}
+          Người gửi: {inquiry.requester_name}
+          {inquiry.assignee_name && ` · Chuyên gia: ${inquiry.assignee_name}`}
+        </p>
+      </header>
 
       {editable ? (
         <>
@@ -185,7 +194,7 @@ export function InquiryPage() {
               setFields((current) => ({ ...current, [name]: value }))
             }
           />
-          <h2>Bằng chứng</h2>
+          <h2 className="inquiry-section-title">Bằng chứng</h2>
           <EvidenceList
             items={evidence}
             onDownload={(fileId) => void download(fileId)}
@@ -200,8 +209,8 @@ export function InquiryPage() {
               });
             }}
           />
-          <h3>Tệp đính kèm</h3>
-          <ul>
+          <h3 className="inquiry-section-title">Tệp đính kèm</h3>
+          <ul className="inquiry-attachments">
             {inquiry.files
               .filter((file) => !referenced.has(file.file_id))
               .map((file) => (
@@ -230,7 +239,7 @@ export function InquiryPage() {
             <Paperclip size={14} /> Đính kèm file
           </Button>
           {library && (
-            <ul data-testid="file-picker">
+            <ul data-testid="file-picker" className="inquiry-file-picker">
               {library.length === 0 && <li>Thư viện chưa có file.</li>}
               {library
                 .filter((file) => !attachedIds.has(file.id))
@@ -266,7 +275,7 @@ export function InquiryPage() {
                 ))}
             </ul>
           )}
-          <label>
+          <label className="inquiry-expert">
             Chuyên gia
             <select
               aria-label="Chuyên gia"
@@ -318,21 +327,22 @@ export function InquiryPage() {
         </>
       ) : (
         <>
-          {FIELD_LABELS.map(([name, label]) => (
-            <section key={name}>
-              <h2>{label}</h2>
-              <p style={{ whiteSpace: "pre-wrap" }}>
-                {inquiry.context[name] || "—"}
-              </p>
-            </section>
-          ))}
-          <h2>Bằng chứng</h2>
+          <div className="inquiry-context">
+            {FIELD_LABELS.map(([name, label]) => (
+              <section key={name}>
+                <h2>{label}</h2>
+                <p style={{ whiteSpace: "pre-wrap" }}>
+                  {inquiry.context[name] || "—"}
+                </p>
+              </section>
+            ))}
+          </div>
+          <h2 className="inquiry-section-title">Bằng chứng</h2>
           <EvidenceList
             items={inquiry.context.evidence}
             onDownload={(fileId) => void download(fileId)}
           />
-          <h2>Phản hồi</h2>
-          <Timeline events={inquiry.events} />
+          {/* The next eligible action comes before the history it adds to. */}
           <ReviewActions
             actions={actions}
             busy={busy}
@@ -342,6 +352,8 @@ export function InquiryPage() {
               }, "Đã ghi nhận.")
             }
           />
+          <h2 className="inquiry-section-title">Lịch sử phản hồi</h2>
+          <Timeline events={inquiry.events} />
         </>
       )}
       <ToastStack toasts={toasts.toasts} onDismiss={toasts.dismiss} />

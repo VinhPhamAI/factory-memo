@@ -1,4 +1,12 @@
-import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+} from "react";
 import {
   Activity,
   ChevronRight,
@@ -33,6 +41,41 @@ const ProductionLineScene = lazy(() => import("./production-line-scene"));
 const METRIC_ICONS = { temperature: Thermometer, vibration: Waves, cycle: Timer, rate: Gauge } as const;
 
 const RUN_STEPS = ["Đọc tín hiệu dây chuyền", "So sánh với ngưỡng vận hành", "Xếp hạng nguyên nhân khả dĩ"];
+
+/** Width at which the docked panel floats above the chat instead of beside it. */
+const OVERLAY_QUERY = "(max-width: 1100px)";
+
+/** Report whether a media query matches and follow its changes. */
+function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    (notify) => {
+      const list = window.matchMedia?.(query);
+      list?.addEventListener("change", notify);
+      return () => list?.removeEventListener("change", notify);
+    },
+    () => window.matchMedia?.(query).matches ?? false,
+    () => false,
+  );
+}
+
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Report whether a diagnosis overlay currently covers the chat.
+ *
+ * Chat pages use this to avoid moving focus behind an open overlay.
+ */
+export function diagnosisOverlayOpen(): boolean {
+  return !!document.querySelector('[data-testid="diagnosis-panel"][aria-modal="true"]');
+}
+
+/** Focusable elements inside a container, skipping inert regions. */
+function focusableIn(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (element) => !element.closest("[inert]"),
+  );
+}
 
 function MetricRow({ metric }: { metric: Metric }) {
   const Icon = METRIC_ICONS[metric.icon];
@@ -128,12 +171,43 @@ export function MachineDiagnosisPanel({ state, onClose, onOpen, variant = "docke
   const [autoRotate, setAutoRotate] = useState(false);
   const [sceneError, setSceneError] = useState("");
   const scene = useRef<SceneApi | null>(null);
+  const panel = useRef<HTMLElement>(null);
+  const narrow = useMediaQuery(OVERLAY_QUERY);
+  // An overlay covers the chat, so it holds focus like a dialog until closed.
+  const modal = variant === "overlay" || narrow;
+  const visible = !!scenario && open;
   const [lastScenario, setLastScenario] = useState(scenario);
   if (scenario !== lastScenario) {
     // A new diagnosis selects its suspected station again.
     setLastScenario(scenario);
     if (scenario) setSelected(scenario.station);
   }
+
+  // The element focused before the overlay took focus, restored on close.
+  const opener = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!visible || !modal || !panel.current) return;
+    const active = document.activeElement;
+    if (panel.current.contains(active)) return;
+    opener.current =
+      active instanceof HTMLElement && active !== document.body ? active : null;
+    panel.current.querySelector<HTMLElement>(".dx-icon-button")?.focus();
+  }, [visible, modal]);
+
+  useEffect(() => {
+    if (!visible) return;
+    return () => {
+      // Closing returns focus to the opener, or to the reopen button.
+      const target = opener.current;
+      opener.current = null;
+      if (target?.isConnected) target.focus();
+      else
+        requestAnimationFrame(() =>
+          document.querySelector<HTMLElement>('[data-testid="diagnosis-reopen"]')?.focus(),
+        );
+    };
+  }, [visible]);
 
   if (!scenario) return null;
   if (!open)
@@ -154,18 +228,39 @@ export function MachineDiagnosisPanel({ state, onClose, onOpen, variant = "docke
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") onClose();
+    if (event.key !== "Tab" || !modal || !panel.current) return;
+    // Keep keyboard focus inside the overlay while it covers the chat.
+    const items = focusableIn(panel.current);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    // The panel itself holds focus after a click on non-interactive content.
+    if (document.activeElement === panel.current) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   };
 
   return (
     <aside
+      ref={panel}
       className={`dx-panel ${variant}`}
       aria-label="Chẩn đoán máy"
+      role={modal ? "dialog" : undefined}
+      aria-modal={modal ? true : undefined}
+      tabIndex={modal ? -1 : undefined}
       data-testid="diagnosis-panel"
       onKeyDown={onKeyDown}
     >
       <header className="dx-head">
         <div className="dx-head-text">
-          <span className="dx-kicker"><Activity size={13} aria-hidden="true" /> Machine diagnosis</span>
+          <span className="dx-kicker"><Activity size={13} aria-hidden="true" /> Chẩn đoán máy</span>
           <h2><Factory size={18} aria-hidden="true" /> Dây chuyền {scenario.line}</h2>
         </div>
         <span className="dx-mock-chip" title="Dữ liệu mô phỏng, không phải số đo thực tế">Dữ liệu mô phỏng</span>
@@ -190,19 +285,19 @@ export function MachineDiagnosisPanel({ state, onClose, onOpen, variant = "docke
               />
             </Suspense>
           )}
-          <div className="dx-toolbar" role="toolbar" aria-label="Điều khiển góc nhìn">
+          <div className="dx-toolbar" role="toolbar" aria-label="Điều khiển góc nhìn" inert={!ready}>
             <button type="button" className={autoRotate ? "active" : ""} aria-pressed={autoRotate} title="Tự động xoay" aria-label="Tự động xoay" onClick={() => setAutoRotate((value) => !value)}><Rotate3d size={16} /></button>
             <button type="button" title="Tập trung vào trạm lỗi" aria-label="Tập trung vào trạm lỗi" onClick={() => select(scenario.station)}><LocateFixed size={16} /></button>
             <button type="button" title="Đặt lại góc nhìn" aria-label="Đặt lại góc nhìn" onClick={() => scene.current?.resetView()}><RotateCcw size={16} /></button>
           </div>
-          <p className="dx-hint">Kéo để xoay · Cuộn để thu phóng · Bấm vào trạm để xem</p>
+          <p className="dx-hint">Kéo để xoay · Cuộn hoặc chụm để thu phóng · Chạm vào trạm để xem</p>
           {!ready && (
             <div className="dx-running" role="status" data-testid="diagnosis-running">
               <div className="dx-scan" />
               <div className="dx-running-card">
                 <Loader2 size={18} className="animate-spin" />
                 <div>
-                  <strong>Đang chạy machine_diagnosis…</strong>
+                  <strong>Đang chạy chẩn đoán dây chuyền…</strong>
                   <ol>{RUN_STEPS.map((step) => <li key={step}>{step}</li>)}</ol>
                 </div>
               </div>
@@ -227,7 +322,8 @@ export function MachineDiagnosisPanel({ state, onClose, onOpen, variant = "docke
           ))}
         </nav>
 
-        <div className={`dx-content ${ready ? "ready" : ""}`}>
+        {/* Covered findings stay out of the tab order until the run ends. */}
+        <div className={`dx-content ${ready ? "ready" : ""}`} inert={!ready}>
           {faulty ? (
             <section className="dx-alert" data-testid="diagnosis-suspect">
               <span className="dx-alert-icon"><TriangleAlert size={22} aria-hidden="true" /></span>

@@ -54,7 +54,12 @@ export function ReviewActions({
   if (!actions.length) return null;
   const chosen = open ? ACTIONS[open] : null;
   return (
-    <section data-testid="review-actions" aria-label="Phản hồi">
+    <section
+      data-testid="review-actions"
+      aria-label="Phản hồi"
+      className="inquiry-review"
+    >
+      <h2 className="inquiry-section-title">Việc tiếp theo</h2>
       <div className="inquiry-actions">
         {actions.map((action) => (
           <Button
@@ -76,6 +81,7 @@ export function ReviewActions({
       </div>
       {chosen && (
         <form
+          className="inquiry-review-form"
           onSubmit={(event) => {
             event.preventDefault();
             onSubmit(chosen.kind, content.trim());

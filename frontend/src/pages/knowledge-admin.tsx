@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Database, Layers3, Plus, Search, ShieldCheck, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CheckCircle2, Database, Inbox, Plus, Search } from "lucide-react";
 import { useAuth } from "@/hooks/auth";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -12,10 +12,17 @@ import type { KnowledgeBase } from "@/types";
 /** Restrict the administration screen to administrators. */
 export function KnowledgeAdminPage() {
   const auth = useAuth();
-  if (auth.status !== "signed-in" || auth.user.role !== "admin") return <Navigate to="/files" replace />;
+  if (auth.status !== "signed-in" || auth.user.role !== "admin")
+    return <Navigate to="/files" replace />;
   return <KnowledgeAdminWorkspace />;
 }
 
+const displayName = (item: KnowledgeBase) => item.title || item.name;
+
+/**
+ * Let administrators find a collection, choose where new uploads go, and
+ * create or edit collections. IDs and settings stay behind disclosure.
+ */
 function KnowledgeAdminWorkspace() {
   const [items, setItems] = useState<KnowledgeBase[]>([]);
   const [selected, setSelected] = useState("");
@@ -26,18 +33,44 @@ function KnowledgeAdminWorkspace() {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const reload = useCallback(() => setRevision((value) => value + 1), []);
+  const detailPanel = useRef<HTMLElement>(null);
+
+  /** Select a collection; on one-column layouts, bring its details into view. */
+  function choose(name: string) {
+    setSelected(name);
+    if (window.matchMedia?.("(max-width: 850px)").matches)
+      requestAnimationFrame(() =>
+        detailPanel.current?.scrollIntoView({ block: "start" }),
+      );
+  }
 
   useEffect(() => {
     const abort = new AbortController();
     setLoading(true);
-    listConfiguredKnowledgeBases(abort.signal).then((data) => {
-      if (abort.signal.aborted) return;
-      setItems(data);
-      setSelected((current) => data.some((item) => item.name === current) ? current : (data.find((item) => item.is_default)?.name ?? data[0]?.name ?? ""));
-      setError("");
-    }).catch((reason: unknown) => {
-      if (!abort.signal.aborted) setError(reason instanceof Error ? reason.message : "Không tải được knowledge base.");
-    }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
+    listConfiguredKnowledgeBases(abort.signal)
+      .then((data) => {
+        if (abort.signal.aborted) return;
+        setItems(data);
+        setSelected((current) =>
+          data.some((item) => item.name === current)
+            ? current
+            : (data.find((item) => item.is_default)?.name ??
+              data[0]?.name ??
+              ""),
+        );
+        setError("");
+      })
+      .catch((reason: unknown) => {
+        if (!abort.signal.aborted)
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Không tải được danh sách kho kiến thức.",
+          );
+      })
+      .finally(() => {
+        if (!abort.signal.aborted) setLoading(false);
+      });
     return () => abort.abort();
   }, [revision]);
 
@@ -48,42 +81,176 @@ function KnowledgeAdminWorkspace() {
       await setDefaultKnowledgeBase(name);
       reload();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Không thể cập nhật mặc định.");
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Không đổi được nơi nhận tài liệu mới.",
+      );
     } finally {
       setSaving(false);
     }
   }
 
   const selectedItem = items.find((item) => item.name === selected);
-  const visible = items.filter((item) => `${item.title ?? ""} ${item.name} ${item.description}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const needle = query.trim().toLocaleLowerCase();
+  const visible = items.filter((item) =>
+    `${item.title ?? ""} ${item.name} ${item.description}`
+      .toLocaleLowerCase()
+      .includes(needle),
+  );
   const defaultItem = items.find((item) => item.is_default);
   return (
     <main className="kb-admin-page" data-testid="knowledge-admin">
       <header className="kb-admin-header">
-        <div><p className="kb-admin-eyebrow"><ShieldCheck size={15} /> ADMINISTRATION</p><h1>Knowledge bases</h1><p>Quản lý không gian tri thức và lựa chọn nơi tiếp nhận tài liệu.</p></div>
-        <Button className="kb-admin-create" onClick={() => setCreating(true)}><Plus /> Tạo knowledge base</Button>
+        <div>
+          <h1>Kho kiến thức</h1>
+          <p>Chọn nơi lưu tài liệu tải lên và quản lý từng kho.</p>
+        </div>
+        <Button className="kb-admin-create" onClick={() => setCreating(true)}>
+          <Plus /> Tạo kho kiến thức
+        </Button>
       </header>
-      <div className="kb-admin-overview">
-        <div className="kb-admin-overview-icon"><Layers3 /></div>
-        <div><span>Không gian tri thức</span><strong>{items.length}</strong><small>Knowledge base đang hoạt động</small></div>
-        <div className="kb-admin-overview-divider" />
-        <div className="kb-admin-default-icon"><Sparkles /></div>
-        <div><span>Đang dùng cho Library</span><strong className="kb-admin-default-name">{defaultItem?.title || defaultItem?.name || "Chưa chọn"}</strong><small>{defaultItem ? defaultItem.name : "Chọn một KB mặc định để tải tài liệu"}</small></div>
+      <div className="kb-admin-destination" data-testid="kb-admin-default">
+        <Inbox aria-hidden="true" />
+        <div>
+          <span>Nơi nhận tài liệu mới</span>
+          <strong className="kb-admin-default-name">
+            {defaultItem ? displayName(defaultItem) : "Chưa chọn"}
+          </strong>
+          {!defaultItem && (
+            <small>Chọn một kho để nhân viên có thể tải tài liệu lên.</small>
+          )}
+        </div>
       </div>
-      {error && <p className="vc-notice error" role="alert">{error}</p>}
+      {error && (
+        <p className="vc-notice error" role="alert">
+          {error}
+        </p>
+      )}
       <div className="kb-admin-layout">
-        <section className="kb-admin-list-panel" aria-labelledby="kb-admin-list-title">
-          <div className="kb-admin-section-heading"><div><h2 id="kb-admin-list-title">Tất cả knowledge base</h2><p>Chọn một KB để xem và quản lý.</p></div><span>{items.length}</span></div>
-          <label className="kb-admin-search"><Search size={17} /><input type="search" placeholder="Tìm theo tên hoặc mã" aria-label="Tìm knowledge base" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-          {loading && !items.length ? <p className="kb-admin-empty">Đang tải knowledge base…</p> : visible.length === 0 ? <div className="kb-admin-empty"><Database /><p>{items.length ? "Không tìm thấy kết quả phù hợp." : "Chưa có knowledge base nào."}</p>{!items.length && <Button variant="outline" onClick={() => setCreating(true)}>Tạo knowledge base đầu tiên</Button>}</div> : (
-            <div className="kb-admin-list">{visible.map((item) => <button key={item.name} type="button" className={`kb-admin-item ${item.name === selected ? "selected" : ""}`} aria-pressed={item.name === selected} onClick={() => setSelected(item.name)}><span className="kb-admin-item-icon"><Database size={19} /></span><span className="kb-admin-item-text"><strong>{item.title || item.name}</strong><small>{item.name}</small></span>{item.is_default && <span className="kb-admin-badge"><CheckCircle2 size={13} /> Mặc định</span>}</button>)}</div>
+        <section
+          className="kb-admin-list-panel"
+          aria-labelledby="kb-admin-list-title"
+        >
+          <div className="kb-admin-section-heading">
+            <h2 id="kb-admin-list-title">Tất cả kho</h2>
+            <span>{items.length}</span>
+          </div>
+          <label className="kb-admin-search">
+            <Search size={17} aria-hidden="true" />
+            <input
+              type="search"
+              placeholder="Tìm theo tên"
+              aria-label="Tìm kho kiến thức"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          {loading && !items.length ? (
+            <p className="kb-admin-empty" role="status">
+              Đang tải kho kiến thức…
+            </p>
+          ) : visible.length === 0 ? (
+            <div className="kb-admin-empty">
+              <Database aria-hidden="true" />
+              <p>
+                {items.length
+                  ? "Không tìm thấy kho phù hợp."
+                  : "Chưa có kho kiến thức nào."}
+              </p>
+              {!items.length && (
+                <Button variant="outline" onClick={() => setCreating(true)}>
+                  Tạo kho đầu tiên
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="kb-admin-list">
+              {visible.map((item) => (
+                <button
+                  key={item.name}
+                  type="button"
+                  className={`kb-admin-item ${item.name === selected ? "selected" : ""}`}
+                  aria-pressed={item.name === selected}
+                  onClick={() => choose(item.name)}
+                >
+                  <span className="kb-admin-item-icon" aria-hidden="true">
+                    <Database size={18} />
+                  </span>
+                  <span className="kb-admin-item-text">
+                    <strong>{displayName(item)}</strong>
+                    {item.description && <small>{item.description}</small>}
+                  </span>
+                  {item.is_default && (
+                    <span className="kb-admin-badge">
+                      <CheckCircle2 size={13} aria-hidden="true" /> Mặc định
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
           )}
         </section>
-        <section className="kb-admin-detail-panel" aria-label="Knowledge base được chọn">
-          {selectedItem ? <><div className="kb-admin-detail-top"><div><span className="kb-admin-detail-kicker">CHI TIẾT KNOWLEDGE BASE</span><h2>{selectedItem.title || selectedItem.name}</h2><p>{selectedItem.description || "Chưa có mô tả cho knowledge base này."}</p></div>{selectedItem.is_default ? <span className="kb-admin-badge active"><CheckCircle2 size={14} /> Mặc định</span> : <Button variant="outline" disabled={saving} onClick={() => void makeDefault(selectedItem.name)}><Sparkles /> Đặt làm mặc định</Button>}</div><div className="kb-admin-explainer">Tài liệu tải lên từ Library được đưa vào knowledge base mặc định. Thay đổi này không di chuyển tài liệu đã tải trước đó.</div><KnowledgeBaseSettings key={selectedItem.name} name={selectedItem.name} role="admin" revision={revision} isDefault={selectedItem.is_default} compact onChanged={reload} /></> : <div className="kb-admin-detail-empty"><Database size={32} /><h2>Chọn knowledge base</h2><p>Chọn một mục bên trái để xem chi tiết.</p></div>}
+        <section
+          ref={detailPanel}
+          className="kb-admin-detail-panel"
+          aria-label="Kho kiến thức được chọn"
+        >
+          {selectedItem ? (
+            <>
+              <div className="kb-admin-detail-top">
+                <div>
+                  <h2>{displayName(selectedItem)}</h2>
+                  <p>{selectedItem.description || "Chưa có mô tả."}</p>
+                </div>
+                {selectedItem.is_default ? (
+                  <span className="kb-admin-badge active">
+                    <CheckCircle2 size={14} aria-hidden="true" /> Mặc định
+                  </span>
+                ) : (
+                  <Button
+                    variant="outline"
+                    disabled={saving}
+                    onClick={() => void makeDefault(selectedItem.name)}
+                  >
+                    Đặt làm mặc định
+                  </Button>
+                )}
+              </div>
+              <p className="kb-admin-explainer">
+                {selectedItem.is_default
+                  ? "Tài liệu tải lên từ Thư viện tài liệu sẽ vào kho này."
+                  : "Khi đặt làm mặc định, chỉ tài liệu tải lên sau đó vào kho này. Tài liệu cũ vẫn ở kho hiện tại."}
+              </p>
+              <KnowledgeBaseSettings
+                key={selectedItem.name}
+                name={selectedItem.name}
+                role="admin"
+                revision={revision}
+                isDefault={selectedItem.is_default}
+                compact
+                onChanged={reload}
+              />
+            </>
+          ) : (
+            <div className="kb-admin-detail-empty">
+              <Database size={32} aria-hidden="true" />
+              <h2>Chọn một kho</h2>
+              <p>Chọn kho trong danh sách để xem và quản lý.</p>
+            </div>
+          )}
         </section>
       </div>
-      <CreateKnowledgeBaseDialog open={creating} taken={items.map((item) => item.name)} onClose={() => setCreating(false)} onCreated={(created) => { setCreating(false); setSelected(created.name); reload(); }} />
+      <CreateKnowledgeBaseDialog
+        open={creating}
+        taken={items.map((item) => item.name)}
+        onClose={() => setCreating(false)}
+        onCreated={(created) => {
+          setCreating(false);
+          setSelected(created.name);
+          reload();
+        }}
+      />
     </main>
   );
 }
