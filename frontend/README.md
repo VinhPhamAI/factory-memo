@@ -5,13 +5,14 @@ and reviewing factory knowledge. React, TypeScript, Vite, Tailwind CSS and
 shadcn/ui. API mode requires sign-in; mock mode needs no account.
 
 `api` is the default mode. It offers agent chat (`/ask`), personal document
-management (`/files`), and individual source review pages. **Quản lý tài liệu** attaches new uploads to the existing
-`knowledge_base_seed1` KB and queues conversion and knowledge extraction. An
-expert or administrator must create that KB before uploads can start. Queue failures and duplicates are
-shown explicitly. The legacy capture page (`/capture`) remains reachable by URL
-but is not in the main navigation. See [document uploads](../docs/features/document-uploads.md)
-and [knowledge management](../docs/features/knowledge-management.md). The
-five-step MR-JE-AX167 simulation remains available in `mock` mode.
+management (`/files`), and individual source review pages. Administrators can
+manage KBs and select the Library target at `/admin/knowledge-bases`.
+**Quản lý tài liệu** queues new uploads for conversion and knowledge extraction
+in the selected default KB. Queue failures and duplicates are shown explicitly.
+The legacy `/capture` page remains reachable by URL but is not in the main
+navigation. See [document uploads](../docs/features/document-uploads.md) and
+[knowledge management](../docs/features/knowledge-management.md). The five-step
+MR-JE-AX167 simulation remains available in `mock` mode.
 
 ## Run
 
@@ -46,6 +47,24 @@ to FastAPI on the same origin as the frontend and disable SSE response buffering
 already permits the frontend origin via CORS; FastAPI does not enable CORS by
 default. `VITE_*` values are visible in the browser; never put API keys in them.
 Model credentials belong on the backend. Live questions may incur model costs.
+
+## Mock machine-diagnosis panel
+
+Set `VITE_MACHINE_DIAGNOSIS_VIZ=true` in `.env.local` and restart Vite to show a
+3D production-line panel beside the chat. The flag works with both
+`VITE_DATA_MODE=api` and `mock`; any other value, or no value, hides the panel.
+
+- A chat message about a machine fault opens the panel on the right. Keywords
+  (Vietnamese or English) choose one of four scenarios: overheating, robot
+  vibration, feeder jam and inspection rejects. A general diagnosis request opens
+  the overheating scenario.
+- The agent has no diagnosis tool yet. The panel and its inline
+  `machine_diagnosis` card are a front-end mock with synthetic values from
+  `src/services/machine-diagnosis.ts`; they never change the agent's answer and
+  are not saved with the conversation.
+- The 3D view (`src/components/diagnosis/production-line-scene.tsx`, three.js) is
+  loaded only when the panel opens. Drag to orbit, scroll to zoom and click a
+  station or label to focus it. Without WebGL the panel shows a notice instead.
 
 ## Sign-in
 

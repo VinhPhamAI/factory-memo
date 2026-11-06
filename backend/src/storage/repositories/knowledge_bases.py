@@ -24,6 +24,7 @@ CATALOG_CHANNEL = "knowledge_base_catalog"
 NAME_UNIQUE_CONSTRAINT = "uq_knowledge_bases_name"
 # Serializes the limit check and the insert of concurrent creations.
 _CREATE_LOCK_KEY = "knowledge_bases:create"
+_DEFAULT_LOCK_KEY = "knowledge_bases:default"
 
 
 class KnowledgeBaseNameTaken(ValueError):
@@ -32,6 +33,10 @@ class KnowledgeBaseNameTaken(ValueError):
 
 class KnowledgeBaseLimitReached(ValueError):
     """The number of active knowledge bases reached the configured limit."""
+
+
+class DefaultKnowledgeBaseError(ValueError):
+    """The default knowledge base cannot be deleted until another is selected."""
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,7 @@ class KnowledgeBaseEntry:
     template: str
     created_by: UUID
     created_at: datetime
+    is_default: bool = False
 
 
 @dataclass(frozen=True)
@@ -105,6 +111,7 @@ def _entry(row: KnowledgeBase) -> KnowledgeBaseEntry:
         template=row.template,
         created_by=row.created_by,
         created_at=row.created_at,
+        is_default=row.is_default,
     )
 
 
@@ -240,10 +247,38 @@ class KnowledgeBaseRepository(Repository):
             await self._notify(session, name)
             return _entry(row), await _detail(session, row)
 
+    async def set_default(self, name: str) -> bool:
+        """Select one active KB as the Library target atomically.
+
+        Returns:
+            True if the selected knowledge base exists; otherwise False.
+        """
+        async with self._transaction() as session:
+            await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": _DEFAULT_LOCK_KEY})
+            row = await session.scalar(select(KnowledgeBase).where(
+                KnowledgeBase.name == name, KnowledgeBase.deleted_at.is_(None),
+            ).with_for_update())
+            if row is None:
+                return False
+            await session.execute(update(KnowledgeBase).where(
+                KnowledgeBase.is_default.is_(True), KnowledgeBase.deleted_at.is_(None),
+                KnowledgeBase.id != row.id,
+            ).values(is_default=False))
+            row.is_default = True
+            await session.flush()
+            await self._notify(session, name)
+            return True
+
     async def delete(self, name: str) -> bool:
         """Soft-delete a KB and fail its queued jobs atomically."""
 
         async with self._transaction() as session:
+            await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": _DEFAULT_LOCK_KEY})
+            row = await session.scalar(select(KnowledgeBase).where(
+                KnowledgeBase.name == name, KnowledgeBase.deleted_at.is_(None),
+            ).with_for_update())
+            if row is not None and row.is_default:
+                raise DefaultKnowledgeBaseError("Choose another default before deleting this knowledge base")
             kb_id = await session.scalar(update(KnowledgeBase).where(
                 KnowledgeBase.name == name, KnowledgeBase.deleted_at.is_(None),
             ).values(deleted_at=func.now()).returning(KnowledgeBase.id))

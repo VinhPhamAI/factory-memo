@@ -30,10 +30,50 @@ async function mockBases(page: Page) {
   );
 }
 
+test("administrator manages knowledge bases and sets the Library default", async ({ page }) => {
+  await page.route("**/auth/me", (route) => route.fulfill({ json: { id: "admin", username: "admin", display_name: "Admin", role: "admin" } }));
+  const items = [
+    { name: "knowledge_base_seed1", title: "Factory manuals", description: "Tài liệu nhà máy", is_default: true },
+    { name: "maintenance", title: "Maintenance", description: "Bảo trì thiết bị", is_default: false },
+  ];
+  await page.route("**/v1/knowledge-bases**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/default")) {
+      items.forEach((item) => { item.is_default = item.name === "maintenance"; });
+      return route.fulfill({ status: 204 });
+    }
+    if (path === "/v1/knowledge-bases") return route.fulfill({ json: { knowledge_bases: items } });
+    const item = items.find((entry) => path.endsWith(`/${entry.name}`));
+    return route.fulfill({ json: { ...item, template: "general", created_by: "admin", created_at: "2026-11-06T00:00:00Z", updated_at: "2026-11-06T00:00:00Z", source_counts: { received: 2 }, chunk_counts: {} } });
+  });
+  await page.goto("/admin/knowledge-bases");
+  await expect(page.getByTestId("nav-admin-knowledge")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Knowledge bases", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /Maintenance/ }).click();
+  await page.getByRole("button", { name: "Đặt làm mặc định" }).click();
+  await expect(page.getByText("Đang dùng cho Library").locator(".." )).toContainText("Maintenance");
+  await expect(page.getByRole("button", { name: "Xóa knowledge base" })).toBeDisabled();
+  await page.getByRole("button", { name: "Tạo knowledge base", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expect(page.getByRole("heading", { name: "Knowledge bases", exact: true })).toBeVisible();
+});
+
+test("employee cannot open the administration page", async ({ page }) => {
+  await page.route("**/v1/knowledge-bases", (route) => route.fulfill({ json: { knowledge_bases: [] } }));
+  await page.route("**/v1/files", (route) => route.fulfill({ json: { files: [] } }));
+  await page.goto("/admin/knowledge-bases");
+  await expect(page).toHaveURL(/\/files$/);
+  await expect(page.getByTestId("nav-admin-knowledge")).toHaveCount(0);
+});
+
 test("library grid previews files and filters by name", async ({ page }) => {
   await page.route("**/v1/knowledge-agent/knowledge-bases", (route) =>
     route.fulfill({ json: { knowledge_bases: [{ name: "knowledge_base_seed1", title: "Default", description: "" }] } }),
   );
+  await page.route("**/v1/knowledge-bases", (route) => route.fulfill({ json: { knowledge_bases: [{ name: "knowledge_base_seed1", title: "Default", description: "", is_default: true }] } }));
   await page.route("**/v1/files", (route) => route.fulfill({ json: { files: [
     { id: "doc1", filename: "manual.docx", content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size_bytes: 120, created_at: "2026-11-06T00:00:00Z", sha256: "a" },
     { id: "doc2", filename: "pump.pdf", content_type: "application/pdf", size_bytes: 120, created_at: "2026-11-06T00:00:00Z", sha256: "b" },

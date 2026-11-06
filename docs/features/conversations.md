@@ -161,3 +161,6 @@ migration script.
   only after authentication (the older upload endpoints behave the same way).
 - The legacy knowledge-base QA endpoint (`/v1/knowledge-agent/<kb>/stream`) still
   exists, but the live UI no longer shows it.
+- Machine diagnosis is not an agent tool. With `VITE_MACHINE_DIAGNOSIS_VIZ=true`,
+  the chat shows a front-end mock 3D diagnosis panel with synthetic values; see the
+  [frontend guide](../../frontend/README.md#mock-machine-diagnosis-panel).

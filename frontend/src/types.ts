@@ -162,6 +162,7 @@ export interface ChatThread {
 }
 
 export interface KnowledgeBase {
+  is_default?: boolean;
   name: string;
   /** Display name of a knowledge base created in the UI; falls back to name. */
   title?: string;

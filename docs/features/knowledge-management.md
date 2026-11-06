@@ -1,27 +1,36 @@
 # Knowledge management
 
-The application API manages knowledge bases, their sources and reviews. The
-knowledge base and source inventory pages are not exposed in the UI; `/knowledge`
-redirects to **Quản lý tài liệu** (`/files`). Individual source details remain
-available through their source links for processing and review. Existing
-`/capture/<kb>/<conversation_id>` bookmarks redirect to the source detail.
+Administrators manage knowledge bases at `/admin/knowledge-bases`. The page
+lists active KBs, creates and edits them, selects the Library default, and
+soft-deletes non-default KBs after confirmation. Existing `/knowledge` URLs
+redirect to **Quản lý tài liệu** (`/files`); source details remain available via
+source links.
 
-The document management page uploads personal files, attaches them to a selected
-KB and requests background processing. The legacy `/capture` page remains
-reachable by URL but is not in the main navigation.
+Experts and administrators can create and edit KBs through the API. Only
+administrators can access the administration page, choose the default or delete
+KBs. At most one active KB is the default. If none is selected, Library uploads
+are disabled until an administrator selects one. Changing the default affects
+future uploads; it does not move existing sources or files.
+
+Removing a source retains its bytes, linked chunks and conflicts for history. A
+chunk remains searchable while it has another active evidence source. The original
+source download returns `404` after removal.
 
 ## Manage a knowledge base
 
-KB creation, changes and deletion, source inventory and source removal remain
-available through the API. Removing a source retains its bytes, linked chunks and
-conflicts for history. A chunk remains searchable while it has another active
-evidence source. The original source download returns `404` after removal.
+1. Open **Quản trị knowledge base** with an administrator account.
+2. Create a KB or select one to inspect its counts, edit its title and description,
+   or delete it. The stable code cannot be changed.
+3. Choose **Đặt làm mặc định** to direct new Library uploads to that KB. Select
+   another default before deleting the current default.
 
 | API | Access | Response |
 |---|---|---|
+| `GET /v1/knowledge-bases` | Active user | `200` catalog with `is_default` for each active KB. |
+| `PUT /v1/knowledge-bases/{kb}/default` | Admin | `204` selects an active KB; `404` if missing. |
 | `GET /v1/knowledge-bases/{kb}` | Active user | `200` with `name`, `title`, `description`, `template`, `created_by` (username), `created_at`, `updated_at`, `source_counts` by active source status and `chunk_counts` by stored chunk kind and status |
 | `PATCH /v1/knowledge-bases/{kb}` | Expert or admin | `200` with the updated detail. Send a nonempty `title` (up to 80 characters), `description` (up to 500, empty clears it), or both. Sending `name` returns `422`. |
-| `DELETE /v1/knowledge-bases/{kb}` | Admin | `204`. An unknown or already deleted KB returns `404`. |
+| `DELETE /v1/knowledge-bases/{kb}` | Admin | `204`. An unknown or already deleted KB returns `404`; deleting the default returns `409`. |
 | `DELETE /v1/knowledge-management/{kb}/sources/{kind}/{source_id}` | Submitter, expert or admin | `204`, `409` while an ingestion job is running, or `404` for an unknown or removed source. |
 | `GET /v1/knowledge-management/{kb}/sources?include_removed=true` | Active user | Includes removed sources with their `removed_at` timestamps. The default inventory hides them. |
 

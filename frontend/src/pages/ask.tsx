@@ -23,6 +23,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { EvidencePanel } from "@/components/evidence-panel";
+import { MachineDiagnosisPanel } from "@/components/diagnosis/machine-diagnosis-panel";
+import { useMachineDiagnosis } from "@/hooks/machine-diagnosis";
 import { BrandMark } from "@/components/brand";
 import { isLive } from "@/services/config";
 import { listKnowledgeBases } from "@/services/knowledge-api";
@@ -95,6 +97,8 @@ export function AskPage() {
   const controller = useRef<AbortController | null>(null);
   const activeThread = useRef<string | undefined>(undefined);
   const nearBottom = useRef(true);
+  // Floats over the evidence column; the fixture demo has no tool calls of its own.
+  const diagnosis = useMachineDiagnosis();
   const answers =
     thread?.messages.filter((message) => message.role === "assistant") ?? [];
   const selected =
@@ -177,6 +181,7 @@ export function AskPage() {
     const abort = new AbortController();
     controller.current = abort;
     const question = value.trim();
+    diagnosis.trigger(question);
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
@@ -628,6 +633,17 @@ export function AskPage() {
           {panel}
         </SheetContent>
       </Sheet>
+      {diagnosis.enabled && (
+        <MachineDiagnosisPanel
+          variant="overlay"
+          state={diagnosis.state}
+          onClose={diagnosis.close}
+          onOpen={() =>
+            diagnosis.state.scenario &&
+            diagnosis.show(diagnosis.state.scenario, diagnosis.state.turnKey)
+          }
+        />
+      )}
     </div>
   );
 }

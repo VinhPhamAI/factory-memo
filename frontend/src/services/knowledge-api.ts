@@ -34,6 +34,16 @@ export async function listKnowledgeBases(
   return body.knowledge_bases as KnowledgeBase[];
 }
 
+/** List application KBs including the administrator-selected Library default. */
+export async function listConfiguredKnowledgeBases(signal: AbortSignal, client: Pick<AuthClient, "authorizedFetch"> = sessionClient): Promise<KnowledgeBase[]> {
+  const response = await client.authorizedFetch(`${apiBaseUrl}/v1/knowledge-bases`, { signal });
+  if (!response.ok) throw new Error(`Không tải được knowledge base (HTTP ${response.status}).`);
+  const body: unknown = await response.json();
+  if (!object(body) || !Array.isArray(body.knowledge_bases) || !body.knowledge_bases.every((kb) => object(kb) && typeof kb.name === "string" && typeof kb.description === "string" && typeof kb.is_default === "boolean"))
+    throw new Error("Danh sách knowledge base không hợp lệ.");
+  return body.knowledge_bases as KnowledgeBase[];
+}
+
 function citationsFrom(value: unknown): Citation[] {
   if (!Array.isArray(value)) throw new Error("Danh sách nguồn không hợp lệ.");
   return value.map((item, index) => {

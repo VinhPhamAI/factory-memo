@@ -19,7 +19,7 @@ from backend.src.services.auth import Account
 from backend.src.storage.job_queue import PgListener
 from backend.src.storage.orm import UserRole
 from backend.src.storage.repositories.base import KnowledgeStorageUnavailable
-from backend.src.storage.repositories.knowledge_bases import KnowledgeBaseDetail, KnowledgeBaseEntry, KnowledgeBaseLimitReached, KnowledgeBaseNameTaken, KnowledgeBaseRepository
+from backend.src.storage.repositories.knowledge_bases import DefaultKnowledgeBaseError, KnowledgeBaseDetail, KnowledgeBaseEntry, KnowledgeBaseLimitReached, KnowledgeBaseNameTaken, KnowledgeBaseRepository
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/knowledge-bases", tags=["knowledge-bases"])
@@ -110,9 +110,19 @@ class KnowledgeBaseCatalog:
         """Remove a KB from the active catalog and notify local services."""
 
         async with self._lock:
-            if not await self._repository.delete(name):
+            try:
+                deleted = await self._repository.delete(name)
+            except DefaultKnowledgeBaseError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            if not deleted:
                 raise HTTPException(404, "Knowledge base not found")
             self._remove(name)
+
+    async def set_default(self, name: str) -> None:
+        """Persist the Library's default and refresh local policy metadata."""
+        if not await self._repository.set_default(name):
+            raise HTTPException(404, "Knowledge base not found")
+        await self.refresh()
 
     def _remove(self, name: str) -> None:
         """Evict a catalog entry and stop its services from accepting new requests."""
@@ -160,7 +170,7 @@ class KnowledgeBaseCatalog:
 
     @staticmethod
     def _json(row: KnowledgeBaseEntry, spec: KnowledgeBaseSpec) -> dict[str, Any]:
-        return {"name": row.name, "title": row.title, "description": row.description.strip(), "builtin": False, "template": row.template, "created_at": row.created_at.isoformat(), "capture": spec.retrieval is Retrieval.KNOWLEDGE}
+        return {"name": row.name, "title": row.title, "description": row.description.strip(), "builtin": False, "template": row.template, "created_at": row.created_at.isoformat(), "is_default": row.is_default, "capture": spec.retrieval is Retrieval.KNOWLEDGE}
 
     async def create(self, *, name: str, title: str, created_by: UUID, description: str = "", template: str = DEFAULT_TEMPLATE) -> dict[str, Any]:
         """Validate and insert a catalog row, then publish its policy spec."""
@@ -299,6 +309,17 @@ async def knowledge_base_detail(
     """Show metadata and processing counts for an active knowledge base."""
 
     return await _catalog(request).detail(kb)
+
+
+@router.put("/{kb}/default", status_code=204)
+async def set_default_knowledge_base(
+    request: Request, kb: str, account: Annotated[Account, Depends(require_current_user)],
+) -> Response:
+    """Set the Library target; only administrators can change the default."""
+    if account.role != UserRole.ADMIN.value:
+        raise HTTPException(403, "Administrator role required")
+    await _catalog(request).set_default(kb)
+    return Response(status_code=204)
 
 
 @router.patch("/{kb}")
