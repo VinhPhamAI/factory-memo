@@ -14,13 +14,13 @@ from denso_agent.api.sse import encode_event
 from denso_agent.config import RuntimeSettings
 from denso_agent.runtime.errors import AgentError
 from denso_agent.runtime.graph import TurnContext, TurnImage
+from denso_agent.runtime.history import bounded_history, saved_citations, saved_tools
 from denso_agent.schemas.chat import (
     AttachmentRef,
     ChatHistory,
-    HistoryMessage,
     ImageAttachment,
 )
-from denso_agent.schemas.citations import Citation, SearchScope
+from denso_agent.schemas.citations import SearchScope
 from denso_agent.schemas.events import (
     CompleteEvent,
     ErrorEvent,
@@ -29,7 +29,6 @@ from denso_agent.schemas.events import (
     TextEvent,
     ToolEvent,
 )
-from denso_agent.schemas.tools import ToolActivity
 
 
 def _answer_from_update(update: object) -> AIMessage:
@@ -57,22 +56,6 @@ def _answer_from_update(update: object) -> AIMessage:
     ):
         raise ValueError("Expected one completed assistant text message.")
     return messages[0]
-
-
-def _citations(message: AIMessage) -> list[Citation]:
-    """Validate the citations saved on an answer; older answers have none."""
-    return [
-        Citation.model_validate(item)
-        for item in message.additional_kwargs.get("citations", [])
-    ]
-
-
-def _tools(message: AIMessage) -> list[ToolActivity]:
-    """Restore the allowlisted summary saved on a completed answer."""
-    return [
-        ToolActivity.model_validate(item)
-        for item in message.additional_kwargs.get("tools", [])
-    ]
 
 
 class Admission:
@@ -186,45 +169,11 @@ class AgentRuntime:
         state = await self.graph.aget_state(
             {"configurable": {"thread_id": str(conversation_id)}}
         )
-        public = [
-            HistoryMessage(
-                role="user" if isinstance(message, HumanMessage) else "assistant",
-                text=message.content,
-                citations=_citations(message) if isinstance(message, AIMessage) else [],
-                reply_id=(
-                    message.additional_kwargs.get("reply_id")
-                    if isinstance(message, AIMessage)
-                    else None
-                ),
-                tools=_tools(message) if isinstance(message, AIMessage) else [],
-                attachment=(
-                    AttachmentRef.model_validate(
-                        message.additional_kwargs["attachment"]
-                    )
-                    if isinstance(message, HumanMessage)
-                    and "attachment" in message.additional_kwargs
-                    else None
-                ),
-            )
-            for message in state.values.get("messages", [])
-            if isinstance(message, (HumanMessage, AIMessage))
-            and isinstance(message.content, str)
-        ]
-        selected: list[HistoryMessage] = []
-        characters = 0
-        for message in reversed(public):
-            characters += len(message.model_dump_json()) + 1
-            if (
-                len(selected) >= self.settings.history_max_messages
-                or characters > self.settings.history_max_characters
-            ):
-                break
-            selected.append(message)
-        selected.reverse()
-        return ChatHistory(
-            conversation_id=conversation_id,
-            messages=selected,
-            truncated=len(selected) < len(public),
+        return bounded_history(
+            conversation_id,
+            state.values.get("messages", []),
+            self.settings.history_max_messages,
+            self.settings.history_max_characters,
         )
 
     async def stream(
@@ -337,10 +286,10 @@ class AgentRuntime:
                 "complete",
                 CompleteEvent,
                 answer=final_answer.content,
-                citations=_citations(final_answer),
+                citations=saved_citations(final_answer),
                 search=final_answer.additional_kwargs.get("search", "not_used"),
                 reply_id=final_answer.additional_kwargs.get("reply_id"),
-                tools=_tools(final_answer),
+                tools=saved_tools(final_answer),
             )
         except TimeoutError:
             yield event(
