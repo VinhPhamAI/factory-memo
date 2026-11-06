@@ -20,15 +20,37 @@ type ChatToolResult = {
 
 type CatalogEntry = { name: string; title: string; description?: string };
 
+const TOOL_NAMES = [
+  "list_knowledge_bases",
+  "search_knowledge",
+  "create_inquiry_draft",
+  "update_inquiry_draft",
+] as const;
+const TOOL_STATES = [
+  "running",
+  "results",
+  "empty",
+  "unavailable",
+  "needs_choice",
+  "not_draft",
+] as const;
+
+type ChatToolName = (typeof TOOL_NAMES)[number];
+type ChatToolState = (typeof TOOL_STATES)[number];
+
 /** Safe, bounded subset of a tool call for live or saved chat display. */
 export type ChatTool = {
   id: string;
-  name: "list_knowledge_bases" | "search_knowledge";
-  state: "running" | "results" | "empty" | "unavailable";
+  name: ChatToolName;
+  state: ChatToolState;
   kb?: string;
   query?: string;
   count?: number;
   truncated?: boolean;
+  /** Inquiry the tool created, edited or refused to edit; a valid UUID only. */
+  inquiry_id?: string;
+  /** Inquiry title; may be empty when the model wrote none. */
+  title?: string;
   catalog: CatalogEntry[];
   results: ChatToolResult[];
 };
@@ -166,11 +188,8 @@ export function parseChatTool(value: unknown): ChatTool | null {
   const id = text(value.id, 200);
   if (
     !id ||
-    (name !== "list_knowledge_bases" && name !== "search_knowledge") ||
-    (state !== "running" &&
-      state !== "results" &&
-      state !== "empty" &&
-      state !== "unavailable")
+    !TOOL_NAMES.some((item) => item === name) ||
+    !TOOL_STATES.some((item) => item === state)
   )
     return null;
   const kb = kbName(value.kb) ? value.kb : undefined;
@@ -178,8 +197,10 @@ export function parseChatTool(value: unknown): ChatTool | null {
   if (name === "search_knowledge" && (!kb || !query)) return null;
   return {
     id,
-    name,
-    state,
+    name: name as ChatToolName,
+    state: state as ChatToolState,
+    inquiry_id: parseReplyId(value.inquiry_id),
+    title: text(value.title, 200),
     kb,
     query,
     count: nonnegativeInteger(value.count) ? value.count : undefined,
