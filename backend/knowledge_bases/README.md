@@ -32,7 +32,7 @@ and AssetOpsBench integrations described below are absent from this checkout.
 
 ### Knowledge bases created in the UI
 
-The authenticated capture page (`/capture`, KB list → **＋ Tạo knowledge base mới…**) calls
+The administrator page **Kho kiến thức** (`/admin/knowledge-bases`, **Tạo kho kiến thức**) calls
 `POST /v1/knowledge-bases` with `name` (id, same pattern as above), `title`,
 optional `description` and `template` (only `general`). The new KB copies the
 template's policy (`custom.py`: prompts, typed schema and retrieval settings) and

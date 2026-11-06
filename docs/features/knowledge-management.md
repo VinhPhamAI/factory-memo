@@ -1,14 +1,14 @@
 # Knowledge management
 
 Administrators manage knowledge bases at `/admin/knowledge-bases`. The page
-lists active KBs, creates and edits them, selects the Library default, and
+lists active KBs, creates and edits them, selects the library default, and
 soft-deletes non-default KBs after confirmation. Existing `/knowledge` URLs
-redirect to **Quản lý tài liệu** (`/files`); source details remain available via
+redirect to **Thư viện tài liệu** (`/files`); source details remain available via
 source links.
 
 Experts and administrators can create and edit KBs through the API. Only
 administrators can access the administration page, choose the default or delete
-KBs. At most one active KB is the default. If none is selected, Library uploads
+KBs. At most one active KB is the default. If none is selected, library uploads
 are disabled until an administrator selects one. Changing the default affects
 future uploads; it does not move existing sources or files.
 
@@ -18,11 +18,14 @@ source download returns `404` after removal.
 
 ## Manage a knowledge base
 
-1. Open **Quản trị knowledge base** with an administrator account.
-2. Create a KB or select one to inspect its counts, edit its title and description,
-   or delete it. The stable code cannot be changed.
-3. Choose **Đặt làm mặc định** to direct new Library uploads to that KB. Select
-   another default before deleting the current default.
+1. Open **Kho kiến thức** with an administrator account. **Nơi nhận tài liệu
+   mới** shows the current default.
+2. Choose **Tạo kho kiến thức**, or select a KB to inspect its counts. **Sửa thông
+   tin** edits its title and description; **Xóa kho** deletes it. The stable code
+   cannot be changed. The code, template, creator and dates are under **Chi tiết
+   kỹ thuật**.
+3. Choose **Đặt làm mặc định** to direct future library uploads to that KB.
+   Select another default before deleting the current default.
 
 | API | Access | Response |
 |---|---|---|
@@ -106,13 +109,17 @@ uploads can be downloaded as authenticated attachments.
 
 ## Extraction modes
 
-Choose a mode **per source**, before extraction:
+Choose a mode **per source**, before extraction. On the source page the choice
+is under the **Cách trích xuất: …** disclosure; the KB and source IDs, kind, content
+type, stage and mode are under **Chi tiết kỹ thuật**. On phones, the
+**Bằng chứng gốc** and **Kiến thức trích xuất** tabs switch between the evidence
+and the results.
 
-- **Knowledge items** uses that KB's extraction prompt, schema, normalizers,
+- **Mục tri thức** (`knowledge`) uses that KB's extraction prompt, schema, normalizers,
   verification and consolidation factory, including the shared Industrial QA
   ingestion policy. The original text is saved as evidence first. The 100,000
   character limit applies to this interactive extraction mode.
-- **Document chunks** uses the shared RAG chunker and the KB's chunking/index
+- **Đoạn tài liệu** (`documents`) uses the shared RAG chunker and the KB's chunking/index
   configuration, then embeds and persists chunks. No LLM extraction is involved.
   A configuration with no word limit produces one full-document chunk.
 

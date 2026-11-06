@@ -1,7 +1,7 @@
 # File library
 
 Scope: the implemented personal file library. A signed-in user uploads, lists,
-downloads and deletes their own files through `/v1/files` and the **Quản lý tài liệu**
+downloads and deletes their own files through `/v1/files` and the **Thư viện tài liệu**
 page (`/files`, live mode only).
 
 The page uses the administrator-selected default KB without a selector. An
@@ -11,15 +11,16 @@ extraction requested. The worker converts and extracts it asynchronously. A
 queue or attachment failure leaves the personal file available and is shown on
 the row; a failed attachment can be retried without uploading the bytes again.
 An identical active KB source is linked instead of starting a duplicate job.
-The Library matches files to active sources across KBs by exact content hash and refreshes
-source state in the background, including after page reload. The card menu opens
-the file, shows knowledge state or removes the source from the KB after confirmation.
+The library matches files to active sources across KBs by exact content hash and refreshes
+source state in the background, including after page reload. The card menu previews,
+opens or downloads the file, shows processing state or removes the source from the
+KB after confirmation.
 Multiple cards can be selected for source removal. Identical files can refer to the
 same source: removing it affects every file sharing that source. Source removal
 keeps the personal file and retains the evidence for history. A running job blocks
 removal, and backend role and ownership rules apply. Failed attachments can be
-retried from Knowledge State in the current page session. Library preview uses
-an authenticated endpoint.
+retried from **Trạng thái xử lý** in the current page session. Previews use
+authenticated endpoints.
 
 The legacy Capture page remains available by URL but is no longer in the main
 navigation. Its upload flow can still save without processing; see
@@ -165,20 +166,33 @@ Without `APP_DATABASE_URL`, the API starts, but file library routes return `503`
 
 ## Frontend
 
-The **Quản lý tài liệu** navigation link opens `/files`:
+The **Thư viện tài liệu** navigation link opens `/files`:
 
-- Upload one or more files to the default KB. Each new source requests knowledge
-  processing. Upload and queue success appear as a popup; attachment, duplicate
-  and queue problems appear on the file row. The browser refuses unsupported
-  extensions, empty files and files over 100 MiB before sending them.
-- The grid shows previews, name, type, size and upload time. Search filters
-  filenames locally. Hover or focus a card to select it or open its menu.
-  Preview requests start near the viewport and report when unavailable.
-- **Open file** opens PDF and images in a new tab; Office files download because
-  browsers do not natively display them. **Knowledge State** shows the latest
-  processing status and links to the source details. **Remove from knowledge
-  base** asks for confirmation; it does not delete the library file. The menu
-  remains disabled for removal when no matching source is known.
+- **Tải tài liệu lên** uploads one or more files to the default KB. Each new
+  source requests knowledge processing. Upload and queue success appear as a
+  popup; attachment, duplicate and queue problems appear on the file row. The
+  browser refuses unsupported extensions, empty files and files over 100 MiB
+  before sending them.
+- The grid shows thumbnails, name, type, size and upload time. **Tìm tài liệu**
+  filters filenames locally. Hover or focus a card to select it or open its menu.
+  Thumbnail requests start near the viewport and report when unavailable.
+- Clicking a filename or thumbnail, or **Xem trước** in the card menu, opens a
+  preview dialog. It is not a full document viewer:
+
+  | File | Dialog shows | Actions |
+  |---|---|---|
+  | PDF | Bounded first-page preview (**Trang đầu**) | **Mở PDF**, **Tải xuống** |
+  | PNG/JPEG up to 12 MiB | Original bytes (**Ảnh gốc**) | **Tải xuống** |
+  | PNG/JPEG over 12 MiB | Bounded preview (**Ảnh thu nhỏ**) | **Mở ảnh gốc**, **Tải xuống** |
+  | DOCX/XLSX | Server text excerpt (**Trích đoạn**), partial content only | **Tải xuống** |
+
+  A `422` preview response shows that the file has no preview; it can still be
+  downloaded.
+- **Mở tệp gốc** opens PDF and images in a new tab; Office files download because
+  browsers do not natively display them. **Tải xuống** saves the original.
+  **Trạng thái xử lý** shows the latest processing status and links to the source
+  details. **Gỡ khỏi kho kiến thức** asks for confirmation; it does not delete the
+  library file. Removal remains disabled when no matching source is known.
 - Upload failures use a popup; queue errors appear on the card. Failed source
   removals use a popup and leave the source intact.
 - Success popups hide after 4 seconds and error popups after 8 seconds; each has a

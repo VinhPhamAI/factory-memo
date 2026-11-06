@@ -247,12 +247,13 @@ Open **http://127.0.0.1:5180** and sign in. Follow the
 [chat setup](docs/features/conversations.md#run-locally) to enable KB tools.
 The default `VITE_DATA_MODE=api` connects to FastAPI through the Vite proxy.
 If you already have `.env.local`, set its data mode to `api` and restart Vite.
-The **Ghi âm** tab records a conversation (needs the speech service and HTTPS or
-localhost for the microphone); after Stop it shows the transcript next to the
-extracted knowledge for approval. **Tải lên tài liệu** stores originals in the personal file library and attaches them
-to the selected KB, with optional Auto conversion/extraction; see [document uploads](docs/features/document-uploads.md).
-**Thư viện file** keeps each signed-in user's own PDF, XLSX, DOCX, JPEG and PNG files;
-see [file library](docs/features/file-library.md). See the
+**Thư viện tài liệu** (`/files`) keeps each signed-in user's own PDF, XLSX, DOCX,
+JPEG and PNG files. **Tải tài liệu lên** adds new files to the default KB chosen by an
+administrator in **Kho kiến thức**; see [file library](docs/features/file-library.md).
+The legacy `/capture` page is not in the navigation. Its **Ghi âm** tab records a
+conversation (needs the speech service and HTTPS or localhost for the microphone), and
+its **Tải lên tài liệu** tab attaches files to a selected KB with optional Auto
+conversion/extraction; see [document uploads](docs/features/document-uploads.md). See the
 [frontend guide](frontend/README.md) for configuration, tests and optional mock demo.
 
 **Alternative — Streamlit trace UI:**
