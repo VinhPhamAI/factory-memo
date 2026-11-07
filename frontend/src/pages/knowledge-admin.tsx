@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Database, Inbox, Plus, Search } from "lucide-react";
 import { useAuth } from "@/hooks/auth";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { CreateKnowledgeBaseDialog } from "@/components/knowledge/create-kb-dialog";
 import { KnowledgeBaseSettings } from "@/components/knowledge/knowledge-base-settings";
+import { KnowledgeBaseSourceList } from "@/components/knowledge/kb-source-list";
 import { listConfiguredKnowledgeBases } from "@/services/knowledge-api";
 import { setDefaultKnowledgeBase } from "@/services/knowledge-base-admin";
 import type { KnowledgeBase } from "@/types";
@@ -25,7 +26,9 @@ const displayName = (item: KnowledgeBase) => item.title || item.name;
  */
 function KnowledgeAdminWorkspace() {
   const [items, setItems] = useState<KnowledgeBase[]>([]);
-  const [selected, setSelected] = useState("");
+  // The chosen KB lives in `?kb=` so returning from a source page restores it.
+  const [params, setParams] = useSearchParams();
+  const [selected, setSelected] = useState(params.get("kb") ?? "");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -38,6 +41,7 @@ function KnowledgeAdminWorkspace() {
   /** Select a collection; on one-column layouts, bring its details into view. */
   function choose(name: string) {
     setSelected(name);
+    setParams({ kb: name }, { replace: true });
     if (window.matchMedia?.("(max-width: 850px)").matches)
       requestAnimationFrame(() =>
         detailPanel.current?.scrollIntoView({ block: "start" }),
@@ -231,6 +235,12 @@ function KnowledgeAdminWorkspace() {
                 compact
                 onChanged={reload}
               />
+              <KnowledgeBaseSourceList
+                key={selectedItem.name}
+                kb={selectedItem.name}
+                revision={revision}
+                returnTo={`/admin/knowledge-bases?kb=${encodeURIComponent(selectedItem.name)}`}
+              />
             </>
           ) : (
             <div className="kb-admin-detail-empty">
@@ -248,6 +258,7 @@ function KnowledgeAdminWorkspace() {
         onCreated={(created) => {
           setCreating(false);
           setSelected(created.name);
+          setParams({ kb: created.name }, { replace: true });
           reload();
         }}
       />

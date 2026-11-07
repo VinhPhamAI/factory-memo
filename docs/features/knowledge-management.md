@@ -3,8 +3,16 @@
 Administrators manage knowledge bases at `/admin/knowledge-bases`. The page
 lists active KBs, creates and edits them, selects the library default, and
 soft-deletes non-default KBs after confirmation. Existing `/knowledge` URLs
-redirect to **Thư viện tài liệu** (`/files`); source details remain available via
-source links.
+redirect to **Thư viện tài liệu** (`/files`); source details
+(`/knowledge/<kb>/sources/<kind>/<id>`) remain available via source links.
+
+Selecting a KB on the administration page also lists its sources
+(**Tài liệu trong kho**) with processing status, search by name, paging and a
+**Xem chi tiết** link to each source's detail page.
+The source page's back link returns to the page it was opened from (the
+administration page with the same KB selected, or **Thư viện tài liệu**). The
+origin travels in router state, accepts only those two in-app routes, and falls
+back to `/files` when the page is opened directly.
 
 Experts and administrators can create and edit KBs through the API. Only
 administrators can access the administration page, choose the default or delete

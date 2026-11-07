@@ -288,9 +288,21 @@ describe("file library page", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Tùy chọn manual.pdf" }));
     await user.click(await screen.findByRole("menuitem", { name: "Trạng thái xử lý" }));
-    expect(await screen.findByText("Đang chờ xử lý")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Xem kết quả và chi tiết" })).toHaveAttribute("href", "/knowledge/knowledge_base_seed1/sources/upload/s1");
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("Đang chờ xử lý")).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Xem kết quả và chi tiết" })).toHaveAttribute("href", "/knowledge/knowledge_base_seed1/sources/upload/s1");
     expect(screen.queryByRole("button", { name: "Đưa vào xử lý" })).not.toBeInTheDocument();
+  });
+
+  it("links straight to the source detail from the file card and its menu", async () => {
+    showFiles(() => Response.json({ files: [manual] }));
+    const card = await screen.findByTestId("library-file");
+    const href = "/knowledge/knowledge_base_seed1/sources/upload/s1";
+    expect(await within(card).findByText("Đang chờ xử lý")).toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: "Xem chi tiết manual.pdf" })).toHaveAttribute("href", href);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Tùy chọn manual.pdf" }));
+    expect(await screen.findByRole("menuitem", { name: "Mở chi tiết tri thức" })).toHaveAttribute("href", href);
   });
 
   it("keeps an older KB source visible after the Library default changes", async () => {

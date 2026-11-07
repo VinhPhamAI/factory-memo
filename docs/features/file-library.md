@@ -190,8 +190,10 @@ The **Thư viện tài liệu** navigation link opens `/files`:
   downloaded.
 - **Mở tệp gốc** opens PDF and images in a new tab; Office files download because
   browsers do not natively display them. **Tải xuống** saves the original.
-  **Trạng thái xử lý** shows the latest processing status and links to the source
-  details. **Gỡ khỏi kho kiến thức** asks for confirmation; it does not delete the
+  Each card shows the latest processing status and a **Xem chi tiết** link to the
+  source details; the menu also has **Mở chi tiết tri thức** (one entry per KB when
+  the file has sources in several KBs). **Trạng thái xử lý** shows the same status
+  in a dialog. **Gỡ khỏi kho kiến thức** asks for confirmation; it does not delete the
   library file. Removal remains disabled when no matching source is known.
 - Upload failures use a popup; queue errors appear on the card. Failed source
   removals use a popup and leave the source intact.

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, Outlet, RouterProvider } from "react-router-dom";
 import { KnowledgeNavigation } from "@/components/knowledge-navigation";
@@ -122,7 +122,7 @@ function kbDetail(name = "general") {
   });
 }
 
-function show(path: string) {
+function show(path: string, state?: unknown) {
   const router = createMemoryRouter(
     [
       {
@@ -138,7 +138,15 @@ function show(path: string) {
         element: <LegacyCaptureReviewRedirect />,
       },
     ],
-    { initialEntries: [path] },
+    {
+      initialEntries: [
+        {
+          pathname: path.split("?")[0],
+          search: path.includes("?") ? `?${path.split("?")[1]}` : "",
+          state,
+        },
+      ],
+    },
   );
   render(<RouterProvider router={router} />);
   return router;
@@ -301,6 +309,17 @@ describe("knowledge management", () => {
     fireEvent.click(screen.getByTestId("document-upload"));
     expect(await screen.findByText("File đã có trong KB")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/knowledge/general/sources/upload/upload1");
+  });
+
+  it("returns to the page the source was opened from, and to the library otherwise", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(rawText())));
+    const path = "/knowledge/general/sources/upload/upload1";
+    show(path, { from: "/admin/knowledge-bases?kb=general" });
+    const back = await screen.findByRole("link", { name: /Kho kiến thức/ });
+    expect(back).toHaveAttribute("href", "/admin/knowledge-bases?kb=general");
+    cleanup();
+    show(path, { from: "https://evil.example/" });
+    expect(await screen.findByRole("link", { name: /Thư viện tài liệu/ })).toHaveAttribute("href", "/files");
   });
 
   it("queues Extract on raw TXT (convert, then extract) with a per-source mode and reviews chunks", async () => {

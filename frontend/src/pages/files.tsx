@@ -12,6 +12,7 @@ import {
   Check,
   Download,
   Eye,
+  BookOpen,
 } from "lucide-react";
 import { useAuthClient } from "@/hooks/auth";
 import { attachLibraryFile } from "@/services/document-api";
@@ -19,7 +20,7 @@ import { listConfiguredKnowledgeBases } from "@/services/knowledge-api";
 import type { KnowledgeBase } from "@/types";
 import { FilePreview } from "@/components/file-preview";
 import { LibraryFileDialog } from "@/components/library-file-dialog";
-import { listManagedSources, removeManagedSource, sourceLink, type ManagedSource } from "@/services/knowledge-management";
+import { listManagedSources, removeManagedSource, sourceLink, sourceProcessingLabel, type ManagedSource } from "@/services/knowledge-management";
 import {
   ACCEPTED_EXTENSIONS,
   downloadFile,
@@ -307,6 +308,11 @@ export function FilesPage() {
                     <DropdownMenuItem onSelect={() => setPreviewFile(file)}><Eye /> Xem trước</DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => void open(file)}><ExternalLink /> Mở tệp gốc</DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => void download(file)}><Download /> Tải xuống</DropdownMenuItem>
+                    {!sourcesError && sourcesFor(file).map((entry, _index, all) => (
+                      <DropdownMenuItem key={entry.id} asChild>
+                        <Link to={sourceLink(entry)}><BookOpen /> {all.length > 1 ? `Mở chi tiết trong kho ${entry.kb}` : "Mở chi tiết tri thức"}</Link>
+                      </DropdownMenuItem>
+                    ))}
                     <DropdownMenuItem onSelect={() => setStateFile(file)}><Activity /> Trạng thái xử lý</DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem variant="destructive" disabled={!sourceFor(file) || !!sourcesError} onSelect={() => setPendingRemove([file])}><Trash2 /> Gỡ khỏi kho kiến thức</DropdownMenuItem>
@@ -329,6 +335,16 @@ export function FilesPage() {
                   {formatSize(file.size_bytes)} ·{" "}
                   {new Date(file.created_at).toLocaleString("vi-VN")}
                 </p>
+                {(() => {
+                  const entry = sourcesError ? undefined : sourceFor(file);
+                  if (!entry) return null;
+                  return (
+                    <p className="library-status" data-testid="library-file-status">
+                      <span>{sourceProcessingLabel(entry)}{entry.review === "pending" && " · Chờ duyệt"}</span>
+                      <Link to={sourceLink(entry)} aria-label={`Xem chi tiết ${file.filename}`} title={`Kho ${entry.kb}`}>Xem chi tiết</Link>
+                    </p>
+                  );
+                })()}
                 {rowErrors[file.id] && (
                   <p className="vc-inline-error" role="alert">
                     {rowErrors[file.id]}
@@ -349,7 +365,7 @@ export function FilesPage() {
             if (sourcesError) return <p role="alert">{sourcesError}</p>;
             if (!source) return <><p>File chưa được liên kết với kho kiến thức hoặc trạng thái đang tải.</p>{rowErrors[stateFile.id] && <Button disabled={!kbReady || uploading} onClick={async () => { setUploading(true); try { await queueFile(stateFile, defaultKb); } finally { setUploading(false); } }}>Thử lại xử lý</Button>}</>;
             const processing = source.processing;
-            const label = processing.status === "queued" ? "Đang chờ xử lý" : processing.status === "running" ? "Đang xử lý" : processing.status === "failed" || processing.status === "interrupted" ? "Xử lý thất bại" : source.stage === "extracted" ? "Đã xử lý" : "Chưa hoàn tất xử lý";
+            const label = sourceProcessingLabel(source);
             return <><p><strong>{label}</strong>{source.review === "pending" && " · Tri thức đang chờ duyệt"} · Kho {source.kb}</p>{processing.error && <p role="alert">{processing.error}</p>}<Link className="link-button" to={sourceLink(source)}>Xem kết quả và chi tiết</Link>{sourcesFor(stateFile).filter((other) => other.id !== source.id).map((other) => <p key={other.id}><Link className="link-button" to={sourceLink(other)}>Xem nguồn trong kho {other.kb}</Link></p>)}</>;
           })()}
         </DialogContent>

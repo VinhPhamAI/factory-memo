@@ -1073,6 +1073,33 @@ export function LegacyCaptureReviewRedirect() {
   );
 }
 
+/** Pages a source detail can be opened from, and the label of their back link. */
+const BACK_TARGETS = [
+  { pattern: /^\/admin\/knowledge-bases(\?[^#]*)?$/, label: "Kho kiến thức" },
+  { pattern: /^\/files(\?[^#]*)?$/, label: "Thư viện tài liệu" },
+];
+
+/**
+ * Pick where the source page's back link goes.
+ *
+ * Args:
+ *   from: Route the user came from, carried in router state; only known
+ *     in-app pages are accepted.
+ *
+ * Returns:
+ *   The route and label of the originating page, or the file library when
+ *   the page was opened directly or from an unknown route.
+ */
+function backTarget(from: unknown) {
+  const match =
+    typeof from === "string"
+      ? BACK_TARGETS.find(({ pattern }) => pattern.test(from))
+      : undefined;
+  return match && typeof from === "string"
+    ? { to: from, label: match.label }
+    : { to: "/files", label: "Thư viện tài liệu" };
+}
+
 export function KnowledgeSourcePage() {
   const { kb = "", kind = "", sourceId = "" } = useParams();
   const validKind = ["upload", "conversation", "document"].includes(kind);
@@ -1080,7 +1107,9 @@ export function KnowledgeSourcePage() {
   const state = useLocation().state as {
     notice?: string;
     located?: LocatedReference;
+    from?: string;
   } | null;
+  const back = backTarget(state?.from);
   const notice = state?.notice;
   // A search result's evidence chip carries the location to show first.
   const startLocated = state?.located;
@@ -1291,12 +1320,12 @@ export function KnowledgeSourcePage() {
     preview.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
-  if (!validKind) return <Navigate to="/files" replace />;
+  if (!validKind) return <Navigate to={back.to} replace />;
   if (!source)
     return (
       <main className="vc-page km-page">
-        <Link to="/files" className="vc-back">
-          <ArrowLeft size={16} /> Thư viện tài liệu
+        <Link to={back.to} className="vc-back">
+          <ArrowLeft size={16} /> {back.label}
         </Link>
         {error ? (
           <p className="vc-notice error" role="alert">
@@ -1349,8 +1378,8 @@ export function KnowledgeSourcePage() {
 
   return (
     <main className="vc-page km-detail" data-testid="knowledge-source">
-      <Link to="/files" className="vc-back">
-        <ArrowLeft size={16} /> Thư viện tài liệu
+      <Link to={back.to} className="vc-back">
+        <ArrowLeft size={16} /> {back.label}
       </Link>
       <header className="km-heading">
         <div>

@@ -148,6 +148,15 @@ const sourcePath = (kb: string, kind: SourceKind, id: string) =>
   `${base(kb)}/sources/${kind}/${encodeURIComponent(id)}`;
 export const sourceLink = (source: Pick<ManagedSource, "kb" | "kind" | "id">) =>
   `/knowledge/${encodeURIComponent(source.kb)}/sources/${source.kind}/${encodeURIComponent(source.id)}`;
+/** Vietnamese label for where a source is in conversion and extraction. */
+export function sourceProcessingLabel(source: ManagedSource): string {
+  const status = source.processing.status;
+  if (status === "queued") return "Đang chờ xử lý";
+  if (status === "running") return "Đang xử lý";
+  if (status === "failed" || status === "interrupted") return "Xử lý thất bại";
+  return source.stage === "extracted" ? "Đã xử lý" : "Chưa hoàn tất xử lý";
+}
+
 const originalDocumentUrl = (source: ManagedSource) =>
   `${sourcePath(source.kb, "upload", source.id)}/original`;
 const originalPageUrl = (source: ManagedSource, page: number) =>
