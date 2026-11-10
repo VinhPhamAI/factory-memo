@@ -29,6 +29,8 @@
   --background: #fff;
   --foreground: #1d2f45;
   /* Factory Memo palette: blue for navigation and actions, green for documents. */
+  --page-heading-size: 26px;
+  --page-padding-top: 32px;
   --primary: #214d87;
   --primary-hover: #183c6c;
   --navy: #17345d;
@@ -64,6 +66,19 @@
 * {
   box-sizing: border-box;
   border-color: #e5eaf0;
+}
+/* Page titles share typography; page layouts control spacing and wrapping. */
+.page-heading {
+  font-size: var(--page-heading-size);
+  font-weight: 680;
+  line-height: 1.3;
+  letter-spacing: -0.03em;
+}
+@media (max-width: 860px) {
+  :root {
+    --page-heading-size: 22px;
+    --page-padding-top: 24px;
+  }
 }
 body {
   margin: 0;
@@ -443,6 +458,7 @@ button:disabled {
 }
 
 .ask-layout {
+  padding-top: var(--page-padding-top);
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
   height: 100%;
@@ -462,10 +478,7 @@ button:disabled {
   align-items: center;
 }
 .page-header h1 {
-  font-size: 18px;
-  font-weight: 600;
   margin: 0 0 5px;
-  letter-spacing: -0.3px;
 }
 .header-subtitle {
   color: #6b7d93;
@@ -917,7 +930,7 @@ button:disabled {
 }
 
 .sources-page {
-  padding: 44px 42px 30px;
+  padding: var(--page-padding-top) 42px 30px;
   height: 100%;
   overflow-y: auto;
 }
@@ -929,9 +942,6 @@ button:disabled {
   padding-bottom: 30px;
 }
 .sources-header h1 {
-  font-size: 29px;
-  letter-spacing: -0.7px;
-  font-weight: 600;
   margin: 9px 0 7px;
 }
 .sources-header p {
@@ -1215,7 +1225,7 @@ button:disabled {
 .review-page {
   height: 100%;
   overflow-y: auto;
-  padding: 28px 38px 35px;
+  padding: var(--page-padding-top) 38px 35px;
 }
 .review-heading {
   display: flex;
@@ -1234,9 +1244,6 @@ button:disabled {
   flex: 1;
 }
 .review-heading h1 {
-  font-size: 22px;
-  font-weight: 550;
-  letter-spacing: -0.4px;
   margin: 0 0 6px;
 }
 .review-heading p {
@@ -1488,7 +1495,7 @@ button:disabled {
 .record-page {
   height: 100%;
   overflow-y: auto;
-  padding: 27px 45px 35px;
+  padding: var(--page-padding-top) 45px 35px;
 }
 .record-header {
   display: flex;
@@ -1511,9 +1518,6 @@ button:disabled {
   margin: 29px 0 26px;
 }
 .record-heading h1 {
-  font-size: 28px;
-  font-weight: 550;
-  letter-spacing: -0.6px;
   margin: 10px 0 9px;
 }
 .record-heading p {
@@ -1651,10 +1655,6 @@ button:disabled {
   padding: 60px 35px;
   text-align: center;
 }
-.route-empty h1 {
-  font-size: 23px;
-  font-weight: 500;
-}
 .route-empty p {
   margin: 15px 0 25px;
   color: #7a8ea9;
@@ -1670,7 +1670,7 @@ button:disabled {
     grid-template-columns: minmax(0, 1fr) 320px;
   }
   .sources-page {
-    padding: 34px 28px;
+    padding: var(--page-padding-top) 28px 34px;
   }
   .source-table-head,
   .source-row {
@@ -1729,7 +1729,7 @@ button:disabled {
     padding-top: 0;
   }
   .record-page {
-    padding: 25px 30px;
+    padding: var(--page-padding-top) 30px 25px;
   }
   .record-controls {
     flex-wrap: wrap;
@@ -1773,9 +1773,6 @@ button:disabled {
   }
   .page-header {
     padding: 19px 20px 13px;
-  }
-  .page-header h1 {
-    font-size: 17px;
   }
   .header-subtitle {
     font-size: 12px;
@@ -1823,14 +1820,11 @@ button:disabled {
     font-size: 15px;
   }
   .sources-page {
-    padding: 28px 20px;
+    padding: var(--page-padding-top) 20px 28px;
   }
   .sources-header {
     gap: 21px;
     padding-bottom: 23px;
-  }
-  .sources-header h1 {
-    font-size: 26px;
   }
   .capture-actions {
     width: 100%;
@@ -1901,7 +1895,7 @@ button:disabled {
     font-size: 12px;
   }
   .review-page {
-    padding: 20px;
+    padding: var(--page-padding-top) 20px 20px;
   }
   .review-heading {
     gap: 10px;
@@ -1912,9 +1906,6 @@ button:disabled {
   .review-heading > button:first-child {
     width: 100%;
     justify-content: flex-start;
-  }
-  .review-heading h1 {
-    font-size: 18px;
   }
   .review-heading p {
     display: none;
@@ -1943,13 +1934,10 @@ button:disabled {
     font-size: 14px;
   }
   .record-page {
-    padding: 20px;
+    padding: var(--page-padding-top) 20px 20px;
   }
   .record-heading {
     margin-top: 25px;
-  }
-  .record-heading h1 {
-    font-size: 26px;
   }
   .record-heading p {
     font-size: 13px;
@@ -2030,9 +2018,6 @@ body {
   font-size: 12px;
 }
 .page-title h1 {
-  font-size: 26px;
-  font-weight: 650;
-  letter-spacing: -0.5px;
   margin: 8px 0 0;
   color: #0f2547;
 }
@@ -2238,7 +2223,7 @@ button.ref-chip:hover,
 
 /* ---- Step 1: recording ------------------------------------------------- */
 .record-page {
-  padding: 22px 36px 28px;
+  padding: var(--page-padding-top) 36px 28px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -2531,7 +2516,7 @@ button.ref-chip:hover,
 
 /* ---- Step 2: library + OCR -------------------------------------------- */
 .sources-page {
-  padding: 34px 40px 30px;
+  padding: var(--page-padding-top) 40px 30px;
 }
 .sources-header h1 {
   color: #0f2547;
@@ -2599,7 +2584,7 @@ button.ref-chip:hover,
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 20px 32px 24px;
+  padding: var(--page-padding-top) 32px 24px;
   gap: 18px;
   overflow: hidden;
 }
@@ -2614,8 +2599,6 @@ button.ref-chip:hover,
   min-width: 260px;
 }
 .ocr-title h1 {
-  font-size: 23px;
-  font-weight: 650;
   margin: 6px 0 0;
   color: #0f2547;
 }
@@ -2849,7 +2832,7 @@ button.ref-chip:hover,
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 22px 32px 24px;
+  padding: var(--page-padding-top) 32px 24px;
   gap: 18px;
   overflow: hidden;
 }
@@ -2860,8 +2843,6 @@ button.ref-chip:hover,
   gap: 20px;
 }
 .analyze-header h1 {
-  font-size: 24px;
-  font-weight: 650;
   margin: 6px 0 6px;
   color: #0f2547;
 }
@@ -3201,7 +3182,7 @@ button.ref-chip:hover,
 .card-page {
   height: 100%;
   overflow-y: auto;
-  padding: 22px 32px 30px;
+  padding: var(--page-padding-top) 32px 30px;
 }
 .card-page .route-empty {
   max-width: 720px;
@@ -3235,8 +3216,6 @@ button.ref-chip:hover,
   color: #7fb0ff;
 }
 .knowledge-card-head h1 {
-  font-size: 24px;
-  font-weight: 700;
   color: #fff;
   margin: 6px 0 0;
 }
@@ -3490,7 +3469,6 @@ button.ref-chip:hover,
   background: #fff;
 }
 .page-header h1 {
-  font-size: 22px;
   margin: 6px 0 4px;
 }
 .answer-prose {
@@ -3584,7 +3562,7 @@ button.ref-chip:hover,
   .card-page,
   .analyze-page,
   .ocr-page {
-    padding: 16px;
+    padding: var(--page-padding-top) 16px 16px;
   }
   .card-row {
     grid-template-columns: 1fr;
@@ -3792,6 +3770,9 @@ button.ref-chip:hover,
   margin: 0 auto;
   width: 100%;
 }
+.km-page > .km-heading {
+  margin-top: 0;
+}
 .km-heading {
   display: flex;
   align-items: flex-start;
@@ -3801,8 +3782,6 @@ button.ref-chip:hover,
 }
 .km-heading h1 {
   margin: 0 0 8px;
-  font-size: 26px;
-  font-weight: 650;
   color: #0f2547;
   overflow-wrap: anywhere;
 }
@@ -3882,7 +3861,7 @@ button.ref-chip:hover,
 .files-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; }
 .library-page { width: 100%; max-width: none; margin: 0; }
 .library-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-bottom: 20px; border-bottom: 1px solid #eee; }
-.library-heading h1 { margin: 0; color: #181818; font-size: 28px; font-weight: 700; }
+.library-heading h1 { margin: 0; color: #181818; }
 .library-toolbar { display: flex; align-items: center; gap: 16px; }
 .library-search { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid #dedede; border-radius: 999px; color: #777; }
 .library-search input { border: 0; outline: 0; min-width: 170px; background: transparent; color: #222; }
@@ -3922,9 +3901,9 @@ button.ref-chip:hover,
 .library-status a:hover { text-decoration: underline; }
 .library-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 /* Administrator knowledge-base workspace. */
-.kb-admin-page { width: min(1240px, 100%); margin: 0 auto; padding: 18px 36px 64px; color: var(--fm-ink); }
+.kb-admin-page { width: min(1240px, 100%); margin: 0 auto; padding: var(--page-padding-top) 36px 64px; color: var(--fm-ink); }
 .kb-admin-header { display: flex; justify-content: space-between; align-items: end; gap: 14px 24px; flex-wrap: wrap; padding-bottom: 16px; border-bottom: 1px solid var(--fm-line); }
-.kb-admin-header h1 { font-size: clamp(24px, 3vw, 30px); font-weight: 680; letter-spacing: -.035em; line-height: 1.15; margin: 0 0 4px; color: var(--fm-ink); }
+.kb-admin-header h1 { margin: 0 0 4px; color: var(--fm-ink); }
 .kb-admin-header > div > p { color: var(--fm-muted); margin: 0; font-size: 14px; }
 .kb-admin-page .kb-admin-create { border-radius: 8px; background: var(--primary); color: #fff; height: 40px; padding: 0 16px; }
 .kb-admin-page .kb-admin-create:hover { background: var(--primary-hover); }
@@ -3966,7 +3945,7 @@ button.ref-chip:hover,
 .km-kb-technical > summary { display: inline-flex; align-items: center; min-height: 36px; cursor: pointer; color: var(--primary); font-size: 13.5px; font-weight: 600; }
 .km-kb-technical[open] > summary { margin-bottom: 8px; }
 @media (max-width: 850px) {
-  .kb-admin-page { padding: 16px 16px 48px; }
+  .kb-admin-page { padding: var(--page-padding-top) 16px 48px; }
   .kb-admin-layout { grid-template-columns: minmax(0, 1fr); }
   .kb-admin-header { align-items: stretch; flex-direction: column; }
   .kb-admin-page .kb-admin-create, .kb-admin-search, .kb-admin-detail-top .vc-button, .km-kb-technical > summary { min-height: 44px; }
@@ -4050,7 +4029,6 @@ button.ref-chip:hover,
   .library-toolbar { width: 100%; justify-content: space-between; gap: 6px; }
   .library-search { min-width: 0; }
   .library-search input { min-width: 0; width: 100%; }
-  .km-heading h1 { font-size: 23px; }
   .km-kb-card { padding: 16px; }
   .km-source-list > li { flex-wrap: wrap; gap: 12px; padding: 16px; }
   .km-source-list > li > [data-slot="button"] { margin-left: 84px; }
@@ -4066,7 +4044,7 @@ button.ref-chip:hover,
 .vc-page {
   height: 100%;
   overflow-y: auto;
-  padding: 28px 32px 40px;
+  padding: var(--page-padding-top) 32px 40px;
   color: #172d4b;
 }
 .vc-muted {
@@ -4089,9 +4067,6 @@ button.ref-chip:hover,
 }
 .vc-heading h1 {
   margin: 0 0 6px;
-  font-size: 26px;
-  font-weight: 650;
-  letter-spacing: -0.3px;
   color: #0f2547;
 }
 .vc-heading p {
@@ -4805,10 +4780,7 @@ button.ref-chip:hover,
 }
 .vc-review-title h1 {
   margin: 0;
-  font-size: 21px;
-  font-weight: 650;
   color: #0f2547;
-  letter-spacing: -0.2px;
 }
 .vc-review-title p {
   margin: 3px 0 0;
@@ -5260,7 +5232,7 @@ button.ref-chip:hover,
 
 @media (max-width: 1023px) {
   .vc-page {
-    padding: 18px 16px 28px;
+    padding: var(--page-padding-top) 16px 28px;
   }
   .vc-review {
     overflow-y: auto;
@@ -5516,6 +5488,12 @@ button.ref-chip:hover,
   gap: 14px;
   color: var(--fm-ink);
 }
+.sidebar-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
 .sidebar-brand {
   display: flex;
   align-items: center;
@@ -5712,13 +5690,16 @@ button.ref-chip:hover,
   font-size: 12px;
 }
 .app-topbar {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 10px;
   min-height: 52px;
   flex-shrink: 0;
   padding: 8px 18px;
   background: #fff;
+}
+.sidebar-closed .app-topbar {
+  display: flex;
 }
 .app-icon-button {
   display: inline-grid;
@@ -5742,15 +5723,6 @@ button.ref-chip:hover,
   display: flex;
   padding: 0;
   font-size: 15px;
-}
-.app-topbar-section {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--fm-muted);
-  font-size: 13px;
-  font-weight: 550;
 }
 .app-mobile-nav {
   display: none;
@@ -5785,9 +5757,6 @@ button.ref-chip:hover,
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 17px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
   color: var(--fm-ink);
 }
 .composer-actions {
@@ -5802,6 +5771,7 @@ button.ref-chip:hover,
     display: none;
   }
   .app-topbar {
+    display: flex;
     min-height: 52px;
     padding: 4px 12px 4px 6px;
     padding-top: max(4px, env(safe-area-inset-top));
@@ -5820,9 +5790,6 @@ button.ref-chip:hover,
     display: flex;
     padding: 0;
     font-size: 16px;
-  }
-  .app-topbar-section {
-    display: none;
   }
   .app-mobile-nav {
     display: grid;
@@ -5928,8 +5895,6 @@ button.ref-chip:hover,
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
-  font: 400 clamp(30px, 4vw, 40px) / 1.17 Cambria, Georgia, serif;
-  letter-spacing: -0.035em;
   color: #243c59;
   text-align: center;
 }
@@ -6075,7 +6040,7 @@ button.ref-chip:hover,
 .library-page {
   max-width: 1180px;
   margin: 0 auto;
-  padding-top: 18px;
+  padding-top: var(--page-padding-top);
 }
 .library-heading {
   flex-wrap: wrap;
@@ -6085,9 +6050,6 @@ button.ref-chip:hover,
 }
 .library-heading h1 {
   color: var(--fm-ink);
-  font-size: clamp(24px, 3vw, 30px);
-  font-weight: 680;
-  letter-spacing: -0.035em;
 }
 .library-toolbar {
   flex-wrap: wrap;
@@ -6341,7 +6303,7 @@ button.ref-chip:hover,
   height: 100%;
   margin: 0 auto;
   overflow-y: auto;
-  padding: 18px 28px 56px;
+  padding: var(--page-padding-top) 28px 56px;
   color: var(--fm-ink);
 }
 .inquiry-page-heading,
@@ -6352,10 +6314,6 @@ button.ref-chip:hover,
 }
 .inquiry-page h1 {
   margin: 0 0 6px;
-  font-size: clamp(22px, 3vw, 28px);
-  font-weight: 680;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
   overflow-wrap: anywhere;
 }
 .inquiry-page-heading p {
@@ -6591,7 +6549,7 @@ button.ref-chip:hover,
 }
 @media (max-width: 860px) {
   .inquiry-page {
-    padding: 14px 16px 40px;
+    padding: var(--page-padding-top) 16px 40px;
   }
   .inquiry-tab,
   .inquiry-actions button,
@@ -6620,15 +6578,11 @@ button.ref-chip:hover,
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  padding: 18px 24px 16px;
+  padding: var(--page-padding-top) 24px 16px;
   color: var(--fm-ink);
 }
 .ticket-page h1 {
   margin: 0 0 4px;
-  font-size: clamp(22px, 3vw, 26px);
-  font-weight: 680;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
 }
 .ticket-page-heading p {
   margin: 0;
@@ -6683,12 +6637,6 @@ button.ref-chip:hover,
   color: var(--primary);
   font-weight: 650;
   box-shadow: 0 1px 2px rgb(29 47 69 / 0.12);
-}
-.ticket-total {
-  margin-left: auto;
-  color: var(--fm-muted);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
 }
 .ticket-board {
   display: grid;
@@ -6757,7 +6705,7 @@ button.ref-chip:hover,
 .ticket-column ul {
   display: grid;
   align-content: start;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
   padding: 1px;
   overflow-y: auto;
@@ -6775,22 +6723,19 @@ button.ref-chip:hover,
 .ticket-card {
   position: relative;
   display: grid;
-  gap: 10px;
-  padding: 12px 12px 10px;
-  border-radius: 8px;
+  justify-items: start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 10px;
   background: #fff;
   box-shadow:
     0 0 0 1px rgb(29 47 69 / 0.08),
     0 1px 2px rgb(29 47 69 / 0.1);
-  transition:
-    box-shadow 0.15s ease,
-    transform 0.15s ease;
 }
 .ticket-card:hover {
   box-shadow:
     0 0 0 1px rgb(29 47 69 / 0.1),
     0 4px 12px rgb(29 47 69 / 0.14);
-  transform: translateY(-1px);
 }
 .ticket-card[data-active] {
   box-shadow:
@@ -6808,11 +6753,13 @@ button.ref-chip:hover,
   font-size: 14px;
   font-weight: 550;
   line-height: 1.4;
+  /* Always two lines tall, so cards in a column share one height. */
+  min-height: 2.8em;
   text-decoration: none;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 .ticket-card-link::after {
   position: absolute;
@@ -6822,21 +6769,16 @@ button.ref-chip:hover,
 .ticket-card-link:focus-visible {
   outline: none;
 }
-.ticket-card-meta,
 .ticket-card-foot {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-.ticket-card-meta {
-  flex-wrap: wrap;
-}
-.ticket-card-foot {
   justify-content: space-between;
+  gap: 8px;
+  width: 100%;
 }
 .ticket-card-time {
-  color: var(--fm-muted);
-  font-size: 12.5px;
+  font-weight: 400;
+  white-space: nowrap;
 }
 .ticket-card-people {
   display: flex;
@@ -6849,9 +6791,11 @@ button.ref-chip:hover,
   align-items: center;
   gap: 5px;
   color: var(--fm-muted);
+  min-width: 0;
   font-size: 12.5px;
   font-weight: 550;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .ticket-key svg {
   color: var(--fm-focus);
@@ -6936,9 +6880,8 @@ button.ref-chip:hover,
   color: var(--fm-ink);
 }
 .ticket-dialog-header {
-  gap: 8px;
-  padding: 16px 52px 14px 24px;
-  border-bottom: 1px solid var(--fm-line);
+  gap: 12px;
+  padding: 24px 60px 20px 32px;
   text-align: left;
 }
 .ticket-dialog-crumb {
@@ -6948,17 +6891,22 @@ button.ref-chip:hover,
   gap: 10px;
 }
 .ticket-dialog-title {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.01em;
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
+.ticket-steps-bar {
+  padding: 14px 32px;
+  border-block: 1px solid var(--fm-line);
+  background: var(--fm-subtle);
+}
 .ticket-steps {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 0;
-  margin: 4px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -7008,7 +6956,7 @@ button.ref-chip:hover,
 .ticket-dialog-body {
   display: grid;
   flex: 1;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   min-height: 0;
   overflow-y: auto;
 }
@@ -7018,26 +6966,49 @@ button.ref-chip:hover,
   margin: 20px 24px;
 }
 .ticket-dialog-main {
+  display: grid;
+  align-content: start;
+  gap: 32px;
   min-width: 0;
-  padding: 20px 24px 28px;
+  padding: 28px 32px 36px;
 }
 .ticket-dialog-side {
   display: grid;
   align-content: start;
+  gap: 16px;
+  padding: 28px 32px 36px 0;
+}
+.ticket-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  padding: 20px 20px 28px 0;
+  min-height: 32px;
+  margin-bottom: 14px;
+}
+.ticket-section-actions {
+  display: flex;
+  gap: 6px;
 }
 .ticket-section-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 24px 0 10px;
-  font-size: 14.5px;
+  margin: 0;
+  font-size: 15.5px;
   font-weight: 680;
+}
+.ticket-section [data-testid="evidence-empty"] {
+  margin: 0;
+  padding: 18px;
+  border: 1px dashed #c9d4e2;
+  border-radius: 10px;
+  text-align: center;
 }
 .ticket-fields {
   display: grid;
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px 36px;
   margin: 0;
 }
 .ticket-fields dt,
@@ -7046,10 +7017,15 @@ button.ref-chip:hover,
   font-size: 12.5px;
   font-weight: 600;
 }
+.ticket-fields dt {
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
 .ticket-fields dd {
-  margin: 3px 0 0;
+  margin: 6px 0 0;
   font-size: 14.5px;
-  line-height: 1.55;
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -7058,9 +7034,9 @@ button.ref-chip:hover,
   color: #8a99ad;
 }
 .ticket-proposal {
-  padding: 14px 16px;
+  padding: 18px 20px 20px;
   border: 1px solid var(--fm-selected-line);
-  border-radius: 10px;
+  border-radius: 12px;
   background: linear-gradient(180deg, #f3f8ff, #fafcff);
 }
 .ticket-proposal h2 {
@@ -7068,7 +7044,7 @@ button.ref-chip:hover,
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
   color: var(--primary);
   font-size: 14px;
   font-weight: 680;
@@ -7087,17 +7063,17 @@ button.ref-chip:hover,
 }
 .ticket-proposal-text {
   font-size: 14.5px;
-  line-height: 1.55;
+  line-height: 1.7;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .ticket-panel {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   margin: 0;
-  padding: 14px;
+  padding: 18px;
   border: 1px solid var(--fm-line);
-  border-radius: 10px;
+  border-radius: 12px;
   background: #fff;
 }
 .ticket-panel h2,
@@ -7118,12 +7094,19 @@ button.ref-chip:hover,
   color: var(--fm-muted);
   font-size: 13.5px;
 }
+.ticket-panel .field-note {
+  margin: 0;
+}
 .ticket-expert {
   display: grid;
-  gap: 5px;
+  gap: 10px;
   margin-top: 4px;
-  padding-top: 12px;
+  padding-top: 18px;
   border-top: 1px solid var(--fm-line);
+}
+.ticket-expert label {
+  display: grid;
+  gap: 6px;
   color: var(--fm-muted);
   font-size: 12.5px;
   font-weight: 600;
@@ -7141,17 +7124,27 @@ button.ref-chip:hover,
 }
 .ticket-details {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px 12px;
   margin: 0;
+}
+.ticket-details > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 42px;
+  border-bottom: 1px solid var(--fm-line);
+}
+.ticket-details > div:last-child {
+  border-bottom: 0;
 }
 .ticket-details dd {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 8px;
   margin: 0;
   font-size: 13.5px;
+  text-align: right;
   overflow-wrap: anywhere;
 }
 @media (max-width: 860px) {
@@ -7163,17 +7156,23 @@ button.ref-chip:hover,
     padding: 16px 16px 0;
   }
   .ticket-dialog-main {
-    padding: 16px 16px 24px;
+    padding: 20px 16px 28px;
   }
   .ticket-dialog-header {
-    padding-left: 16px;
+    padding: 20px 52px 16px 16px;
+  }
+  .ticket-steps-bar {
+    padding: 12px 16px;
+  }
+  .ticket-fields {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (max-width: 760px) {
   .ticket-page {
     height: auto;
     overflow: visible;
-    padding: 14px 14px 24px;
+    padding: var(--page-padding-top) 14px 24px;
   }
   .ticket-search,
   .ticket-search input {
@@ -7191,11 +7190,181 @@ button.ref-chip:hover,
     min-height: 44px;
   }
 }
+/*
+ * Ticket motion. One language everywhere: things fade in while rising a few
+ * pixels, hover lifts with shadow, and state changes cross-fade colour. Nothing
+ * scales, rotates or changes width.
+ */
+.ticket-page,
+.ticket-dialog {
+  --ticket-ease: cubic-bezier(0.2, 0, 0, 1);
+  --ticket-fast: 0.16s;
+  --ticket-slow: 0.32s;
+}
+@keyframes ticket-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes ticket-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes ticket-moved {
+  from {
+    box-shadow:
+      0 0 0 2px var(--fm-focus),
+      0 0 0 6px rgb(36 89 174 / 0.2);
+  }
+  to {
+    box-shadow:
+      0 0 0 2px rgb(36 89 174 / 0),
+      0 0 0 6px rgb(36 89 174 / 0);
+  }
+}
+@keyframes ticket-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes ticket-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+@keyframes ticket-glow {
+  50% {
+    border-color: var(--fm-focus);
+    box-shadow: 0 0 0 4px rgb(36 89 174 / 0.1);
+  }
+}
+.ticket-card {
+  transition:
+    box-shadow var(--ticket-fast) var(--ticket-ease),
+    transform var(--ticket-fast) var(--ticket-ease);
+  animation: ticket-in var(--ticket-slow) var(--ticket-ease) backwards;
+  animation-delay: calc(var(--order, 0) * 40ms);
+}
+.ticket-card:hover {
+  transform: translateY(-2px);
+}
+.ticket-card:active {
+  box-shadow:
+    0 0 0 1px rgb(29 47 69 / 0.12),
+    0 1px 2px rgb(29 47 69 / 0.1);
+  transform: none;
+}
+/* The ring sits on a pseudo-element so removing it never restarts the card's entrance. */
+.ticket-card[data-moved]::before {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+  animation: ticket-moved 1.8s ease-out forwards;
+}
+.ticket-card-link {
+  transition: color var(--ticket-fast) var(--ticket-ease);
+}
+.ticket-card:hover .ticket-card-link {
+  color: var(--primary);
+}
+.ticket-card-skeleton {
+  animation: none;
+  pointer-events: none;
+}
+.ticket-count,
+.ticket-lozenge {
+  animation: ticket-fade var(--ticket-slow) var(--ticket-ease);
+}
+.ticket-filter,
+.ticket-search input,
+.ticket-empty,
+.ticket-panel,
+.ticket-proposal,
+.ticket-dialog button,
+.ticket-dialog a[data-slot="button"] {
+  transition:
+    background-color var(--ticket-fast) var(--ticket-ease),
+    color var(--ticket-fast) var(--ticket-ease),
+    border-color var(--ticket-fast) var(--ticket-ease),
+    box-shadow var(--ticket-fast) var(--ticket-ease),
+    opacity var(--ticket-fast) var(--ticket-ease);
+}
+.ticket-filter:active,
+.ticket-dialog button:not(:disabled):active,
+.ticket-dialog a[data-slot="button"]:active {
+  opacity: 0.7;
+}
+.ticket-column:hover .ticket-empty {
+  border-color: var(--stage);
+  background: rgb(255 255 255 / 0.6);
+}
+.ticket-skeleton {
+  display: block;
+  height: 11px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #e4eaf2 25%, #f3f6fa 50%, #e4eaf2 75%) 0 0 /
+    200% 100%;
+  animation: ticket-shimmer 1.3s linear infinite;
+}
+.ticket-skeleton[data-width="mid"] {
+  width: 65%;
+}
+.ticket-skeleton[data-width="short"] {
+  width: 35%;
+}
+.ticket-skeleton-block {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 26px;
+}
+.ticket-analyzing {
+  display: grid;
+  gap: 9px;
+}
+.ticket-proposal[data-busy] {
+  animation: ticket-glow 1.6s ease-in-out infinite;
+}
+.ticket-proposal[data-busy] h2 svg {
+  animation: ticket-breathe 1.6s ease-in-out infinite;
+}
+.ticket-proposal-text,
+.ticket-dialog-main,
+.ticket-dialog-side {
+  animation: ticket-in var(--ticket-slow) var(--ticket-ease);
+}
+.ticket-steps li,
+.ticket-step-mark,
+.ticket-steps li + li::before {
+  transition:
+    background-color var(--ticket-slow) var(--ticket-ease),
+    border-color var(--ticket-slow) var(--ticket-ease),
+    color var(--ticket-slow) var(--ticket-ease);
+}
+.ticket-panel:not(.ticket-panel-note):hover {
+  border-color: var(--fm-selected-line);
+  box-shadow: 0 2px 8px rgb(29 47 69 / 0.06);
+}
 @media (prefers-reduced-motion: reduce) {
-  .ticket-card {
-    transition: none;
+  .ticket-page *,
+  .ticket-dialog * {
+    animation: none !important;
+    transition: none !important;
   }
   .ticket-card:hover {
     transform: none;
   }
+}
+.ticket-edit {
+  display: grid;
+  gap: 12px;
+}
+.ticket-edit .inquiry-form {
+  gap: 18px;
+}
+.ticket-edit .field-note {
+  margin: 0;
 }

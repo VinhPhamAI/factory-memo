@@ -187,7 +187,9 @@ export function CardPage() {
           <span className="record-idle-icon">
             <Sparkles size={34} strokeWidth={1.5} />
           </span>
-          <h1>{workspace.loading ? "Đang tải…" : "Chưa có knowledge card"}</h1>
+          <h1 className="page-heading">
+            {workspace.loading ? "Đang tải…" : "Chưa có knowledge card"}
+          </h1>
           <p>Chạy phân tích AI trên bản ghi âm và tài liệu để tạo card.</p>
           <Button onClick={() => void navigate("/analyze")}>
             Phân tích bằng AI
@@ -235,7 +237,7 @@ export function CardPage() {
           <header className="knowledge-card-head">
             <div>
               <span className="eyebrow">BƯỚC 4 · KNOWLEDGE CARD</span>
-              <h1>{card.subject} · Case</h1>
+              <h1 className="page-heading">{card.subject} · Case</h1>
               <div className="scope-tags">
                 {card.scope.map((chip) => (
                   <span key={chip} className="scope-tag">

@@ -169,7 +169,7 @@ export function InquiryPage() {
         </Link>
       </p>
       <header className="inquiry-detail-heading">
-        <h1>{inquiry.title || "(Chưa có tiêu đề)"}</h1>
+        <h1 className="page-heading">{inquiry.title || "(Chưa có tiêu đề)"}</h1>
         <p className="field-note">
           <Badge
             variant="secondary"

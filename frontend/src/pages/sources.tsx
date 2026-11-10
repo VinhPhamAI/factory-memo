@@ -156,7 +156,7 @@ export function SourcesPage() {
   if (sourceId && !workspace.loading)
     return (
       <div className="route-empty">
-        <h1>Không tìm thấy nguồn</h1>
+        <h1 className="page-heading">Không tìm thấy nguồn</h1>
         <p>Nguồn này không còn trong trình duyệt.</p>
         <Button onClick={() => void navigate("/sources")}>Về thư viện</Button>
       </div>
@@ -167,7 +167,7 @@ export function SourcesPage() {
       <header className="sources-header">
         <div>
           <span className="eyebrow">BƯỚC 2 · INPUT TÀI LIỆU</span>
-          <h1>Thư viện tài liệu</h1>
+          <h1 className="page-heading">Thư viện tài liệu</h1>
           <p>
             Bản ghi âm, phiếu báo lỗi, biên bản họp, ghi chú chuyên gia và
             manual của hãng cho MR-JE-AX167.

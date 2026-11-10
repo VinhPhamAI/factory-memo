@@ -802,7 +802,7 @@ export function KnowledgeManagementPage() {
     <main className="vc-page km-page" data-testid="knowledge-management">
       <header className="km-heading">
         <div>
-          <h1>Quản lý tri thức</h1>
+          <h1 className="page-heading">Quản lý tri thức</h1>
         </div>
         <Button
           variant="outline"
@@ -1383,7 +1383,7 @@ export function KnowledgeSourcePage() {
       </Link>
       <header className="km-heading">
         <div>
-          <h1>{source.name}</h1>
+          <h1 className="page-heading">{source.name}</h1>
           <p>
             {TYPE_NAMES[source.content_type ?? ""] ?? "Tài liệu"} · Kho {kb}
           </p>

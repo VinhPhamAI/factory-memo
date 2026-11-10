@@ -128,7 +128,7 @@ export function AnalyzePage() {
       <header className="analyze-header">
         <div>
           <span className="eyebrow">BƯỚC 3 · XỬ LÝ</span>
-          <h1>Phân tích AI: rút trích tri thức thành knowledge card</h1>
+          <h1 className="page-heading">Phân tích AI: rút trích tri thức thành knowledge card</h1>
           <p>
             AI đọc bản ghi âm và tài liệu, trả lời 7 câu hỏi cố định, đối chiếu
             từng trích dẫn với nguồn gốc rồi gắn phạm vi máy.

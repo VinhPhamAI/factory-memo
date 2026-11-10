@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   BookOpen,
@@ -8,7 +8,6 @@ import {
   Menu,
   PanelLeft,
   Plus,
-  UserCheck,
 } from "lucide-react";
 import { BrandMark } from "./brand";
 import { ConversationList } from "./conversation-list";
@@ -26,15 +25,7 @@ import { ConversationsProvider } from "@/hooks/conversations";
 import { AuthError } from "@/services/auth-api";
 import { cn } from "@/utils/cn";
 
-type Section = "ask" | "files" | "tickets" | "inquiries" | "admin";
-
-const SECTION_NAMES: Record<Section, string> = {
-  ask: "Hỏi đáp",
-  files: "Thư viện tài liệu",
-  tickets: "Ticket sự cố",
-  inquiries: "Yêu cầu chuyên gia",
-  admin: "Kho kiến thức",
-};
+type Section = "ask" | "files" | "tickets" | "admin";
 
 const SIDEBAR_ID = "app-sidebar";
 
@@ -49,8 +40,8 @@ export type QaShellOutletContext = {
  */
 function sectionFor(pathname: string): Section {
   if (pathname.startsWith("/admin")) return "admin";
-  if (pathname.startsWith("/tickets")) return "tickets";
-  if (pathname.startsWith("/inquiries")) return "inquiries";
+  if (pathname.startsWith("/tickets") || pathname.startsWith("/inquiries"))
+    return "tickets";
   if (pathname.startsWith("/files") || pathname.startsWith("/knowledge"))
     return "files";
   return "ask";
@@ -123,7 +114,7 @@ function NewChatLink({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 /** Desktop sidebar: brand, sections, recent chats and account controls. */
-function Sidebar({ section }: { section: Section }) {
+function Sidebar({ section, toggle }: { section: Section; toggle: ReactNode }) {
   const auth = useAuth();
   const isAdmin = auth.status === "signed-in" && auth.user.role === "admin";
   const sectionLink = (key: Section) => ({
@@ -132,10 +123,13 @@ function Sidebar({ section }: { section: Section }) {
   });
   return (
     <div className="sidebar-content">
-      <Link to="/ask" className="sidebar-brand">
-        <BrandMark small />
-        <span>Factory Memo</span>
-      </Link>
+      <div className="sidebar-brand-row">
+        <Link to="/ask" className="sidebar-brand">
+          <BrandMark small />
+          <span>Factory Memo</span>
+        </Link>
+        {toggle}
+      </div>
       <nav className="sidebar-nav" aria-label="Chức năng">
         <NewChatLink />
         <Link to="/files" data-testid="nav-files" {...sectionLink("files")}>
@@ -145,14 +139,6 @@ function Sidebar({ section }: { section: Section }) {
         <Link to="/tickets" data-testid="nav-tickets" {...sectionLink("tickets")}>
           <KanbanSquare size={17} aria-hidden="true" />
           Ticket sự cố
-        </Link>
-        <Link
-          to="/inquiries"
-          data-testid="nav-inquiries"
-          {...sectionLink("inquiries")}
-        >
-          <UserCheck size={17} aria-hidden="true" />
-          Yêu cầu chuyên gia
         </Link>
         {isAdmin && (
           <Link
@@ -181,7 +167,6 @@ function MobileSectionNav({ section }: { section: Section }) {
     { to: "/ask", key: "ask", label: "Hỏi đáp" },
     { to: "/files", key: "files", label: "Tài liệu" },
     { to: "/tickets", key: "tickets", label: "Ticket" },
-    { to: "/inquiries", key: "inquiries", label: "Chuyên gia" },
     ...(isAdmin
       ? [
           {
@@ -223,8 +208,34 @@ export function QaShell() {
   const section = sectionFor(useLocation().pathname);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const toggleRequested = useRef(false);
   const closeDrawer = () => setDrawerOpen(false);
   const toggleLabel = sidebarOpen ? "Thu gọn thanh bên" : "Mở thanh bên";
+  useEffect(() => {
+    if (toggleRequested.current) {
+      toggleRef.current?.focus();
+      toggleRequested.current = false;
+    }
+  }, [sidebarOpen]);
+  const sidebarToggle = (
+    <button
+      ref={toggleRef}
+      type="button"
+      className="app-icon-button sidebar-toggle"
+      aria-controls={SIDEBAR_ID}
+      aria-expanded={sidebarOpen}
+      aria-label={toggleLabel}
+      title={toggleLabel}
+      data-testid="sidebar-toggle"
+      onClick={() => {
+        toggleRequested.current = true;
+        setSidebarOpen((open) => !open);
+      }}
+    >
+      <PanelLeft size={18} aria-hidden="true" />
+    </button>
+  );
   return (
     <ConversationsProvider
       key={auth.status === "signed-in" ? auth.user.id : auth.status}
@@ -243,22 +254,13 @@ export function QaShell() {
             aria-label="Điều hướng"
             hidden={!sidebarOpen}
           >
-            <Sidebar section={section} />
+            <Sidebar
+              section={section}
+              toggle={sidebarOpen ? sidebarToggle : null}
+            />
           </aside>
           <div className="app-main">
             <header className="app-topbar">
-              <button
-                type="button"
-                className="app-icon-button sidebar-toggle"
-                aria-controls={SIDEBAR_ID}
-                aria-expanded={sidebarOpen}
-                aria-label={toggleLabel}
-                title={toggleLabel}
-                data-testid="sidebar-toggle"
-                onClick={() => setSidebarOpen((open) => !open)}
-              >
-                <PanelLeft size={18} aria-hidden="true" />
-              </button>
               {/* The trigger lets the drawer return focus here when it closes. */}
               <SheetTrigger asChild>
                 <button
@@ -274,9 +276,7 @@ export function QaShell() {
                 <BrandMark small />
                 <span>Factory Memo</span>
               </Link>
-              <span className="app-topbar-section">
-                {SECTION_NAMES[section]}
-              </span>
+              {!sidebarOpen && sidebarToggle}
             </header>
             <MobileSectionNav section={section} />
             {workspace.error && (

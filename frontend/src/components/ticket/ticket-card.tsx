@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, TicketCheck } from "lucide-react";
 import { Avatar } from "@/components/ticket/avatar";
@@ -10,10 +11,16 @@ export function TicketCard({
   ticket,
   userId,
   active,
+  moved,
+  order,
 }: {
   ticket: InquirySummary;
   userId: string;
   active: boolean;
+  /** The ticket just changed column; the card is highlighted briefly. */
+  moved: boolean;
+  /** Position in its column, used to stagger the entrance animation. */
+  order: number;
 }) {
   const mine = ticket.requested_by === userId;
   const requester = mine ? "Tôi" : ticket.requester_name;
@@ -22,21 +29,22 @@ export function TicketCard({
       className="ticket-card"
       data-testid="ticket-card"
       data-active={active || undefined}
+      data-moved={moved || undefined}
+      style={{ "--order": Math.min(order, 8) } as CSSProperties}
     >
       {/* The link covers the card; its name stays the title alone. */}
       <Link to={`/tickets/${ticket.id}`} className="ticket-card-link">
         {ticket.title || "(Chưa có tiêu đề)"}
       </Link>
-      <div className="ticket-card-meta">
-        <StatusLozenge status={ticket.status} />
-        <span className="ticket-card-time">
-          Cập nhật {timeAgo(ticket.updated_at)}
-        </span>
-      </div>
+      {/* A draft's status adds nothing to its column, so only later statuses show. */}
+      {ticket.status !== "draft" && <StatusLozenge status={ticket.status} />}
       <div className="ticket-card-foot">
         <span className="ticket-key">
           <TicketCheck size={14} aria-hidden="true" />
           {ticketKey(ticket.id)}
+          <span className="ticket-card-time">
+            · {timeAgo(ticket.updated_at)}
+          </span>
         </span>
         <span className="ticket-card-people">
           <Avatar

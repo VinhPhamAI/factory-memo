@@ -179,7 +179,7 @@ export function RecordPage() {
         </header>
         <div className="page-title">
           <span className="eyebrow">BƯỚC 1 · INPUT GIỌNG NÓI</span>
-          <h1>Ghi âm trao đổi giữa chuyên gia và kỹ thuật viên</h1>
+          <h1 className="page-heading">Ghi âm trao đổi giữa chuyên gia và kỹ thuật viên</h1>
         </div>
         <div className="speaker-row">
           <SpeakerPanel

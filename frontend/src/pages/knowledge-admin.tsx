@@ -107,7 +107,7 @@ function KnowledgeAdminWorkspace() {
     <main className="kb-admin-page" data-testid="knowledge-admin">
       <header className="kb-admin-header">
         <div>
-          <h1>Kho kiến thức</h1>
+          <h1 className="page-heading">Kho kiến thức</h1>
           <p>Chọn nơi lưu tài liệu tải lên và quản lý từng kho.</p>
         </div>
         <Button className="kb-admin-create" onClick={() => setCreating(true)}>

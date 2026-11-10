@@ -8,7 +8,12 @@ export const STAGES: {
   hint: string;
   empty: string;
 }[] = [
-  { id: "todo", label: "To do", hint: "Mới tạo", empty: "Không có ticket mới." },
+  {
+    id: "todo",
+    label: "To do",
+    hint: "Mới tạo",
+    empty: "Không có ticket mới.",
+  },
   {
     id: "in_progress",
     label: "In progress",
@@ -21,7 +26,12 @@ export const STAGES: {
     hint: "Chờ chuyên gia",
     empty: "Không có ticket chờ.",
   },
-  { id: "done", label: "Done", hint: "Hoàn tất", empty: "Chưa có ticket hoàn tất." },
+  {
+    id: "done",
+    label: "Done",
+    hint: "Hoàn tất",
+    empty: "Chưa có ticket hoàn tất.",
+  },
 ];
 
 /** Ticket status labels; the board keeps statuses in English like Jira. */
@@ -52,9 +62,23 @@ export function splitProposal(proposedFix: string): {
   };
 }
 
-/** Short display key of a ticket, taken from the start of its ID (not stored). */
+/**
+ * Join the user's own fix and the demo AI proposal back into one
+ * `proposed_fix`, in the layout the backend demo endpoint writes.
+ */
+export function joinProposal(own: string, proposal: string | null): string {
+  if (proposal === null) return own;
+  const block = `${PROPOSAL_MARKER}\n${proposal}`;
+  return own ? `${own}\n\n${block}` : block;
+}
+
+/**
+ * Short display key of a ticket (not stored). Ticket IDs are time-ordered
+ * UUIDs, so tickets created close together share their first characters; the
+ * key uses the last six, which are random.
+ */
 export function ticketKey(id: string): string {
-  return `TK-${id.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+  return `TK-${id.replace(/-/g, "").slice(-6).toUpperCase()}`;
 }
 
 const RELATIVE = new Intl.RelativeTimeFormat("vi", { numeric: "auto" });

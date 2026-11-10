@@ -50,7 +50,9 @@ export function ReviewSource({
           Quay lại
         </Button>
         <div>
-          <h1>{editing ? "Chi tiết nguồn" : "Kiểm tra nguồn trước khi lưu"}</h1>
+          <h1 className="page-heading">
+            {editing ? "Chi tiết nguồn" : "Kiểm tra nguồn trước khi lưu"}
+          </h1>
           <p>
             {editing
               ? "Giữ nguồn và ngữ cảnh của nó ở cùng một chỗ."

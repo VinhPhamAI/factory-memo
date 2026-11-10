@@ -4,6 +4,11 @@ A Vietnamese-language UI for chatting with the standalone agent and capturing
 and reviewing factory knowledge. React, TypeScript, Vite, Tailwind CSS and
 shadcn/ui. API mode requires sign-in; mock mode needs no account.
 
+Page titles use the shared `page-heading` class: 26 px on desktop and 22 px at
+860 px and below, with consistent weight, line height and letter spacing.
+Page content uses `--page-padding-top`: 32 px on desktop and 24 px at 860 px and
+below, matching the ticket board. Side and bottom spacing remain page-specific.
+
 `api` is the default mode. It offers agent chat (`/ask`), the document library
 (`/files`), and individual source review pages. Administrators can manage KBs and
 select the upload target in **Kho kiến thức** (`/admin/knowledge-bases`).
@@ -89,11 +94,15 @@ owns the client and `src/pages/conversations.tsx` the screen.
 
 - API mode shows a left sidebar on every page (`src/components/qa-shell.tsx`,
   `conversation-list.tsx`): **Trò chuyện mới**, **Thư viện tài liệu**,
-  **Yêu cầu chuyên gia**, admin-only **Kho kiến thức**, recent chats (**Gần đây**)
-  and the account with sign-out. A toggle collapses the sidebar for the current
-  session. At 860 px and below, a tab row (**Hỏi đáp**, **Tài liệu**,
-  **Chuyên gia**, admin **Kho kiến thức**) replaces it, and a menu button opens a
+  **Ticket sự cố**, admin-only **Kho kiến thức**, recent chats (**Gần đây**)
+  and the account with sign-out. A toggle beside the app logo collapses the sidebar
+  for the current session. When collapsed, the logo and toggle move to the top bar;
+  the top bar has no section title. At 860 px and below, a tab row (**Hỏi đáp**,
+  **Tài liệu**, **Ticket**, admin **Kho kiến thức**) replaces it, and a menu button opens a
   drawer with new chat, history and the account.
+- Expert requests are accessed through **Ticket sự cố**. Draft links in chat open
+  `/tickets/:id`. The legacy `/inquiries` routes remain available by URL but have
+  no separate navigation entry.
 - A new chat shows a centered composer with two shortcuts: **Tra mã lỗi** focuses
   the composer and pre-fills an editable prompt only when it is empty;
   **Tìm tài liệu** opens `/files`.

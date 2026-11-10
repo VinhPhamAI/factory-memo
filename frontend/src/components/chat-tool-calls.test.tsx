@@ -35,7 +35,7 @@ describe("ChatToolCalls inquiry tools", () => {
       screen
         .getByRole("link", { name: "Mở nháp để chọn chuyên gia và gửi" })
         .getAttribute("href"),
-    ).toBe(`/inquiries/${ID}`);
+    ).toBe(`/tickets/${ID}`);
   });
 
   it("uses a fallback title and no link without an id", () => {
@@ -47,7 +47,7 @@ describe("ChatToolCalls inquiry tools", () => {
   it("shows the needs-choice and not-draft states", () => {
     show(call({ name: "update_inquiry_draft", state: "needs_choice", inquiry_id: ID }));
     expect(screen.getByText("Cuộc chat đã có nháp")).toBeTruthy();
-    expect(screen.getByRole("link").getAttribute("href")).toBe(`/inquiries/${ID}`);
+    expect(screen.getByRole("link").getAttribute("href")).toBe(`/tickets/${ID}`);
     cleanup();
     show(call({ name: "update_inquiry_draft", state: "not_draft", inquiry_id: ID }));
     expect(screen.getByText("Yêu cầu đã được gửi, không sửa được")).toBeTruthy();

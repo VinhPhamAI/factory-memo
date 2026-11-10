@@ -239,7 +239,7 @@ export function FilesPage() {
   return (
     <main className="vc-page library-page" data-testid="file-library">
       <header className="library-heading">
-        <h1>Thư viện tài liệu</h1>
+        <h1 className="page-heading">Thư viện tài liệu</h1>
         <div className="library-toolbar">
           <label className="library-search">
             <Search size={18} aria-hidden="true" />

@@ -363,11 +363,11 @@ export function ConversationsPage() {
         {!conversationId ? (
           <header className="chat-welcome">
             <BrandMark />
-            <h1 data-testid="chat-title">Trò chuyện mới</h1>
+            <h1 className="page-heading" data-testid="chat-title">Trò chuyện mới</h1>
           </header>
         ) : (
           <header className="chat-header">
-            <h1 data-testid="chat-title">{current?.title ?? ""}</h1>
+            <h1 className="page-heading" data-testid="chat-title">{current?.title ?? ""}</h1>
             <Button
               type="button"
               variant="outline"

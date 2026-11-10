@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Search } from "lucide-react";
 import { useAuth } from "@/hooks/auth";
@@ -33,6 +33,12 @@ async function loadBoard(api: InquiriesApi): Promise<InquirySummary[]> {
   return [...unique.values()];
 }
 
+/** How long a card that changed column stays highlighted. */
+const MOVED_HIGHLIGHT_MS = 2200;
+
+/** Placeholder cards per column while the board loads. */
+const SKELETON_CARDS = [2, 1, 1, 0];
+
 /** Kanban board of incident tickets; `/tickets/:id` opens one in a centered dialog. */
 export function TicketsPage() {
   const { id } = useParams();
@@ -46,9 +52,22 @@ export function TicketsPage() {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
 
+  // Last seen column of each ticket, to highlight cards that changed column.
+  const stages = useRef(new Map<string, string>());
+  const [moved, setMoved] = useState<ReadonlySet<string>>(new Set());
+
   const reload = useCallback(async () => {
     try {
-      setTickets(await loadBoard(api));
+      const loaded = await loadBoard(api);
+      const changed = new Set<string>();
+      for (const ticket of loaded) {
+        const before = stages.current.get(ticket.id);
+        if (before !== undefined && before !== ticket.stage)
+          changed.add(ticket.id);
+        stages.current.set(ticket.id, ticket.stage);
+      }
+      setTickets(loaded);
+      if (changed.size) setMoved(changed);
       setError("");
     } catch (cause) {
       setTickets((current) => current ?? []);
@@ -63,6 +82,12 @@ export function TicketsPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!moved.size) return;
+    const timer = setTimeout(() => setMoved(new Set()), MOVED_HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+  }, [moved]);
 
   const columns = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("vi");
@@ -80,15 +105,11 @@ export function TicketsPage() {
       tickets: shown.filter((ticket) => ticket.stage === stage.id),
     }));
   }, [tickets, filter, query, userId]);
-  const shownCount = columns.reduce(
-    (total, column) => total + column.tickets.length,
-    0,
-  );
 
   return (
     <main className="ticket-page" data-testid="tickets-page">
       <header className="ticket-page-heading">
-        <h1>Ticket sự cố</h1>
+        <h1 className="page-heading">Ticket sự cố</h1>
         <p>Tạo ticket từ trò chuyện, xem đề xuất AI rồi gửi chuyên gia duyệt.</p>
       </header>
       <div className="ticket-toolbar">
@@ -115,11 +136,6 @@ export function TicketsPage() {
             </button>
           ))}
         </div>
-        {tickets !== null && (
-          <span className="ticket-total" aria-live="polite">
-            {shownCount} / {tickets.length} ticket
-          </span>
-        )}
       </div>
       {error && (
         <p role="alert" className="inline-error">
@@ -127,9 +143,34 @@ export function TicketsPage() {
         </p>
       )}
       {tickets === null ? (
-        <p className="field-note" aria-busy="true">
-          Đang tải…
-        </p>
+        <div className="ticket-board" aria-busy="true" data-testid="ticket-loading">
+          <span className="sr-only">Đang tải…</span>
+          {STAGES.map((stage, index) => (
+            <div
+              key={stage.id}
+              className="ticket-column"
+              data-stage={stage.id}
+              aria-hidden="true"
+            >
+              <div className="ticket-column-head">
+                <h2>
+                  <span className="ticket-dot" />
+                  {stage.label}
+                </h2>
+                <p>{stage.hint}</p>
+              </div>
+              <ul>
+                {Array.from({ length: SKELETON_CARDS[index] }, (_, card) => (
+                  <li key={card} className="ticket-card ticket-card-skeleton">
+                    <span className="ticket-skeleton" data-width="full" />
+                    <span className="ticket-skeleton" data-width="mid" />
+                    <span className="ticket-skeleton" data-width="short" />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
       ) : (
         <div className="ticket-board" data-testid="ticket-board">
           {columns.map((column) => (
@@ -144,18 +185,23 @@ export function TicketsPage() {
                 <h2>
                   <span className="ticket-dot" aria-hidden="true" />
                   {column.label}
-                  <span className="ticket-count">{column.tickets.length}</span>
+                  {/* The key restarts the bump animation when the count changes. */}
+                  <span key={column.tickets.length} className="ticket-count">
+                    {column.tickets.length}
+                  </span>
                 </h2>
                 <p>{column.hint}</p>
               </header>
               {column.tickets.length ? (
                 <ul>
-                  {column.tickets.map((ticket) => (
+                  {column.tickets.map((ticket, index) => (
                     <TicketCard
                       key={ticket.id}
                       ticket={ticket}
                       userId={userId}
                       active={ticket.id === id}
+                      moved={moved.has(ticket.id)}
+                      order={index}
                     />
                   ))}
                 </ul>

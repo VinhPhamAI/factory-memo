@@ -179,7 +179,9 @@ export function CapturePage() {
     <main className="vc-page">
       <div className="vc-start">
         <header className="vc-heading">
-          <h1>{mode === "voice" ? "Ghi lại hội thoại" : "Tải lên tài liệu"}</h1>
+          <h1 className="page-heading">
+            {mode === "voice" ? "Ghi lại hội thoại" : "Tải lên tài liệu"}
+          </h1>
           <p>
             {mode === "voice"
               ? "Ghi âm trao đổi tại hiện trường. Sau khi lưu transcript, trích xuất (hoặc để Auto chạy) và duyệt trong Quản lý tri thức."

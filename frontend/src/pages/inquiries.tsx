@@ -63,7 +63,7 @@ export function InquiriesPage() {
   return (
     <main className="inquiry-page" data-testid="inquiries-page">
       <header className="inquiry-page-heading">
-        <h1>Yêu cầu chuyên gia</h1>
+        <h1 className="page-heading">Yêu cầu chuyên gia</h1>
         <p>Yêu cầu bạn soạn từ trò chuyện và yêu cầu được giao cho bạn.</p>
       </header>
       <div role="tablist" aria-label="Hộp thư" className="inquiry-tabs">

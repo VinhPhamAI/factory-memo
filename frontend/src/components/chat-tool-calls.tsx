@@ -100,7 +100,7 @@ export function ChatToolCalls({
                     </p>
                   )}
                   {call.inquiry_id && (
-                    <Link to={`/inquiries/${call.inquiry_id}`}>
+                    <Link to={`/tickets/${call.inquiry_id}`}>
                       {call.state === "results" &&
                       call.name === "create_inquiry_draft"
                         ? "Mở nháp để chọn chuyên gia và gửi"

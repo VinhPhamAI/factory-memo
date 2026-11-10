@@ -97,7 +97,7 @@ export function OcrView({
         </Button>
         <div className="ocr-title">
           <span className="eyebrow">BƯỚC 2 · INPUT TÀI LIỆU</span>
-          <h1>
+          <h1 className="page-heading">
             {source.title}
             {source.sample && <SampleBadge />}
           </h1>
