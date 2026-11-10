@@ -7007,8 +7007,7 @@ button.ref-chip:hover,
 }
 .ticket-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 24px 36px;
+  gap: 22px;
   margin: 0;
 }
 .ticket-fields dt,
@@ -7163,9 +7162,6 @@ button.ref-chip:hover,
   }
   .ticket-steps-bar {
     padding: 12px 16px;
-  }
-  .ticket-fields {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (max-width: 760px) {
@@ -7367,4 +7363,850 @@ button.ref-chip:hover,
 }
 .ticket-edit .field-note {
   margin: 0;
+}
+
+/*
+ * Ticket polish: soft page glow, gradient surfaces and two-layer bluish shadows,
+ * matching the Raven Agent look. Later rules refine the ticket rules above.
+ */
+.ticket-page,
+.ticket-dialog {
+  --ticket-line: #e3eaf4;
+  --ticket-shadow:
+    0 1px 2px rgb(16 42 92 / 0.04), 0 4px 14px rgb(16 42 92 / 0.05);
+  --ticket-shadow-hover:
+    0 2px 4px rgb(16 42 92 / 0.05), 0 8px 28px rgb(16 42 92 / 0.09);
+  --ticket-blue: linear-gradient(140deg, #4f8dff, #1d4fd8);
+}
+.ticket-page {
+  background:
+    radial-gradient(800px 360px at 95% -10%, rgb(130 170 255 / 0.2), transparent 70%),
+    radial-gradient(600px 420px at 10% 110%, rgb(130 170 255 / 0.14), transparent 70%);
+}
+.ticket-search input {
+  border-color: var(--ticket-line);
+  border-radius: 8px;
+  box-shadow: var(--ticket-shadow);
+}
+.ticket-filters {
+  border-color: var(--ticket-line);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.7);
+  box-shadow: var(--ticket-shadow);
+}
+.ticket-filter {
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.ticket-filter[aria-pressed="true"] {
+  border-color: #c9dafa;
+  background: linear-gradient(180deg, #fff, #e9f1ff);
+  box-shadow: 0 1px 2px rgb(16 42 92 / 0.06), 0 3px 8px rgb(36 89 174 / 0.12);
+}
+
+/* Board columns: each stage has its own gradient accent that fades into the lane. */
+.ticket-column {
+  --stage-2: #5f7088;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--ticket-line);
+  border-radius: 12px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--stage) 10%, #fff) 0,
+    rgb(244 247 252 / 0.85) 140px
+  );
+  box-shadow: var(--ticket-shadow);
+}
+.ticket-column[data-stage="todo"] {
+  --stage: #94a3b8;
+  --stage-2: #64748b;
+}
+.ticket-column[data-stage="in_progress"] {
+  --stage: #3b82f6;
+  --stage-2: #0ea5e9;
+}
+.ticket-column[data-stage="in_review"] {
+  --stage: #f59e0b;
+  --stage-2: #f97316;
+}
+.ticket-column[data-stage="done"] {
+  --stage: #10b981;
+  --stage-2: #0d9488;
+}
+.ticket-dot {
+  background: linear-gradient(135deg, var(--stage), var(--stage-2));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--stage) 18%, transparent);
+}
+.ticket-count {
+  border: 1px solid var(--ticket-line);
+  background: linear-gradient(180deg, #fff, #eef3fb);
+}
+.ticket-empty {
+  border-color: #c9d4e2;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.5);
+}
+
+/* Cards: white surface, hairline border, a gradient rail and a soft lift on hover. */
+.ticket-card {
+  padding: 14px;
+  border: 1px solid var(--ticket-line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fff, #fafcff);
+  box-shadow: var(--ticket-shadow);
+}
+.ticket-card:hover {
+  border-color: #cfdcf0;
+  box-shadow: var(--ticket-shadow-hover);
+}
+.ticket-card:active {
+  box-shadow: var(--ticket-shadow);
+}
+.ticket-card[data-active] {
+  border-color: #7ea3e6;
+  box-shadow:
+    0 0 0 2px rgb(36 89 174 / 0.3),
+    var(--ticket-shadow-hover);
+}
+
+/* Pills and avatars. */
+.ticket-lozenge {
+  padding: 2px 7px;
+  border: 1px solid rgb(16 42 92 / 0.06);
+  border-radius: 5px;
+  background: linear-gradient(180deg, #f1f4f9, #e3e9f2);
+}
+.ticket-lozenge[data-status="open"] {
+  background: linear-gradient(180deg, #eaf2ff, #d6e5fb);
+}
+.ticket-lozenge[data-status="needs_info"] {
+  background: linear-gradient(180deg, #fff6df, #ffe9b8);
+}
+.ticket-lozenge[data-status="answered"] {
+  background: linear-gradient(180deg, #e8f8ef, #d1efdd);
+}
+.ticket-lozenge[data-status="closed"] {
+  background: linear-gradient(180deg, #fff0ee, #fad9d5);
+}
+.ticket-avatar {
+  background: linear-gradient(145deg, #f1f4f9, #dde4ee);
+  box-shadow: 0 0 0 2px #fff;
+}
+.ticket-avatar[data-tone="0"] {
+  background: linear-gradient(145deg, #eaf2ff, #cfe0f8);
+}
+.ticket-avatar[data-tone="1"] {
+  background: linear-gradient(145deg, #e8f8ef, #c8ecd8);
+}
+.ticket-avatar[data-tone="2"] {
+  background: linear-gradient(145deg, #fff6df, #fde3a8);
+}
+.ticket-avatar[data-tone="3"] {
+  background: linear-gradient(145deg, #f3ecff, #ddd0f7);
+}
+.ticket-avatar[data-tone="4"] {
+  background: linear-gradient(145deg, #fff0ee, #f8d0cb);
+}
+.ticket-avatar[data-tone="5"] {
+  background: linear-gradient(145deg, #e6f6f8, #c4e8ec);
+}
+
+/* Dialog. */
+.ticket-dialog {
+  border: 1px solid rgb(255 255 255 / 0.6);
+  border-radius: 22px;
+  background: #fff;
+  box-shadow:
+    0 2px 6px rgb(16 42 92 / 0.08),
+    0 28px 72px rgb(16 42 92 / 0.24);
+}
+.ticket-dialog-header {
+  background:
+    radial-gradient(420px 160px at 100% 0%, rgb(139 92 246 / 0.1), transparent 70%),
+    radial-gradient(520px 200px at 0% 0%, rgb(79 141 255 / 0.12), transparent 70%),
+    linear-gradient(180deg, #f6f9ff, #fff);
+}
+.ticket-steps-bar {
+  border-color: var(--ticket-line);
+  background: linear-gradient(180deg, #fff, #f5f8fd);
+}
+.ticket-steps li:not([data-state="next"]) + li::before {
+  background: linear-gradient(90deg, #1d4fd8, #4f8dff);
+}
+.ticket-steps li[data-state="current"] .ticket-step-mark {
+  border-color: transparent;
+  background: var(--ticket-blue);
+  box-shadow: 0 3px 8px rgb(37 99 235 / 0.32);
+}
+.ticket-proposal {
+  border-color: #d3dffa;
+  background:
+    radial-gradient(260px 110px at 100% 0%, rgb(139 92 246 / 0.12), transparent 70%),
+    linear-gradient(135deg, #eff5ff, #f8f5ff 60%, #fbfcff);
+  box-shadow: var(--ticket-shadow);
+}
+.ticket-proposal-note {
+  border: 1px solid #f5dca4;
+  background: linear-gradient(180deg, #fff6df, #ffeac2);
+}
+.ticket-panel {
+  border-color: var(--ticket-line);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fff, #fafcff);
+  box-shadow: var(--ticket-shadow);
+}
+.ticket-panel:not(.ticket-panel-note):hover {
+  border-color: #cfdcf0;
+  box-shadow: var(--ticket-shadow-hover);
+}
+.ticket-panel-note {
+  background: linear-gradient(180deg, #f8fafd, #f1f5fa);
+}
+.ticket-details > div {
+  border-color: #edf1f7;
+}
+.ticket-section [data-testid="evidence-empty"] {
+  background: linear-gradient(180deg, #fbfcfe, #f5f8fc);
+}
+.ticket-dialog .inquiry-evidence li {
+  border-color: var(--ticket-line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fff, #fafcff);
+  box-shadow: var(--ticket-shadow);
+}
+.ticket-dialog .inquiry-review {
+  background: transparent;
+}
+
+/* Dialog controls: primary buttons use the brand gradient; fields get a soft inset. */
+.ticket-dialog [data-slot="button"] {
+  border-radius: 10px;
+}
+.ticket-dialog [data-slot="button"][data-variant="default"] {
+  background: var(--ticket-blue);
+  box-shadow:
+    0 1px 2px rgb(29 79 216 / 0.25),
+    0 4px 12px rgb(37 99 235 / 0.22);
+}
+.ticket-dialog [data-slot="button"][data-variant="default"]:not(:disabled):hover {
+  filter: brightness(1.06);
+  box-shadow:
+    0 2px 4px rgb(29 79 216 / 0.25),
+    0 8px 20px rgb(37 99 235 / 0.28);
+}
+.ticket-dialog [data-slot="button"][data-variant="default"]:disabled {
+  box-shadow: none;
+}
+.ticket-dialog [data-slot="button"][data-variant="outline"] {
+  border-color: var(--ticket-line);
+  background: linear-gradient(180deg, #fff, #f4f7fc);
+  box-shadow: var(--ticket-shadow);
+}
+.ticket-dialog [data-slot="button"][data-variant="outline"]:not(:disabled):hover {
+  border-color: #c9dafa;
+  background: linear-gradient(180deg, #fff, #e9f1ff);
+  color: var(--primary);
+}
+.ticket-expert select,
+.ticket-edit input,
+.ticket-edit textarea {
+  border-color: var(--ticket-line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: inset 0 1px 2px rgb(16 42 92 / 0.05);
+}
+.ticket-expert select:focus-visible,
+.ticket-edit input:focus-visible,
+.ticket-edit textarea:focus-visible {
+  border-color: #7ea3e6;
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(79 141 255 / 0.2);
+}
+
+/*
+ * Drag a to-do card onto "In progress" to create its AI proposal. The column
+ * glows while a card is held, the dropped card lands dimmed with a slow sweep
+ * while it is analyzed, then settles into a full "In progress" card.
+ */
+@keyframes ticket-land {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
+@keyframes ticket-sweep {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@keyframes ticket-drop-pulse {
+  50% {
+    box-shadow:
+      0 0 0 5px color-mix(in srgb, var(--stage) 22%, transparent),
+      var(--ticket-shadow);
+  }
+}
+@keyframes ticket-hint-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+.ticket-card[data-draggable] {
+  cursor: grab;
+}
+.ticket-card[data-draggable]:active {
+  cursor: grabbing;
+}
+.ticket-card[data-dragging] {
+  box-shadow: var(--ticket-shadow);
+  opacity: 0.45;
+  transform: none;
+}
+.ticket-column {
+  transition:
+    border-color var(--ticket-fast) var(--ticket-ease),
+    box-shadow var(--ticket-slow) var(--ticket-ease),
+    background-color var(--ticket-slow) var(--ticket-ease);
+}
+.ticket-column[data-drop="ready"] {
+  border-color: color-mix(in srgb, var(--stage) 50%, transparent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--stage) 12%, transparent),
+    var(--ticket-shadow);
+  animation: ticket-drop-pulse 1.6s ease-in-out infinite;
+}
+.ticket-column[data-drop="over"] {
+  border-color: var(--stage);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--stage) 20%, #fff) 0,
+    rgb(244 247 252 / 0.9) 180px
+  );
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--stage) 30%, transparent),
+    var(--ticket-shadow-hover);
+  animation: none;
+}
+.ticket-drop-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px 10px;
+  border: 1.5px dashed color-mix(in srgb, var(--stage) 55%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--stage) 7%, #fff);
+  color: var(--stage-2);
+  font-size: 13px;
+  font-weight: 600;
+  animation: ticket-hint-in var(--ticket-slow) var(--ticket-ease);
+  transition: background-color var(--ticket-fast) var(--ticket-ease);
+}
+.ticket-column[data-drop="over"] .ticket-drop-hint {
+  background: color-mix(in srgb, var(--stage) 16%, #fff);
+}
+.ticket-column[data-drop="over"] .ticket-drop-hint svg {
+  animation: ticket-breathe 1s ease-in-out infinite;
+}
+
+.ticket-ai-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid rgb(79 70 229 / 0.12);
+  border-radius: 5px;
+  background: linear-gradient(180deg, #f3f5ff, #e4e9ff);
+  color: #3b3fa8;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.ticket-ai-chip[data-state="working"] {
+  background: linear-gradient(180deg, #eef5ff, #dbe8fd);
+  color: var(--primary);
+}
+
+.ticket-card > * {
+  transition:
+    color var(--ticket-fast) var(--ticket-ease),
+    opacity var(--ticket-slow) var(--ticket-ease),
+    filter var(--ticket-slow) var(--ticket-ease);
+}
+.ticket-card[data-analyzing] {
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--stage) 45%, var(--ticket-line));
+  animation: ticket-land var(--ticket-slow) var(--ticket-ease);
+  pointer-events: none;
+}
+.ticket-card[data-analyzing] > :not(.ticket-ai-chip) {
+  opacity: 0.4;
+  filter: saturate(0.5);
+}
+.ticket-card[data-analyzing]::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgb(79 141 255 / 0.2) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  content: "";
+  animation: ticket-sweep 1.5s linear infinite;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticket-page *::after,
+  .ticket-page *::before {
+    animation: none !important;
+  }
+}
+
+/*
+ * Pressing or dragging a card focuses its link; the browser outline then
+ * clips at the rounded corners. Only keyboard focus shows a ring, drawn like
+ * the active card's ring so every state shares one border style.
+ */
+.ticket-card:focus-within {
+  outline: none;
+}
+.ticket-card:has(.ticket-card-link:focus-visible) {
+  border-color: #7ea3e6;
+  box-shadow:
+    0 0 0 2px rgb(36 89 174 / 0.3),
+    var(--ticket-shadow-hover);
+}
+
+/*
+ * Chat polish: the Ticket page's look (soft page glow, gradient surfaces,
+ * two-layer bluish shadows) applied to the agent chat, plus markdown styles
+ * for answers: headings, lists, quotes, code, tables and task lists.
+ */
+.agent-chat-layout {
+  --ticket-line: #e3eaf4;
+  --ticket-shadow:
+    0 1px 2px rgb(16 42 92 / 0.04), 0 4px 14px rgb(16 42 92 / 0.05);
+  --ticket-shadow-hover:
+    0 2px 4px rgb(16 42 92 / 0.05), 0 8px 28px rgb(16 42 92 / 0.09);
+  --ticket-blue: linear-gradient(140deg, #4f8dff, #1d4fd8);
+  background:
+    radial-gradient(800px 360px at 95% -10%, rgb(130 170 255 / 0.2), transparent 70%),
+    radial-gradient(600px 420px at 10% 110%, rgb(130 170 255 / 0.14), transparent 70%),
+    #fbfcff;
+}
+
+/* Conversation title and welcome heading. */
+.agent-chat-layout .chat-welcome h1,
+.agent-chat-layout .chat-header h1 {
+  color: var(--fm-ink);
+}
+
+/* Turns. The question is a light gradient bubble; the answer sits on a card. */
+.agent-chat-layout .message-list {
+  display: grid;
+  gap: 22px;
+  max-width: 800px;
+}
+.agent-chat-layout .user-message,
+.agent-chat-layout .assistant-message {
+  margin: 0;
+}
+.agent-chat-layout .user-message p {
+  border: 1px solid #d5e2f7;
+  border-radius: 16px 16px 5px 16px;
+  background: linear-gradient(160deg, #f3f8ff, #e3eeff);
+  box-shadow: var(--ticket-shadow);
+  color: var(--fm-ink);
+  white-space: pre-wrap;
+}
+.agent-chat-layout .assistant-message {
+  padding: 18px 22px 20px;
+  border: 1px solid var(--ticket-line);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fff, #fafcff);
+  box-shadow: var(--ticket-shadow);
+}
+.agent-chat-layout .assistant-label {
+  margin-bottom: 12px;
+  font-size: 13.5px;
+}
+.agent-chat-layout .assistant-message[data-status="streaming"] {
+  border-color: #cfdcf0;
+  box-shadow: var(--ticket-shadow-hover);
+}
+
+/* Inline citation chips. */
+.agent-chat-layout .inline-citation {
+  min-width: 24px;
+  height: 22px;
+  border: 1px solid #c9dafa;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #fff, #e9f1ff);
+  box-shadow: 0 1px 2px rgb(16 42 92 / 0.06);
+  color: var(--primary);
+  font-size: 11.5px;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+.agent-chat-layout .inline-citation:hover {
+  background: linear-gradient(180deg, #f4f8ff, #dbe8ff);
+  box-shadow: 0 2px 6px rgb(36 89 174 / 0.18);
+  transform: translateY(-1px);
+}
+.agent-chat-layout .citation-card {
+  border: 1px solid #d5e2f7;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fbfdff, #f1f6ff);
+  box-shadow: var(--ticket-shadow);
+}
+
+/* Tool calls and reasoning, the quiet part of a turn. */
+.agent-chat-layout .chat-tool-call {
+  border-color: var(--ticket-line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fff, #f6f9fd);
+  box-shadow: 0 1px 2px rgb(16 42 92 / 0.04);
+}
+.agent-chat-layout .chat-tool-body {
+  border-top-color: var(--ticket-line);
+}
+.agent-chat-layout .chat-tool-results li {
+  border-color: var(--ticket-line);
+  border-radius: 8px;
+}
+.agent-chat-layout .thinking-body {
+  border-left: 0;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f6f9fd, #f1f5fb);
+  box-shadow: inset 0 0 0 1px var(--ticket-line);
+}
+
+/* Composer. */
+.agent-chat-layout .composer {
+  border-color: var(--ticket-line);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fff, #fafcff);
+  box-shadow: var(--ticket-shadow);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.2s ease;
+}
+.agent-chat-layout .composer:hover {
+  box-shadow: var(--ticket-shadow-hover);
+}
+.agent-chat-layout .composer:focus-within {
+  border-color: #7ea3e6;
+  box-shadow:
+    0 0 0 3px rgb(36 89 174 / 0.14),
+    var(--ticket-shadow-hover);
+}
+.agent-chat-layout .composer-bottom button[type="submit"]:not(:disabled),
+.agent-chat-layout .composer-bottom [data-testid="chat-stop"],
+.agent-chat-layout .composer-bottom [data-variant="default"] {
+  border: 0;
+  background: var(--ticket-blue);
+  box-shadow:
+    0 1px 2px rgb(16 42 92 / 0.12),
+    0 4px 10px rgb(36 89 174 / 0.28);
+  color: #fff;
+}
+.agent-chat-layout .composer-bottom button[type="submit"]:not(:disabled):hover,
+.agent-chat-layout .composer-bottom [data-testid="chat-stop"]:hover {
+  filter: brightness(1.06);
+}
+.agent-chat-layout .composer-bottom button[type="submit"]:disabled {
+  background: linear-gradient(180deg, #f1f5fa, #e6edf5);
+  color: #6a82a0;
+}
+
+/* Shortcuts under the new-chat composer. */
+.chat-shortcut {
+  border-color: var(--ticket-line, #e3eaf4);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fff, #f3f7fd);
+  box-shadow: 0 1px 2px rgb(16 42 92 / 0.04), 0 4px 14px rgb(16 42 92 / 0.05);
+  color: var(--fm-ink);
+  transition:
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+.chat-shortcut:hover {
+  border-color: #cfdcf0;
+  background: linear-gradient(180deg, #fff, #eaf2ff);
+  box-shadow: 0 2px 4px rgb(16 42 92 / 0.05), 0 8px 28px rgb(16 42 92 / 0.09);
+  transform: translateY(-1px);
+}
+.chat-shortcut svg {
+  color: #2f6ad6;
+}
+
+/* ---- Answer markdown ---------------------------------------------------- */
+.answer-prose {
+  --prose-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+  line-height: 1.75;
+}
+.answer-prose > :first-child {
+  margin-top: 0;
+}
+.answer-prose > :last-child {
+  margin-bottom: 0;
+}
+.answer-prose p {
+  margin: 0 0 12px;
+}
+.answer-prose h1,
+.answer-prose h2,
+.answer-prose h3,
+.answer-prose h4,
+.answer-prose h5,
+.answer-prose h6 {
+  margin: 22px 0 8px;
+  color: #17304f;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+  line-height: 1.4;
+}
+.answer-prose h1 {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ticket-line, #e3eaf4);
+  font-size: 19px;
+}
+.answer-prose h2 {
+  font-size: 17.5px;
+}
+.answer-prose h3 {
+  font-size: 16px;
+}
+.answer-prose h4,
+.answer-prose h5,
+.answer-prose h6 {
+  color: #2d4a73;
+  font-size: 15px;
+}
+.answer-prose strong {
+  color: #17304f;
+  font-weight: 650;
+}
+.answer-prose del {
+  color: #8493a8;
+}
+.answer-prose ul,
+.answer-prose ol {
+  margin: 0 0 12px;
+  padding-left: 1.5em;
+}
+.answer-prose ul {
+  list-style: disc;
+}
+.answer-prose ol {
+  list-style: decimal;
+}
+.answer-prose li {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+.answer-prose li::marker {
+  color: #5f8fd8;
+  font-weight: 600;
+}
+.answer-prose li > p {
+  margin: 0 0 6px;
+}
+.answer-prose li > ul,
+.answer-prose li > ol {
+  margin: 4px 0 6px;
+}
+.answer-prose ul ul {
+  list-style: circle;
+}
+.answer-prose .contains-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+.answer-prose .task-list-item input {
+  margin: 0 8px 0 0;
+  accent-color: #2459ae;
+  vertical-align: -1px;
+}
+.answer-prose blockquote {
+  margin: 0 0 12px;
+  padding: 8px 14px;
+  border-left: 3px solid #8db3ed;
+  border-radius: 0 10px 10px 0;
+  background: linear-gradient(90deg, #f1f6ff, rgb(241 246 255 / 0));
+  color: #3f5470;
+}
+.answer-prose blockquote > :last-child {
+  margin-bottom: 0;
+}
+.answer-prose hr {
+  height: 1px;
+  margin: 18px 0;
+  border: 0;
+  background: linear-gradient(90deg, transparent, #cfdcf0 15%, #cfdcf0 85%, transparent);
+}
+.answer-prose code {
+  padding: 1px 6px;
+  border: 1px solid #dfe8f5;
+  border-radius: 6px;
+  background: #f0f5fc;
+  color: #1f4a8f;
+  font-family: var(--prose-mono);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+.answer-prose pre {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--ticket-line, #e3eaf4);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fafe, #f1f5fb);
+  box-shadow: 0 1px 2px rgb(16 42 92 / 0.04);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.answer-prose pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #25405f;
+  font-size: inherit;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+.answer-table {
+  margin: 0 0 14px;
+  overflow-x: auto;
+  border: 1px solid var(--ticket-line, #e3eaf4);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 42 92 / 0.04), 0 4px 14px rgb(16 42 92 / 0.05);
+}
+.answer-table table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.answer-table th,
+.answer-table td {
+  min-width: 88px;
+  padding: 9px 14px;
+  border-bottom: 1px solid #edf1f7;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: break-word;
+}
+.answer-table th {
+  background: linear-gradient(180deg, #f7faff, #eef4fd);
+  border-bottom-color: #dbe5f3;
+  color: #2d4a73;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.answer-table tbody tr:nth-child(even) td {
+  background: #fafcff;
+}
+.answer-table tbody tr:hover td {
+  background: #f1f6ff;
+}
+.answer-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+@media (max-width: 860px) {
+  .agent-chat-layout .assistant-message {
+    padding: 14px 16px 16px;
+    border-radius: 14px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat-layout .inline-citation,
+  .chat-shortcut {
+    transition: none;
+  }
+  .agent-chat-layout .inline-citation:hover,
+  .chat-shortcut:hover {
+    transform: none;
+  }
+}
+.agent-chat-layout .chat-header,
+.agent-chat-layout .composer-wrap,
+.chat-draft-error {
+  max-width: 800px;
+}
+
+/* Sidebar: long chat titles are cut with an ellipsis so the row actions stay visible. */
+.app-sidebar {
+  position: relative;
+  max-width: 50vw;
+}
+.sidebar-scroll {
+  overflow-x: hidden;
+}
+.conversation-list,
+.conversation-list ul {
+  min-width: 0;
+}
+.conversation-list ul {
+  grid-template-columns: minmax(0, 1fr);
+}
+.conversation-item a {
+  display: block;
+}
+@media (max-width: 860px) {
+  .conversation-item a {
+    min-height: 44px;
+    line-height: 44px;
+    padding-block: 0;
+  }
+}
+.conversation-actions {
+  flex: 0 0 auto;
+}
+
+/* Drag handle on the sidebar's right edge. */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  z-index: 5;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-resizer::after {
+  position: absolute;
+  inset: 0 3px;
+  border-radius: 2px;
+  background: transparent;
+  content: "";
+  transition: background-color 0.15s ease;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.sidebar-resizer[data-dragging]::after {
+  background: #8db3ed;
+}
+.sidebar-resizer:focus-visible {
+  outline: none;
+}
+.app-shell:has(.sidebar-resizer[data-dragging]) {
+  cursor: col-resize;
+  user-select: none;
 }

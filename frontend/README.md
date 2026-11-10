@@ -94,13 +94,13 @@ owns the client and `src/pages/conversations.tsx` the screen.
 
 - API mode shows a left sidebar on every page (`src/components/qa-shell.tsx`,
   `conversation-list.tsx`): **Trò chuyện mới**, **Thư viện tài liệu**,
-  **Ticket sự cố**, admin-only **Kho kiến thức**, recent chats (**Gần đây**)
+  **Xử lý sự cố**, admin-only **Kho kiến thức**, recent chats (**Gần đây**)
   and the account with sign-out. A toggle beside the app logo collapses the sidebar
   for the current session. When collapsed, the logo and toggle move to the top bar;
   the top bar has no section title. At 860 px and below, a tab row (**Hỏi đáp**,
-  **Tài liệu**, **Ticket**, admin **Kho kiến thức**) replaces it, and a menu button opens a
+  **Tài liệu**, **Xử lý sự cố**, admin **Kho kiến thức**) replaces it, and a menu button opens a
   drawer with new chat, history and the account.
-- Expert requests are accessed through **Ticket sự cố**. Draft links in chat open
+- Expert requests are accessed through **Xử lý sự cố**. Draft links in chat open
   `/tickets/:id`. The legacy `/inquiries` routes remain available by URL but have
   no separate navigation entry.
 - A new chat shows a centered composer with two shortcuts: **Tra mã lỗi** focuses

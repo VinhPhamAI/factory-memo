@@ -1,18 +1,27 @@
 import type { CSSProperties } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, TicketCheck } from "lucide-react";
+import { ArrowRight, Loader2, TicketCheck } from "lucide-react";
 import { Avatar } from "@/components/ticket/avatar";
 import { StatusLozenge } from "@/components/ticket/status-lozenge";
 import type { InquirySummary } from "@/services/inquiries-api";
 import { ticketKey, timeAgo } from "@/services/tickets";
 
-/** One ticket on the board; the whole card opens the ticket dialog. */
+/**
+ * One ticket on the board; the whole card opens the ticket dialog. A draft of
+ * the signed-in user can be dragged (`draggable`); while the AI proposal is
+ * created (`analyzing`) the card is dimmed and does not open.
+ */
 export function TicketCard({
   ticket,
   userId,
   active,
   moved,
   order,
+  draggable = false,
+  dragging = false,
+  analyzing = false,
+  onDragStart,
+  onDragEnd,
 }: {
   ticket: InquirySummary;
   userId: string;
@@ -21,6 +30,13 @@ export function TicketCard({
   moved: boolean;
   /** Position in its column, used to stagger the entrance animation. */
   order: number;
+  draggable?: boolean;
+  /** This card is being dragged right now. */
+  dragging?: boolean;
+  /** The demo AI proposal is being created for this ticket. */
+  analyzing?: boolean;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }) {
   const mine = ticket.requested_by === userId;
   const requester = mine ? "Tôi" : ticket.requester_name;
@@ -30,14 +46,37 @@ export function TicketCard({
       data-testid="ticket-card"
       data-active={active || undefined}
       data-moved={moved || undefined}
+      data-draggable={draggable || undefined}
+      data-dragging={dragging || undefined}
+      data-analyzing={analyzing || undefined}
+      aria-busy={analyzing || undefined}
+      draggable={draggable}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", ticket.id);
+        onDragStart?.();
+      }}
+      onDragEnd={onDragEnd}
       style={{ "--order": Math.min(order, 8) } as CSSProperties}
     >
       {/* The link covers the card; its name stays the title alone. */}
-      <Link to={`/tickets/${ticket.id}`} className="ticket-card-link">
+      <Link
+        to={`/tickets/${ticket.id}`}
+        className="ticket-card-link"
+        draggable={false}
+        tabIndex={analyzing ? -1 : undefined}
+      >
         {ticket.title || "(Chưa có tiêu đề)"}
       </Link>
       {/* A draft's status adds nothing to its column, so only later statuses show. */}
-      {ticket.status !== "draft" && <StatusLozenge status={ticket.status} />}
+      {analyzing ? (
+        <span className="ticket-ai-chip" data-state="working" role="status">
+          <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+          Đang phân tích…
+        </span>
+      ) : ticket.status !== "draft" ? (
+        <StatusLozenge status={ticket.status} />
+      ) : null}
       <div className="ticket-card-foot">
         <span className="ticket-key">
           <TicketCheck size={14} aria-hidden="true" />

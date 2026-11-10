@@ -1,3 +1,23 @@
+import type { InquiriesApi, Inquiry } from "@/services/inquiries-api";
+
+/** Shortest time the analyzing state stays visible, so the demo step reads as work. */
+export const ANALYZE_MIN_MS = 1500;
+
+/**
+ * Create the demo AI proposal of a draft ticket. Resolves with the updated
+ * ticket no sooner than `ANALYZE_MIN_MS`, so callers can show a progress state.
+ */
+export async function analyzeTicket(
+  api: InquiriesApi,
+  id: string,
+): Promise<Inquiry> {
+  const [ticket] = await Promise.all([
+    api.demoProposal(id),
+    new Promise<void>((resolve) => setTimeout(resolve, ANALYZE_MIN_MS)),
+  ]);
+  return ticket;
+}
+
 /** Board columns of a ticket (an inquiry), as sent in the backend `stage` field. */
 export type TicketStage = "todo" | "in_progress" | "in_review" | "done";
 

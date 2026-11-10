@@ -28,6 +28,21 @@ import { cn } from "@/utils/cn";
 type Section = "ask" | "files" | "tickets" | "admin";
 
 const SIDEBAR_ID = "app-sidebar";
+const SIDEBAR_WIDTH = { min: 248, max: 496, step: 16 } as const;
+const SIDEBAR_WIDTH_KEY = "factory-memo.sidebar-width";
+
+const clampWidth = (width: number) =>
+  Math.min(SIDEBAR_WIDTH.max, Math.max(SIDEBAR_WIDTH.min, Math.round(width)));
+
+/** The sidebar width saved by an earlier visit, or the default. */
+function savedSidebarWidth(): number {
+  try {
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return saved ? clampWidth(saved) : SIDEBAR_WIDTH.min;
+  } catch {
+    return SIDEBAR_WIDTH.min;
+  }
+}
 
 export type QaShellOutletContext = {
   setKnowledgeNavigationLocked: (locked: boolean) => void;
@@ -136,9 +151,13 @@ function Sidebar({ section, toggle }: { section: Section; toggle: ReactNode }) {
           <FileText size={17} aria-hidden="true" />
           Thư viện tài liệu
         </Link>
-        <Link to="/tickets" data-testid="nav-tickets" {...sectionLink("tickets")}>
+        <Link
+          to="/tickets"
+          data-testid="nav-tickets"
+          {...sectionLink("tickets")}
+        >
           <KanbanSquare size={17} aria-hidden="true" />
-          Ticket sự cố
+          Xử lý sự cố
         </Link>
         {isAdmin && (
           <Link
@@ -159,6 +178,60 @@ function Sidebar({ section, toggle }: { section: Section; toggle: ReactNode }) {
   );
 }
 
+/**
+ * Drag handle on the sidebar's right edge. Dragging, or the arrow keys when
+ * focused, resizes the sidebar between its default width and twice that.
+ */
+export function SidebarResizer({
+  width,
+  onResize,
+}: {
+  width: number;
+  onResize: (width: number) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const origin = useRef({ x: 0, width: 0 });
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Độ rộng thanh bên"
+      aria-valuemin={SIDEBAR_WIDTH.min}
+      aria-valuemax={SIDEBAR_WIDTH.max}
+      aria-valuenow={width}
+      tabIndex={0}
+      className="sidebar-resizer"
+      data-dragging={dragging || undefined}
+      data-testid="sidebar-resizer"
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        origin.current = { x: event.clientX, width };
+        setDragging(true);
+      }}
+      onPointerMove={(event) => {
+        if (dragging)
+          onResize(
+            clampWidth(origin.current.width + event.clientX - origin.current.x),
+          );
+      }}
+      onPointerUp={() => setDragging(false)}
+      onPointerCancel={() => setDragging(false)}
+      onDoubleClick={() => onResize(SIDEBAR_WIDTH.min)}
+      onKeyDown={(event) => {
+        const delta =
+          event.key === "ArrowRight"
+            ? SIDEBAR_WIDTH.step
+            : event.key === "ArrowLeft"
+              ? -SIDEBAR_WIDTH.step
+              : 0;
+        if (!delta) return;
+        event.preventDefault();
+        onResize(clampWidth(width + delta));
+      }}
+    />
+  );
+}
+
 /** Phone section tabs; one row replaces the hidden desktop navigation. */
 function MobileSectionNav({ section }: { section: Section }) {
   const auth = useAuth();
@@ -166,7 +239,7 @@ function MobileSectionNav({ section }: { section: Section }) {
   const tabs: { to: string; key: Section; label: string }[] = [
     { to: "/ask", key: "ask", label: "Hỏi đáp" },
     { to: "/files", key: "files", label: "Tài liệu" },
-    { to: "/tickets", key: "tickets", label: "Ticket" },
+    { to: "/tickets", key: "tickets", label: "Xử lý sự cố" },
     ...(isAdmin
       ? [
           {
@@ -208,6 +281,15 @@ export function QaShell() {
   const section = sectionFor(useLocation().pathname);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(savedSidebarWidth);
+  const resizeSidebar = (width: number) => {
+    setSidebarWidth(width);
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+    } catch {
+      // The width just is not remembered.
+    }
+  };
   const toggleRef = useRef<HTMLButtonElement>(null);
   const toggleRequested = useRef(false);
   const closeDrawer = () => setDrawerOpen(false);
@@ -252,12 +334,14 @@ export function QaShell() {
             id={SIDEBAR_ID}
             className="app-sidebar"
             aria-label="Điều hướng"
+            style={{ width: sidebarWidth }}
             hidden={!sidebarOpen}
           >
             <Sidebar
               section={section}
               toggle={sidebarOpen ? sidebarToggle : null}
             />
+            <SidebarResizer width={sidebarWidth} onResize={resizeSidebar} />
           </aside>
           <div className="app-main">
             <header className="app-topbar">

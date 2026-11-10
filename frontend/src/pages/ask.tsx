@@ -22,6 +22,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { ANSWER_PLUGINS, AnswerTable } from "@/components/cited-answer";
 import { EvidencePanel } from "@/components/evidence-panel";
 import {
   diagnosisOverlayOpen,
@@ -48,7 +49,9 @@ function AnswerContent({
 }) {
   return (
     <Markdown
+      remarkPlugins={ANSWER_PLUGINS}
       components={{
+        table: AnswerTable,
         a: ({ href, children }) =>
           href?.startsWith("#citation-") ? (
             <button

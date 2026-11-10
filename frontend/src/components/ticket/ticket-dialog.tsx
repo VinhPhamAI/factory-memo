@@ -36,14 +36,12 @@ import {
   type Inquiry,
 } from "@/services/inquiries-api";
 import {
+  analyzeTicket,
   joinProposal,
   splitProposal,
   STAGES,
   ticketKey,
 } from "@/services/tickets";
-
-/** Shortest time "Đang phân tích…" stays visible, so the demo step reads as work. */
-const ANALYZE_MIN_MS = 1500;
 
 const messageOf = (error: unknown) =>
   error instanceof InquiryError
@@ -58,9 +56,6 @@ const dateTime = (iso: string) =>
     dateStyle: "short",
     timeStyle: "short",
   });
-
-const pause = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * Centered dialog of one ticket. The main column shows the demo AI proposal,
@@ -192,7 +187,7 @@ export function TicketDialog({
             <div className="ticket-dialog-crumb">
               <span className="ticket-key">
                 <TicketCheck size={14} aria-hidden="true" />
-                Ticket sự cố
+                Xử lý sự cố
                 {ticket && ` / ${ticketKey(ticket.id)}`}
               </span>
               {ticket && <StatusLozenge status={ticket.status} />}
@@ -274,7 +269,7 @@ export function TicketDialog({
                     <Sparkles size={15} aria-hidden="true" /> Đề xuất AI
                     {proposal && busy !== "analyze" && (
                       <span className="ticket-proposal-note">
-                        Bản demo — chưa được chuyên gia xác nhận
+                        Chưa được chuyên gia xác nhận
                       </span>
                     )}
                   </h2>
@@ -437,13 +432,7 @@ export function TicketDialog({
                       onClick={() =>
                         void run(
                           "analyze",
-                          async () =>
-                            (
-                              await Promise.all([
-                                api.demoProposal(ticket.id),
-                                pause(ANALYZE_MIN_MS),
-                              ])
-                            )[0],
+                          () => analyzeTicket(api, ticket.id),
                           "Đã có đề xuất.",
                         )
                       }

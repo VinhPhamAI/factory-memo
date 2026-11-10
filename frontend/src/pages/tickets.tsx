@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Search } from "lucide-react";
+import { Search, Sparkles } from "lucide-react";
 import { useAuth } from "@/hooks/auth";
 import { useInquiriesApi } from "@/hooks/inquiries";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,7 @@ import {
   type InquiriesApi,
   type InquirySummary,
 } from "@/services/inquiries-api";
-import { STAGES } from "@/services/tickets";
+import { analyzeTicket, STAGES, type TicketStage } from "@/services/tickets";
 
 type Filter = "all" | "mine" | "assigned";
 
@@ -56,6 +56,12 @@ export function TicketsPage() {
   const stages = useRef(new Map<string, string>());
   const [moved, setMoved] = useState<ReadonlySet<string>>(new Set());
 
+  // Drag and drop: the dragged ticket, the column under the pointer, and the
+  // tickets whose AI proposal is being created (shown in "In progress", dimmed).
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overStage, setOverStage] = useState<TicketStage | null>(null);
+  const [analyzing, setAnalyzing] = useState<ReadonlySet<string>>(new Set());
+
   const reload = useCallback(async () => {
     try {
       const loaded = await loadBoard(api);
@@ -89,6 +95,39 @@ export function TicketsPage() {
     return () => clearTimeout(timer);
   }, [moved]);
 
+  /** Only a draft the signed-in user sent can be analyzed. */
+  const canAnalyze = (ticket: InquirySummary) =>
+    ticket.stage === "todo" &&
+    ticket.requested_by === userId &&
+    !analyzing.has(ticket.id);
+
+  /** Dropping a to-do ticket on "In progress" does what the "Phân tích" button does. */
+  async function analyze(ticket: InquirySummary) {
+    setAnalyzing((current) => new Set(current).add(ticket.id));
+    try {
+      await analyzeTicket(api, ticket.id);
+      await reload();
+      toasts.show("success", "Đã có đề xuất.");
+    } catch (cause) {
+      toasts.show(
+        "error",
+        cause instanceof InquiryError
+          ? cause.message
+          : "Thao tác thất bại. Hãy thử lại.",
+      );
+      if (cause instanceof InquiryError && cause.status === 409) await reload();
+    } finally {
+      setAnalyzing((current) => {
+        const next = new Set(current);
+        next.delete(ticket.id);
+        return next;
+      });
+    }
+  }
+
+  const dragged = tickets?.find((ticket) => ticket.id === dragId);
+  const dropReady = dragged !== undefined && canAnalyze(dragged);
+
   const columns = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("vi");
     const shown = (tickets ?? []).filter(
@@ -99,18 +138,27 @@ export function TicketsPage() {
             : ticket.assigned_to === userId)) &&
         (!needle || ticket.title.toLocaleLowerCase("vi").includes(needle)),
     );
-    shown.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    // A ticket being analyzed already sits in "In progress", at the top.
+    const stageOf = (ticket: InquirySummary) =>
+      analyzing.has(ticket.id) ? "in_progress" : ticket.stage;
+    shown.sort(
+      (a, b) =>
+        Number(analyzing.has(b.id)) - Number(analyzing.has(a.id)) ||
+        b.updated_at.localeCompare(a.updated_at),
+    );
     return STAGES.map((stage) => ({
       ...stage,
-      tickets: shown.filter((ticket) => ticket.stage === stage.id),
+      tickets: shown.filter((ticket) => stageOf(ticket) === stage.id),
     }));
-  }, [tickets, filter, query, userId]);
+  }, [tickets, filter, query, userId, analyzing]);
 
   return (
     <main className="ticket-page" data-testid="tickets-page">
       <header className="ticket-page-heading">
-        <h1 className="page-heading">Ticket sự cố</h1>
-        <p>Tạo ticket từ trò chuyện, xem đề xuất AI rồi gửi chuyên gia duyệt.</p>
+        <h1 className="page-heading">Xử lý sự cố</h1>
+        <p>
+          Tạo ticket từ trò chuyện, xem đề xuất AI rồi gửi chuyên gia duyệt.
+        </p>
       </header>
       <div className="ticket-toolbar">
         <label className="ticket-search">
@@ -143,7 +191,11 @@ export function TicketsPage() {
         </p>
       )}
       {tickets === null ? (
-        <div className="ticket-board" aria-busy="true" data-testid="ticket-loading">
+        <div
+          className="ticket-board"
+          aria-busy="true"
+          data-testid="ticket-loading"
+        >
           <span className="sr-only">Đang tải…</span>
           {STAGES.map((stage, index) => (
             <div
@@ -173,43 +225,85 @@ export function TicketsPage() {
         </div>
       ) : (
         <div className="ticket-board" data-testid="ticket-board">
-          {columns.map((column) => (
-            <section
-              key={column.id}
-              className="ticket-column"
-              data-stage={column.id}
-              data-testid={`ticket-column-${column.id}`}
-              aria-label={column.label}
-            >
-              <header className="ticket-column-head">
-                <h2>
-                  <span className="ticket-dot" aria-hidden="true" />
-                  {column.label}
-                  {/* The key restarts the bump animation when the count changes. */}
-                  <span key={column.tickets.length} className="ticket-count">
-                    {column.tickets.length}
-                  </span>
-                </h2>
-                <p>{column.hint}</p>
-              </header>
-              {column.tickets.length ? (
-                <ul>
-                  {column.tickets.map((ticket, index) => (
-                    <TicketCard
-                      key={ticket.id}
-                      ticket={ticket}
-                      userId={userId}
-                      active={ticket.id === id}
-                      moved={moved.has(ticket.id)}
-                      order={index}
-                    />
-                  ))}
-                </ul>
-              ) : (
-                <p className="ticket-empty">{column.empty}</p>
-              )}
-            </section>
-          ))}
+          {columns.map((column) => {
+            const target = column.id === "in_progress" && dropReady;
+            return (
+              <section
+                key={column.id}
+                className="ticket-column"
+                data-stage={column.id}
+                data-testid={`ticket-column-${column.id}`}
+                data-drop={
+                  target
+                    ? overStage === column.id
+                      ? "over"
+                      : "ready"
+                    : undefined
+                }
+                aria-label={column.label}
+                onDragOver={(event) => {
+                  if (!target) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  setOverStage(column.id);
+                }}
+                onDragLeave={(event) => {
+                  if (
+                    !event.currentTarget.contains(event.relatedTarget as Node)
+                  )
+                    setOverStage(null);
+                }}
+                onDrop={(event) => {
+                  if (!target || !dragged) return;
+                  event.preventDefault();
+                  setOverStage(null);
+                  setDragId(null);
+                  void analyze(dragged);
+                }}
+              >
+                <header className="ticket-column-head">
+                  <h2>
+                    <span className="ticket-dot" aria-hidden="true" />
+                    {column.label}
+                    {/* The key restarts the bump animation when the count changes. */}
+                    <span key={column.tickets.length} className="ticket-count">
+                      {column.tickets.length}
+                    </span>
+                  </h2>
+                  <p>{column.hint}</p>
+                </header>
+                {column.tickets.length || target ? (
+                  <ul>
+                    {target && (
+                      <li className="ticket-drop-hint" aria-hidden="true">
+                        <Sparkles size={14} /> Thả vào đây để AI phân tích
+                      </li>
+                    )}
+                    {column.tickets.map((ticket, index) => (
+                      <TicketCard
+                        key={ticket.id}
+                        ticket={ticket}
+                        userId={userId}
+                        active={ticket.id === id}
+                        moved={moved.has(ticket.id)}
+                        order={index}
+                        draggable={canAnalyze(ticket)}
+                        dragging={ticket.id === dragId}
+                        analyzing={analyzing.has(ticket.id)}
+                        onDragStart={() => setDragId(ticket.id)}
+                        onDragEnd={() => {
+                          setDragId(null);
+                          setOverStage(null);
+                        }}
+                      />
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="ticket-empty">{column.empty}</p>
+                )}
+              </section>
+            );
+          })}
         </div>
       )}
       <TicketDialog
