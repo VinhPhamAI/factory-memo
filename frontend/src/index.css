@@ -8223,3 +8223,31 @@ button.ref-chip:hover,
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+/* The side column is exactly its 320px track; wide content (selects, long values) wraps or clips inside it. */
+.ticket-dialog-side {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+.ticket-dialog-side > *,
+.ticket-expert > *,
+.ticket-expert select {
+  min-width: 0;
+  max-width: 100%;
+}
+.ticket-expert select {
+  width: 100%;
+  text-overflow: ellipsis;
+}
+.ticket-details dd {
+  min-width: 0;
+}
+.ticket-details dt {
+  flex: 0 0 auto;
+}
+.ticket-dialog-body {
+  overflow-x: hidden;
+}
+.ticket-expert label {
+  grid-template-columns: minmax(0, 1fr);
+}

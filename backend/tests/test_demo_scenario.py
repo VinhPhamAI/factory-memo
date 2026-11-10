@@ -32,6 +32,7 @@ from backend.src.services.demo_scenario import (
     scripted_proposal,
 )
 from backend.src.services.auth import AuthService
+from backend.src.services.demo_accounts import ensure_demo_accounts, load_or_create_accounts
 from backend.src.services.demo_scenario import ensure_demo_expert, reset_demo_data
 from backend.src.services.file_library import FileLibraryService
 from backend.src.services.inquiries import InquiryService
@@ -282,6 +283,32 @@ class DemoFlowRouteTest(ConversationTestCase):
         self.assertEqual([item["id"] for item in listed], [other])
         self.assertNotIn(asked_only, [item["id"] for item in listed])
         self.assertEqual(len(self.client.get("/v1/experts", headers=owner).json()["experts"]), 1)
+
+    def test_demo_accounts_sign_in_with_the_saved_credentials(self) -> None:
+        path = Path(tempfile.mkdtemp()) / "demo" / "accounts.json"
+        self.addCleanup(shutil.rmtree, path.parent.parent, ignore_errors=True)
+        # The mock expert exists first, as after an API start in demo mode.
+        asyncio.run(ensure_demo_expert(self.sessions, self.scenario.expert))
+        accounts = load_or_create_accounts(path, self.scenario.expert)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(load_or_create_accounts(path, self.scenario.expert), accounts)
+
+        first = asyncio.run(ensure_demo_accounts(self.sessions, accounts, password_hasher=FAST_HASHER))
+        again = asyncio.run(ensure_demo_accounts(self.sessions, accounts, password_hasher=FAST_HASHER))
+        self.assertEqual(first, ["created demo.user", "created demo.admin", "updated demo.expert"])
+        self.assertEqual([line.split()[0] for line in again], ["updated"] * 3)
+
+        roles = []
+        for account in accounts.accounts:
+            login = self.client.post(
+                "/auth/login", json={"username": account.username, "password": account.password}
+            )
+            self.assertEqual(login.status_code, 200, login.text)
+            self.client.cookies.clear()
+            bearer = {"Authorization": f"Bearer {login.json()['access_token']}"}
+            roles.append(self.client.get("/auth/me", headers=bearer).json()["role"])
+        self.assertEqual(roles, ["employee", "admin", "expert"])
+        self.assertEqual(len({account.password for account in accounts.accounts}), 3)
 
 
 if __name__ == "__main__":

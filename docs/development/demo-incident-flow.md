@@ -25,9 +25,31 @@ base, and the proposal is not an approved procedure.
 7. Open the card to read the AI proposal. Choose the mock expert and select
    **Gửi chuyên gia**. The card moves to **In review**.
 
+## Demo accounts
+
+`make demo-accounts` (host: `uv run python -m backend.scripts.demo_accounts`)
+creates three accounts and keeps their credentials in `data/demo/accounts.json`.
+
+| Username | Role | Use |
+| --- | --- | --- |
+| `demo.user` | employee | Shared sign-in for chat, tickets and the file library |
+| `demo.admin` | admin | Creates and manages knowledge bases |
+| `demo.expert` | expert | Reviews knowledge and tickets sent for review |
+
+- The first run writes the file with random passwords. Later runs read it and
+  make the database match it, so a password edited in the file takes effect
+  after the command is run again. Delete the file to get new passwords.
+- `demo.expert` is the mock expert of the scripted demo. After this command it
+  can sign in and answer the ticket sent in step 7.
+- An existing account with one of these usernames gets the file's password,
+  role and display name.
+- `data/` is ignored by Git. Do not commit the file or use these accounts
+  outside demos; anyone with the file can sign in as an admin.
+
 ## Reset and run again
 
-Run one command, then start a new chat. No API restart is needed.
+Run one command, then start a new chat. No API restart or image rebuild is
+needed: the `make` targets run on the current `backend/` source.
 
 | API runs in | Command |
 | --- | --- |
@@ -81,8 +103,9 @@ mode. Restart the API after editing it.
 - Use the prompt as the first message of a chat. The agent does not see the
   scripted turn, so follow-up questions are answered without it.
 - Scripted citations have no source links because no stored source exists.
-- The mock expert has a random password that is not kept, so nobody can sign
-  in as that account and the demo ends at **In review**. The account stays in
-  `users` after the mode is turned off; deactivate or delete it if unwanted.
+- Until `make demo-accounts` is run, the mock expert has a random password
+  that is not kept, so nobody can sign in as it and the demo ends at
+  **In review**. Demo accounts stay in `users` after the mode is turned off;
+  deactivate them if unwanted.
 - A ticket created outside the scripted chat gets the scripted proposal only
   if its title equals the scenario's ticket title.

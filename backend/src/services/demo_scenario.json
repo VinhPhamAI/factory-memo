@@ -3,7 +3,7 @@
   "timing": {
     "search_seconds": 1.2,
     "chunk_delay_ms": 30,
-    "analysis_seconds": 3
+    "analysis_seconds": 5
   },
   "reasoning": "Hiện tượng: Control Power có, High Power không lên, xảy ra ngay sau sụt áp. Servo amplifier hiếm khi hỏng theo kiểu này; cần xem mạch cho phép (enable) High Power trước. Tra kho tri thức: tài liệu hãng về điều kiện bật High Power và kinh nghiệm sửa chữa đã ghi lại ở chính trạm này.",
   "search": {
