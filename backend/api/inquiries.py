@@ -17,8 +17,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.auth import require_current_user
-from backend.src.services.demo_proposals import with_demo_proposal
-from backend.src.services.demo_scenario import scripted_proposal
+from backend.src.services.demo.proposals import with_demo_proposal
+from backend.src.services.demo.scenario import scripted_proposal
 from backend.src.services.inquiries import (
     ConversationNotFound,
     IneligibleAssignee,

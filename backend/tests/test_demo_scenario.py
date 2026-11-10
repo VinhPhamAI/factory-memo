@@ -22,8 +22,8 @@ from sqlalchemy.pool import NullPool
 
 from backend.app import create_app
 from backend.src.clients.agent import AgentHistory, AgentUnavailable, HistoryMessage
-from backend.src.services.demo_proposals import with_demo_proposal
-from backend.src.services.demo_scenario import (
+from backend.src.services.demo.proposals import with_demo_proposal
+from backend.src.services.demo.scenario import (
     DEMO_MODE_ENV,
     DemoAgentClient,
     DemoScenario,
@@ -32,8 +32,8 @@ from backend.src.services.demo_scenario import (
     scripted_proposal,
 )
 from backend.src.services.auth import AuthService
-from backend.src.services.demo_accounts import ensure_demo_accounts, load_or_create_accounts
-from backend.src.services.demo_scenario import ensure_demo_expert, reset_demo_data
+from backend.src.services.demo.accounts import ensure_demo_accounts, load_or_create_accounts
+from backend.src.services.demo.scenario import ensure_demo_expert, reset_demo_data
 from backend.src.services.file_library import FileLibraryService
 from backend.src.services.inquiries import InquiryService
 from backend.src.storage.app_database import create_session_factory

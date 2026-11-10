@@ -9,7 +9,7 @@ at the end of `context.proposed_fix`; text before the marker is the user's own.
 
 from __future__ import annotations
 
-from backend.src.services.demo_scenario import scripted_proposal
+from backend.src.services.demo.scenario import scripted_proposal
 from backend.src.storage.inquiries import DEMO_PROPOSAL_MARKER
 
 MAX_PROPOSED_FIX = 4000

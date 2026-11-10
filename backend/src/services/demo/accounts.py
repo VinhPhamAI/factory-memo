@@ -1,7 +1,7 @@
 """Shared sign-in accounts for demos: one employee, one admin and one expert.
 
-The usernames and passwords are kept in a JSON file under `data/`, which Git
-ignores. The file is written on the first run with random passwords and read
+The usernames and passwords are kept in `accounts.json` next to this module, which Git
+and the API image ignore. The file is written on the first run with random passwords and read
 on later runs, so the accounts in the database always match the file. The
 expert is the mock expert of the scripted incident demo, so tickets sent to it
 can be reviewed by signing in with the file's password.
@@ -19,14 +19,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.src.services.demo_scenario import DemoExpert
+from backend.src.services.demo.scenario import DemoExpert
 from backend.src.storage.app_database import app_transaction
 from backend.src.storage.orm.users import User, UserRole, normalize_username
 
 
-ACCOUNTS_PATH = Path("data/demo/accounts.json")
+ACCOUNTS_PATH = Path(__file__).with_name("accounts.json")
 _NOTE = (
-    "Demo accounts only. Created by backend/scripts/demo_accounts.py; "
+    "Demo accounts only. Created by backend/src/services/demo/create_accounts.py; "
     "run it again after editing this file. Do not commit or reuse these passwords."
 )
 

@@ -1,6 +1,6 @@
 """Scripted incident demo, enabled by `DEMO_MODE=true`.
 
-One prepared case is read from `demo_scenario.json` and replayed through the
+One prepared case is read from `scenario.json` and replayed through the
 normal chat and ticket routes:
 
 1. A chat message equal to the scripted prompt gets the scripted answer as a
@@ -53,7 +53,7 @@ from backend.src.storage.orm.users import User, UserRole, normalize_username
 logger = logging.getLogger(__name__)
 
 DEMO_MODE_ENV = "DEMO_MODE"
-SCENARIO_PATH = Path(__file__).with_name("demo_scenario.json")
+SCENARIO_PATH = Path(__file__).with_name("scenario.json")
 _ENABLED = {"1", "true", "yes", "on"}
 # Shortest chat title treated as the start of the scripted prompt on reset.
 _MIN_TITLE_MATCH = 20

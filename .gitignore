@@ -184,3 +184,6 @@ benchmark/logs/
 
 # Downloaded speech model weights (deployments/speech/setup.sh)
 models/
+
+# Demo sign-in credentials (make demo-accounts)
+backend/src/services/demo/accounts.json

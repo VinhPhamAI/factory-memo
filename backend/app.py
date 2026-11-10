@@ -49,7 +49,7 @@ from backend.src.storage.document_uploads import DocumentUploadStore
 from backend.src.storage.embeddings import EmbeddingMismatch, verify_embedding_dimension
 from backend.src.storage.file_library import FileBlobStore, FileRecordStore
 from backend.src.services.auth import AuthService
-from backend.src.services.demo_scenario import (
+from backend.src.services.demo.scenario import (
     DemoAgentClient,
     ensure_demo_expert,
     load_demo_scenario,
