@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   BookOpen,
   FileText,
+  KanbanSquare,
   LogOut,
   Menu,
   PanelLeft,
@@ -25,11 +26,12 @@ import { ConversationsProvider } from "@/hooks/conversations";
 import { AuthError } from "@/services/auth-api";
 import { cn } from "@/utils/cn";
 
-type Section = "ask" | "files" | "inquiries" | "admin";
+type Section = "ask" | "files" | "tickets" | "inquiries" | "admin";
 
 const SECTION_NAMES: Record<Section, string> = {
   ask: "Hỏi đáp",
   files: "Thư viện tài liệu",
+  tickets: "Ticket sự cố",
   inquiries: "Yêu cầu chuyên gia",
   admin: "Kho kiến thức",
 };
@@ -47,6 +49,7 @@ export type QaShellOutletContext = {
  */
 function sectionFor(pathname: string): Section {
   if (pathname.startsWith("/admin")) return "admin";
+  if (pathname.startsWith("/tickets")) return "tickets";
   if (pathname.startsWith("/inquiries")) return "inquiries";
   if (pathname.startsWith("/files") || pathname.startsWith("/knowledge"))
     return "files";
@@ -139,6 +142,10 @@ function Sidebar({ section }: { section: Section }) {
           <FileText size={17} aria-hidden="true" />
           Thư viện tài liệu
         </Link>
+        <Link to="/tickets" data-testid="nav-tickets" {...sectionLink("tickets")}>
+          <KanbanSquare size={17} aria-hidden="true" />
+          Ticket sự cố
+        </Link>
         <Link
           to="/inquiries"
           data-testid="nav-inquiries"
@@ -173,6 +180,7 @@ function MobileSectionNav({ section }: { section: Section }) {
   const tabs: { to: string; key: Section; label: string }[] = [
     { to: "/ask", key: "ask", label: "Hỏi đáp" },
     { to: "/files", key: "files", label: "Tài liệu" },
+    { to: "/tickets", key: "tickets", label: "Ticket" },
     { to: "/inquiries", key: "inquiries", label: "Chuyên gia" },
     ...(isAdmin
       ? [

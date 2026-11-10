@@ -19,6 +19,7 @@ const row = (over: Partial<InquirySummary>): InquirySummary => ({
   created_at: "2026-11-05T08:00:00Z",
   updated_at: "2026-11-05T08:00:00Z",
   submitted_at: null,
+  stage: "todo",
   ...over,
 });
 const detail = (over: Partial<Inquiry> = {}): Inquiry => ({

@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Callable, Literal
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
@@ -87,6 +87,7 @@ class InquirySummary:
     created_at: datetime
     updated_at: datetime
     submitted_at: datetime | None
+    stage: str
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,25 @@ def _visible(user_id: UUID) -> Any:
     )
 
 
+# Marks the demo AI proposal inside `context.proposed_fix` (ticket board demo).
+DEMO_PROPOSAL_MARKER = "[Đề xuất AI – demo]"
+
+
+def _stage() -> Any:
+    """Return the ticket board column of an inquiry from its status and demo proposal.
+
+    `todo` for drafts, `in_progress` for drafts holding the demo proposal,
+    `in_review` while an expert reviews it and `done` once answered or closed.
+    """
+
+    return case(
+        (Inquiry.status.in_(("answered", "closed")), "done"),
+        (Inquiry.status.in_(("open", "needs_info")), "in_review"),
+        (Inquiry.context["proposed_fix"].astext.contains(DEMO_PROPOSAL_MARKER, autoescape=True), "in_progress"),
+        else_="todo",
+    )
+
+
 def _summary_query(requester: Any, assignee: Any) -> Any:
     """Return the select of list columns joined to requester and optional assignee names."""
 
@@ -142,7 +162,7 @@ def _summary_query(requester: Any, assignee: Any) -> Any:
         select(
             Inquiry.id, Inquiry.title, Inquiry.status, Inquiry.requested_by,
             requester.display_name, Inquiry.assigned_to, assignee.display_name,
-            Inquiry.created_at, Inquiry.updated_at, Inquiry.submitted_at,
+            Inquiry.created_at, Inquiry.updated_at, Inquiry.submitted_at, _stage(),
         )
         .join(requester, requester.id == Inquiry.requested_by)
         .outerjoin(assignee, assignee.id == Inquiry.assigned_to)
@@ -240,9 +260,9 @@ class InquiryStore:
                 .order_by(InquiryEvent.created_at, InquiryEvent.id)
             )
             return InquiryDetail(
-                summary=InquirySummary(*row[:10]),
-                conversation_id=row[10],
-                context=row[11],
+                summary=InquirySummary(*row[:11]),
+                conversation_id=row[11],
+                context=row[12],
                 files=[InquiryFileRef(*item) for item in files],
                 events=[InquiryEventRecord(*item) for item in events],
             )

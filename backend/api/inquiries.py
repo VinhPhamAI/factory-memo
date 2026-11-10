@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.auth import require_current_user
+from backend.src.services.demo_proposals import with_demo_proposal
 from backend.src.services.inquiries import (
     ConversationNotFound,
     IneligibleAssignee,
@@ -79,6 +80,7 @@ class InquirySummaryResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     submitted_at: datetime | None
+    stage: Literal["todo", "in_progress", "in_review", "done"]
 
 
 class InquiryFileResponse(BaseModel):
@@ -298,6 +300,28 @@ async def submit_inquiry(
 
     try:
         return inquiry_response(await service.submit(user, inquiry_id, body.assigned_to))
+    except InquiryNotFound as exc:
+        raise _not_found() from exc
+    except RULE_ERRORS as exc:
+        raise rule_violation(exc) from exc
+
+
+@router.post("/{inquiry_id}/demo-proposal")
+async def add_demo_proposal(inquiry_id: UUID, user: CurrentUser, service: Service) -> InquiryResponse:
+    """Add the canned demo AI proposal to the requester's draft ticket (ticket board demo).
+
+    The proposal replaces any earlier demo block in `proposed_fix` and is saved
+    like a `PATCH`. It reads no knowledge and calls no model. 404 when the
+    caller does not own the inquiry; 409 once it has been submitted.
+    """
+
+    try:
+        detail = await service.get(user, inquiry_id)
+        context = InquiryContext.model_validate(detail.context)
+        context.proposed_fix = with_demo_proposal(
+            context.proposed_fix, detail.summary.title, context.situation
+        )
+        return inquiry_response(await service.update_draft(user, inquiry_id, context=context))
     except InquiryNotFound as exc:
         raise _not_found() from exc
     except RULE_ERRORS as exc:

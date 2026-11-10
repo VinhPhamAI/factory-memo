@@ -6,40 +6,49 @@ Start with the [product requirements](docs/features/project-overview.md),
 [engineering standards](docs/development/code-standards.md), and
 [documentation index](docs/README.md). New sessions should read [AGENTS.md](AGENTS.md).
 
-The current code includes knowledge extraction/search, a React UI, a trace UI,
-and voice-capture flows. For signed-in chat and knowledge-base tools, follow
-the [local chat setup](docs/features/conversations.md#run-locally). The independent
-agent has its own [setup, API, and development guide](agent/README.md).
+The current code includes signed-in agent chat, a personal file library,
+application-backed knowledge ingestion/search/review, expert inquiries, voice
+capture and a React UI. Knowledge-base chat tools are optional. Follow the
+[local chat setup](docs/features/conversations.md#run-locally) to enable them.
+The independent agent has its own
+[setup, API and development guide](agent/README.md).
 
 ## 1. Environment setup
 
-Docker backend requirements: **Docker with Compose v2.24+** and **Bash**;
-**make** is optional. **Python 3.12+** and **uv** are needed only for commands
-run on the host (benchmarking, manual snapshot commands, or a host-run API).
-Run all commands from the repository root.
+Docker backend requirements: **Docker with Compose v2.24+**, **Bash**,
+**Python 3.12+** and **uv**. The migration script runs Alembic through `uv` on
+the host. **make** is optional. Run all commands from the repository root.
 
-### Docker backend with one command
+### First-time Docker backend setup
 
 On first use, copy `.env.example` to `.env` and configure the chat and embedding
 settings described below. Keep an existing `.env` when rerunning setup.
 
 ```bash
 cp .env.example .env  # first use only, then edit provider/embedding settings
+bash deployments/migrate.sh
 make setup
 # Equivalent without make: bash deployments/setup.sh
 ```
+
+`migrate.sh` starts Compose PostgreSQL, creates the application database when
+needed, applies every Alembic revision, runs `alembic check` and prints the
+current revision. It requires `APP_DATABASE_URL` (or
+`MIGRATION_DATABASE_URL`) and `EMBEDDING_DIM` in `.env`. It never uses
+`DATABASE_URL` as its migration target.
 
 Setup runs sequentially:
 
 1. Check Docker/Compose and configuration; build the shared backend image.
 2. Stop existing API/worker containers so they cannot write during restore.
 3. Start PostgreSQL and wait for its healthcheck.
-4. Initialize `knowledge_base_registry` and `ingestion_jobs` using the container's
-   database connection. Database/authentication/DDL failures stop setup.
-5. Run `backend.knowledge_bases.industrial_qa.snapshot pull` in a temporary
-   container, using the API image, `.env`, internal database URL and data volumes.
-   Only `benchmark/public/` is additionally mounted, read-only. No host `uv sync`
-   is required. This rebuilds embeddings and can incur embedding-provider costs.
+4. Initialize the legacy `knowledge_base_registry` and `ingestion_jobs` tables
+   in `DATABASE_URL`. Application tables are created only by `migrate.sh`.
+5. Run the legacy `backend.knowledge_bases.industrial_qa.snapshot pull` in a
+   temporary container, using the API image, `.env`, internal database URL and
+   data volumes. Only `benchmark/public/` is additionally mounted, read-only.
+   No host `uv sync` is required. This rebuilds embeddings and can incur
+   embedding-provider costs.
 6. Start API and wait for `/healthz`, then start worker and show service status.
 
 **Seed failure is non-fatal:** its output is saved to `data/setup/seed.*`, a
@@ -62,13 +71,31 @@ bash deployments/setup.sh --no-build --skip-seed  # reuse the existing image
 ```
 
 Rerunning retains PostgreSQL/upload volumes and host `data/`; it does not reset
-the database. A restore into unrelated knowledge records is refused and reported
-as a seed warning. If `.env` is missing, setup creates it from `.env.example`;
-provider settings still need to be filled in for seed/QA to work.
+either database. A restore into unrelated legacy knowledge records is refused
+and reported as a seed warning. If `.env` is missing, setup creates it from
+`.env.example`; provider settings still need to be filled in for seed/QA to work.
 The API defaults to **http://localhost:8005** (`/healthz`, `/docs`).
 Speech and frontend are optional separate steps below.
 
-### Host Python environment (optional)
+### Update the backend during development
+
+After pulling backend code, changing dependencies or adding migrations, update
+the application schema and recreate both services from the shared image:
+
+```bash
+bash deployments/migrate.sh
+
+docker compose --env-file .env \
+  -f deployments/docker-compose.yml \
+  up -d --build --force-recreate api worker
+```
+
+The migration runs before the new containers start. Existing API and worker
+containers may continue running during it, so stop them first when a migration
+is not backward-compatible with the currently running code. Building an image
+alone does not replace a running container.
+
+### Host Python environment
 
 ```bash
 uv venv --python 3.12
@@ -84,7 +111,11 @@ below; they are supported by the code but absent from `.env.example`.
 Replace every placeholder.
 
 ```dotenv
+# Legacy CLI, benchmark, snapshot registry and per-KB databases
 DATABASE_URL=postgresql+psycopg://voice_agent:voice_agent@localhost:5434/voice_agent
+
+# Serving API and worker application schema
+APP_DATABASE_URL=postgresql+psycopg://voice_agent:voice_agent@localhost:5434/voice_agent_app
 
 # Shared OpenAI-compatible chat endpoint
 OPENROUTER_API_KEY=<your-api-key>
@@ -110,22 +141,28 @@ of Git.
 
 ## 2. Database initialization
 
-The following commands are the manual alternative to `make setup`.
+The repository uses separate application and legacy storage paths:
 
-Start PostgreSQL + pgvector and check readiness:
+| Setting | Current use |
+| --- | --- |
+| `APP_DATABASE_URL` | Serving API and worker: users, sessions, conversations, files, inquiries, knowledge bases, sources, chunks, application ingestion jobs and conflict review. |
+| `DATABASE_URL` | Legacy CLI, benchmark and snapshot registry/job queue; legacy knowledge remains in per-KB databases such as `kb_industrial_qa`. |
+| `MIGRATION_DATABASE_URL` | Optional Alembic-only setup-owner connection; it takes precedence over `APP_DATABASE_URL` and is never used at runtime. |
+
+Create or upgrade the application database from the repository root:
 
 ```bash
-docker compose -f deployments/docker-compose.yml up -d postgres
-docker compose -f deployments/docker-compose.yml exec postgres pg_isready -U voice_agent -d voice_agent # test db
+bash deployments/migrate.sh
 ```
 
-PostgreSQL is exposed on **localhost:5434**. The application creates each
-`kb_<name>` database, tables and vector extension on first use. The built-in
-registry contains `industrial_qa` and `general`; further knowledge
-bases can be created in the UI and are recorded in the `knowledge_base_registry`
-table (see the [KB guide](backend/knowledge_bases/README.md#knowledge-bases-created-in-the-ui)).
+PostgreSQL is exposed on **localhost:5434** by default. The serving API does not
+create or alter application tables on startup. Alembic owns that schema. The
+application catalog and all serving knowledge records live in the application
+database; UI-created knowledge bases copy the General policy. See
+[database migrations](docs/development/database-migrations.md) and the
+[KB guide](backend/knowledge_bases/README.md#knowledge-bases-created-in-the-ui).
 
-For the Industrial QA demo, restore the published knowledge snapshot:
+For legacy Industrial QA benchmarking, restore the published knowledge snapshot:
 
 ```bash
 uv run python -m backend.knowledge_bases.industrial_qa.snapshot pull \
@@ -134,16 +171,18 @@ uv run python -m backend.knowledge_bases.industrial_qa.snapshot pull \
   --run-id industrial-qa-test-full-20261010T164959Z
 ```
 
-This populates `kb_industrial_qa`, rebuilds knowledge/manual embeddings and
-restores the selected benchmark artifacts when bundled. It requires a compatible
-snapshot and matching local `benchmark/public/` files. Use a fresh database or
-one containing the same snapshot; unrelated records cause the import to stop.
+This populates the legacy `kb_industrial_qa` database, rebuilds
+knowledge/manual embeddings and restores selected benchmark artifacts when
+bundled. It does not populate the application knowledge tables used by the
+signed-in React UI. It requires a compatible snapshot and matching local
+`benchmark/public/` files. Use a fresh database or one containing the same
+snapshot; unrelated records cause the import to stop.
 
 To build knowledge from scratch instead, use the fresh benchmark workflow below.
 See the [snapshot guide](backend/knowledge_bases/industrial_qa/SNAPSHOT.md) for
 local imports and other restore options.
 
-### Optional: AI services (speech, OCR and embeddings)
+### Optional: AI services (speech, OCR, embeddings and chat)
 
 All self-hosted AI services are reached through one port: `ai-services-api`
 (`127.0.0.1:8080`), a FastAPI app that forwards each request to the worker
@@ -153,20 +192,22 @@ and need an NVIDIA GPU and the NVIDIA Container Toolkit:
 | Service | Paths | Worker | GPU memory |
 | --- | --- | --- | --- |
 | Speech: VieGem-ASR Vietnamese speech recognition, no speaker diarization | `/v1/audio/transcriptions` (HTTP and realtime WebSocket) | `ai-speech` | about 2.4 GB |
-| OCR: PaddleOCR-VL-1.6 for PDF, PNG and JPEG to JSON regions and Markdown (not used by ingestion yet) | `/v1/ocr` | `ai-ocr`, `ai-ocr-vlm` | about 7 GB |
+| OCR: PaddleOCR-VL-1.6 for scanned PDF, PNG and JPEG ingestion with located regions and Markdown | `/v1/ocr` | `ai-ocr`, `ai-ocr-vlm` | about 7 GB |
 | Embeddings: microsoft/harrier-oss-v1-0.6b on TEI, 1024 dimensions (also on port 8001) | `/v1/embeddings` (OpenAI-compatible), `/v1/embeddings/tokenize`, `/v1/embeddings/info` | `ai-embedding` | about 1.5 GB |
+| Chat: Qwen/Qwen3.5-4B on vLLM, text only with tool calling (also on port 8043) | `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/messages` | `ai-llm` | controlled by `LLM_GPU_MEM_UTIL` |
 
 ```bash
 bash deployments/speech/setup.sh                 # speech weights, once
-bash deployments/ai-services-api/up.sh speech ocr embedding  # or only those you need
+bash deployments/ai-services-api/up.sh speech ocr embedding llm  # or only those you need
 bash deployments/speech/smoke_test.sh [speech.wav ["reference transcript"]]
 bash deployments/ocr/smoke_test.sh [document.pdf]
 bash deployments/embedding/smoke_test.sh
 ```
 
 See the [AI services API guide](deployments/ai-services-api/README.md), the
-[speech](deployments/speech/README.md), [OCR](deployments/ocr/README.md) and
-[embedding](deployments/embedding/README.md) service guides. To use the local
+[speech](deployments/speech/README.md), [OCR](deployments/ocr/README.md),
+[embedding](deployments/embedding/README.md) and
+[LLM](deployments/llm/README.md) service guides. To use the local
 embeddings in the backend, set `EMBEDDING_BASE_URL=http://127.0.0.1:8080/v1`
 and the values in the embedding guide. Speech transcribes audio into
 transcript turns for the UI's voice capture, which saves the original audio to
@@ -185,12 +226,14 @@ docker compose -f deployments/docker-compose.yml logs -f api
 This also starts PostgreSQL and waits for it to be healthy. The API is available
 at **http://localhost:8005** (`/healthz` for health, `/docs` for API documentation).
 Set `API_PORT` in `.env` to change the host port. Recordings and other runtime
-data, including document uploads (`data/uploads/`), persist in the host's `data/`
-directory across container recreation, so host-run and containerised services share them.
-Rebuild with the same command after changing backend code or dependencies.
+data under `/app/data` persist through the host `data/` bind mount. Document
+uploads and personal library files use the `document_uploads` and `file_library`
+named volumes, so container and host-run services do not share those two stores
+by default. Use the development update flow above after changing backend code,
+dependencies or migrations.
 
-**Job workers** run Convert/Extract jobs (Auto uploads and recordings, and the
-Convert/Extract buttons in **Quản lý tri thức**). Without a worker, jobs stay queued:
+**Job workers** run Convert, Extract and conflict-check jobs for uploaded files,
+recordings and explicit processing actions. Without a worker, jobs stay queued:
 
 ```bash
 docker compose --env-file .env -f deployments/docker-compose.yml up -d --build worker
@@ -198,8 +241,9 @@ docker compose -f deployments/docker-compose.yml logs -f worker
 ```
 
 The `worker` service uses the API image and volumes and runs one process per
-stage slot (`WORKER_CONVERT_PROCESSES`, `WORKER_EXTRACT_PROCESSES`, default 1
-each). See [job queue and workers](docs/features/knowledge-management.md#job-queue-and-workers).
+stage slot by default. Configure the counts with `WORKER_CONVERT_PROCESSES`,
+`WORKER_EXTRACT_PROCESSES` and `WORKER_CONFLICT_PROCESSES`. See
+[job queue and workers](docs/features/knowledge-management.md#job-queue-and-workers).
 
 Inside Compose, the API connects to `postgres:5432` and `ai-services-api:8080`;
 `API_DATABASE_URL` and `API_SPEECH_API_URL` override these defaults. Sign-in
@@ -216,8 +260,9 @@ container is fixed to `/app/data/audio`, backed by the host's `data/audio/`.
 AI services are optional: prepare speech with `deployments/speech/setup.sh`, then
 start them with `deployments/ai-services-api/up.sh` as above.
 `deployments/docker-compose.yml` alone starts the API, the worker and
-PostgreSQL. After setup, add the AI overlay to start the full stack (all AI
-services, about 12 GB of GPU memory) in the same Compose project and network:
+PostgreSQL. After setup, add the AI overlay to start all configured AI services
+in the same Compose project and network. GPU use depends on the enabled models
+and their memory settings:
 
 ```bash
 docker compose --env-file .env -f deployments/docker-compose.yml \
@@ -226,7 +271,9 @@ docker compose --env-file .env -f deployments/docker-compose.yml \
 
 Commands that use only the base file report the AI containers (`ai-*`) as
 orphans; ignore the warning, and do not pass `--remove-orphans` unless they
-should stop. Document uploads and QA do not require AI services.
+should stop. Text-layer document conversion can run without OCR; scanned PDFs
+and images require `OCR_API_URL`. QA still requires configured chat and
+embedding providers, which may be remote instead of this local AI stack.
 
 **Alternative — API on the host:**
 
@@ -248,24 +295,17 @@ Open **http://127.0.0.1:5180** and sign in. Follow the
 The default `VITE_DATA_MODE=api` connects to FastAPI through the Vite proxy.
 If you already have `.env.local`, set its data mode to `api` and restart Vite.
 **Thư viện tài liệu** (`/files`) keeps each signed-in user's own PDF, XLSX, DOCX,
-JPEG and PNG files. **Tải tài liệu lên** adds new files to the default KB chosen by an
-administrator in **Kho kiến thức**; see [file library](docs/features/file-library.md).
+JPEG and PNG files, with bounded previews or excerpts. **Tải tài liệu lên** adds
+new files to the default KB chosen by an administrator in **Kho kiến thức**; see
+[file library](docs/features/file-library.md). **Yêu cầu chuyên gia**
+(`/inquiries`) preserves inquiry drafts, attached evidence, submission and expert
+review separately from reusable knowledge; see
+[expert inquiries](docs/features/inquiries.md).
 The legacy `/capture` page is not in the navigation. Its **Ghi âm** tab records a
 conversation (needs the speech service and HTTPS or localhost for the microphone), and
 its **Tải lên tài liệu** tab attaches files to a selected KB with optional Auto
 conversion/extraction; see [document uploads](docs/features/document-uploads.md). See the
 [frontend guide](frontend/README.md) for configuration, tests and optional mock demo.
-
-**Alternative — Streamlit trace UI:**
-
-```bash
-uv run streamlit run streamlit_app.py
-```
-
-Open **http://localhost:8501**, select **industrial_qa**, and ask a question.
-The UI connects to the API on port **8005** and displays answers, citations and
-tool traces. Check API health at **http://localhost:8005/healthz**.
-Conversation history is cleared when the API restarts.
 
 ## 4. Factory benchmark
 

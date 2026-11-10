@@ -346,7 +346,7 @@ describe("ConversationsPage", () => {
     const router = show("/ask/chat-a");
     fireEvent.click(await screen.findByTestId("create-inquiry"));
     await waitFor(() =>
-      expect(router.state.location.pathname).toBe("/inquiries/inq-1"),
+      expect(router.state.location.pathname).toBe("/tickets/inq-1"),
     );
   });
 

@@ -1,4 +1,5 @@
 import { apiBaseUrl } from "./config";
+import type { TicketStage } from "./tickets";
 
 export type InquiryStatus =
   "draft" | "open" | "needs_info" | "answered" | "closed" | (string & {});
@@ -15,6 +16,8 @@ export type InquirySummary = {
   created_at: string;
   updated_at: string;
   submitted_at: string | null;
+  /** Ticket board column, derived by the backend. */
+  stage: TicketStage;
 };
 
 export type EvidenceItem = {
@@ -196,6 +199,13 @@ export class InquiriesApi {
 
   async listExperts(): Promise<Expert[]> {
     return ((await this.json("/v1/experts")) as { experts: Expert[] }).experts;
+  }
+
+  /** Add the canned demo AI proposal to a draft ticket (demo endpoint). */
+  demoProposal(id: string): Promise<Inquiry> {
+    return this.json(`/v1/inquiries/${enc(id)}/demo-proposal`, {
+      method: "POST",
+    }) as Promise<Inquiry>;
   }
 
   draftFromConversation(conversationId: string): Promise<Inquiry> {

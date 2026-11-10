@@ -340,12 +340,12 @@ export function ConversationsPage() {
     setDraftError("");
     try {
       const inquiry = await inquiries.draftFromConversation(conversationId);
-      void navigate(`/inquiries/${inquiry.id}`);
+      void navigate(`/tickets/${inquiry.id}`);
     } catch (cause) {
       setDraftError(
         cause instanceof InquiryError
           ? cause.message
-          : "Không tạo được yêu cầu chuyên gia.",
+          : "Không tạo được ticket.",
       );
     } finally {
       setDrafting(false);
@@ -378,7 +378,7 @@ export function ConversationsPage() {
               onClick={() => void createInquiry()}
             >
               {drafting ? <Loader2 size={14} className="animate-spin" /> : null}
-              {drafting ? "Đang soạn…" : "Tạo yêu cầu chuyên gia"}
+              {drafting ? "Đang tạo ticket…" : "Tạo ticket"}
             </Button>
           </header>
         )}
