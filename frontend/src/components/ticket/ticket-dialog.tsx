@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Check,
   Loader2,
+  MessageSquare,
   Pencil,
   Save,
   Send,
@@ -9,6 +10,7 @@ import {
   TicketCheck,
   X,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useInquiriesApi } from "@/hooks/inquiries";
 import { Button } from "@/components/ui/button";
 import {
@@ -513,6 +515,19 @@ export function TicketDialog({
                 <section className="ticket-panel" aria-label="Chi tiết">
                   <h2>Chi tiết</h2>
                   <dl className="ticket-details">
+                    <div>
+                      <dt>Nguồn</dt>
+                      <dd>
+                        <Link
+                          to={`/ask/${ticket.conversation_id}`}
+                          className="ticket-source-link"
+                          data-testid="ticket-conversation-link"
+                        >
+                          <MessageSquare size={14} aria-hidden="true" />
+                          Cuộc hội thoại gốc
+                        </Link>
+                      </dd>
+                    </div>
                     <div>
                       <dt>Trạng thái</dt>
                       <dd>

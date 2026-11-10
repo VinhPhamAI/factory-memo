@@ -8210,3 +8210,16 @@ button.ref-chip:hover,
   cursor: col-resize;
   user-select: none;
 }
+
+.ticket-source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+.ticket-source-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
