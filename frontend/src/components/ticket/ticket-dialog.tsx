@@ -10,7 +10,9 @@ import {
   TicketCheck,
   X,
 } from "lucide-react";
+import Markdown from "react-markdown";
 import { Link } from "react-router-dom";
+import { ANSWER_PLUGINS, AnswerTable } from "@/components/cited-answer";
 import { useInquiriesApi } from "@/hooks/inquiries";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +22,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Avatar } from "@/components/ticket/avatar";
 import { StatusLozenge } from "@/components/ticket/status-lozenge";
 import { EvidenceList } from "@/components/inquiry/evidence-list";
@@ -287,9 +296,21 @@ export function TicketDialog({
                     </div>
                   ) : proposal ? (
                     // The key replays the reveal when a new proposal arrives.
-                    <p key={proposal} className="ticket-proposal-text">
-                      {proposal}
-                    </p>
+                    <div
+                      key={proposal}
+                      className="ticket-proposal-text answer-prose"
+                    >
+                      <Markdown
+                        remarkPlugins={ANSWER_PLUGINS}
+                        components={{
+                          img: () => null,
+                          table: AnswerTable,
+                          a: ({ children }) => <span>{children}</span>,
+                        }}
+                      >
+                        {proposal}
+                      </Markdown>
+                    </div>
                   ) : (
                     <p className="field-note">
                       {editable
@@ -451,22 +472,37 @@ export function TicketDialog({
                           : "Phân tích"}
                     </Button>
                     <div className="ticket-expert">
-                      <label>
+                      <span className="ticket-expert-label">
                         Gửi chuyên gia duyệt
-                        <select
+                      </span>
+                      <Select
+                        value={expertId}
+                        onValueChange={setExpertId}
+                        disabled={draft !== null}
+                      >
+                        <SelectTrigger
                           aria-label="Chuyên gia"
-                          value={expertId}
-                          disabled={draft !== null}
-                          onChange={(event) => setExpertId(event.target.value)}
+                          className="ticket-select"
                         >
-                          <option value="">Chọn chuyên gia…</option>
+                          <SelectValue placeholder="Chọn chuyên gia…" />
+                        </SelectTrigger>
+                        <SelectContent
+                          position="popper"
+                          align="start"
+                          sideOffset={6}
+                          className="ticket-select-content"
+                        >
                           {experts.map((expert) => (
-                            <option key={expert.id} value={expert.id}>
+                            <SelectItem
+                              key={expert.id}
+                              value={expert.id}
+                              className="ticket-select-item"
+                            >
                               {expert.display_name}
-                            </option>
+                            </SelectItem>
                           ))}
-                        </select>
-                      </label>
+                        </SelectContent>
+                      </Select>
                       <Button
                         type="button"
                         variant={proposal ? "default" : "outline"}
