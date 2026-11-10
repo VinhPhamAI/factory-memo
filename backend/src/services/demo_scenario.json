@@ -1,0 +1,49 @@
+{
+  "prompt": "Robot SCARA i4L ở trạm gắp đặt Line 2 khởi động bình thường nhưng không chạy được sau lần sụt áp sáng nay. Đèn Control Power sáng, đèn High Power không lên. Tôi nên kiểm tra gì trước khi thay servo amplifier?",
+  "timing": {
+    "search_seconds": 1.2,
+    "chunk_delay_ms": 30,
+    "analysis_seconds": 3
+  },
+  "reasoning": "Hiện tượng: Control Power có, High Power không lên, xảy ra ngay sau sụt áp. Servo amplifier hiếm khi hỏng theo kiểu này; cần xem mạch cho phép (enable) High Power trước. Tra kho tri thức: tài liệu hãng về điều kiện bật High Power và kinh nghiệm sửa chữa đã ghi lại ở chính trạm này.",
+  "search": {
+    "kb": "industrial_qa",
+    "query": "i4L High Power không bật sau sụt áp, Control Power vẫn sáng",
+    "results": [
+      {
+        "chunk_id": "7b1d2c4e-5f60-4a71-8b92-c3d4e5f60a01",
+        "status": "approved",
+        "title": "Sổ tay robot Omron i4L – Điều kiện cấp High Power",
+        "location": "Trang 37",
+        "excerpt": "Robot chỉ chuyển động được khi High Power đã được cấp và cho phép (enable). Control Power phải có trước thì mới bật được High Power."
+      },
+      {
+        "chunk_id": "7b1d2c4e-5f60-4a71-8b92-c3d4e5f60a02",
+        "status": "draft",
+        "title": "Trao đổi sửa chữa – i4L Line 2 không bật High Power",
+        "location": "Lượt 4 · Kỹ sư bảo trì cấp cao",
+        "excerpt": "Ở trạm này, giắc cầu nối XSYSTEM của mạch cho phép High Power là giắc tự làm, hay lỏng sau nhiều chu kỳ nóng – nguội. Cứ cắm lại cho chắc trước đã, đừng vội thay servo amplifier."
+      },
+      {
+        "chunk_id": "7b1d2c4e-5f60-4a71-8b92-c3d4e5f60a03",
+        "status": "draft",
+        "title": "Trao đổi sửa chữa – i4L Line 2 không bật High Power",
+        "location": "Lượt 2 · Kỹ sư bảo trì cấp cao",
+        "excerpt": "Công tắc cửa an toàn đấu vào rơ-le cho phép High Power hay bị kẹt ở trạng thái hở sau khi sụt áp. Gõ nhẹ vào vỏ công tắc thì tiếp điểm đóng lại. Nếu vẫn không lên thì đo cuộn hút contactor High Power, giá trị đúng khoảng 120 Ω."
+      }
+    ]
+  },
+  "answer": "**Chưa nên thay servo amplifier.** Control Power sáng mà High Power không lên ngay sau sụt áp thường là do mạch cho phép (enable) High Power bị hở, không phải do amplifier hỏng.\n\n**Vì sao:** robot chỉ chuyển động khi High Power đã được cấp và cho phép; Control Power phải có trước [S1]. Trường hợp này Control Power vẫn bình thường, nên cần tìm chỗ làm hở mạch cho phép.\n\n**Kiểm tra theo thứ tự, từ dễ đến khó:**\n\n1. **Cắm lại giắc cầu nối XSYSTEM.** Ở trạm này đây là giắc tự làm, hay lỏng sau nhiều chu kỳ nóng – nguội. Rút ra, kiểm tra chân giắc, cắm lại cho chắc rồi thử bật High Power [S2].\n2. **Kiểm tra công tắc cửa an toàn.** Công tắc này đấu vào rơ-le cho phép High Power và hay kẹt ở trạng thái hở sau sụt áp. Đóng chặt cửa, gõ nhẹ vào vỏ công tắc rồi thử lại [S3].\n3. **Đo cuộn hút contactor High Power.** Ngắt nguồn và khóa an toàn (LOTO) trước khi đo. Giá trị đúng khoảng 120 Ω; lệch nhiều hoặc hở mạch thì contactor là nguyên nhân [S3].\n4. Chỉ khi cả ba bước trên đều bình thường mới xét đến servo amplifier.\n\n**Lưu ý phạm vi áp dụng:** bước 1 và 2 là kinh nghiệm riêng của trạm Line 2, hiện là tri thức nháp chưa được chuyên gia duyệt. Không mặc định áp dụng cho robot i4L ở trạm khác.\n\nNếu làm hết ba bước mà High Power vẫn không lên, hãy bấm **Tạo ticket** để gửi chuyên gia xem xét.",
+  "ticket": {
+    "title": "Robot SCARA i4L Line 2 không bật được High Power sau sụt áp",
+    "situation": "Robot SCARA i4L ở trạm gắp đặt Line 2 khởi động bình thường nhưng không chuyển động sau lần sụt áp sáng nay. Dây chuyền đang dừng ở trạm này.",
+    "observations": "Đèn Control Power sáng. Đèn High Power không lên khi bấm nút bật. Bộ điều khiển khởi động xong, không báo mã lỗi.",
+    "attempted_actions": "Đã khởi động lại bộ điều khiển một lần, kết quả không đổi. Chưa tháo lắp hay thay linh kiện nào.",
+    "proposed_fix": "Kiểm tra mạch cho phép High Power trước khi quyết định thay servo amplifier."
+  },
+  "proposal": "Nhận định: nhiều khả năng mạch cho phép (enable) High Power đang hở. Chưa có dấu hiệu servo amplifier hỏng.\n\nCác bước đề xuất (dừng ở bước đầu tiên khắc phục được):\n1. An toàn: ngắt High Power, khóa và treo thẻ (LOTO) trước khi chạm vào giắc hoặc đo điện.\n2. Rút giắc cầu nối XSYSTEM, kiểm tra chân giắc, cắm lại cho chắc. Bật thử High Power.\n3. Đóng chặt cửa an toàn, gõ nhẹ vào vỏ công tắc cửa. Bật thử High Power.\n4. Đo điện trở cuộn hút contactor High Power: đúng khoảng 120 Ω. Hở mạch hoặc lệch nhiều thì thay contactor.\n5. Khi đèn High Power sáng: chạy thử một chu trình ở tốc độ thấp rồi mới trả máy cho sản xuất.\n6. Các bước 2–4 đều bình thường mới xét đến servo amplifier.\n\nCăn cứ:\n- Sổ tay Omron i4L, trang 37: phải có High Power được cấp và cho phép thì robot mới chuyển động.\n- Trao đổi sửa chữa tại trạm Line 2 (tri thức nháp): giắc XSYSTEM hay lỏng; công tắc cửa an toàn hay kẹt hở sau sụt áp.\n\nCần chuyên gia xác nhận:\n- Gõ vào công tắc cửa an toàn chỉ là cách xử lý tạm. Có cần thay công tắc này không?\n- Có nên thay giắc XSYSTEM tự làm bằng giắc chính hãng để tránh lặp lại?",
+  "expert": {
+    "username": "demo.expert",
+    "display_name": "Nguyễn Văn Hùng – Chuyên gia bảo trì"
+  }
+}

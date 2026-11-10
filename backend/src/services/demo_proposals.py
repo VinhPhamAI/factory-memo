@@ -9,6 +9,7 @@ at the end of `context.proposed_fix`; text before the marker is the user's own.
 
 from __future__ import annotations
 
+from backend.src.services.demo_scenario import scripted_proposal
 from backend.src.storage.inquiries import DEMO_PROPOSAL_MARKER
 
 MAX_PROPOSED_FIX = 4000
@@ -79,8 +80,16 @@ _GENERIC = [
 
 
 def demo_proposal_text(title: str, situation: str) -> str:
-    """Return the canned proposal for a ticket, chosen by keywords in its title and situation."""
+    """Return the canned proposal for a ticket.
 
+    The scripted demo ticket (`DEMO_MODE`, matched by title) gets the scripted
+    proposal. Every other ticket gets a template chosen by keywords in its
+    title and situation.
+    """
+
+    scripted = scripted_proposal(title)
+    if scripted is not None:
+        return scripted[0]
     text = f"{title}\n{situation}".lower()
     steps = next(
         (steps for keywords, steps in _TEMPLATES if any(word in text for word in keywords)),

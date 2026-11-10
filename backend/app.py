@@ -49,6 +49,11 @@ from backend.src.storage.document_uploads import DocumentUploadStore
 from backend.src.storage.embeddings import EmbeddingMismatch, verify_embedding_dimension
 from backend.src.storage.file_library import FileBlobStore, FileRecordStore
 from backend.src.services.auth import AuthService
+from backend.src.services.demo_scenario import (
+    DemoAgentClient,
+    ensure_demo_expert,
+    load_demo_scenario,
+)
 from backend.src.services.file_library import FileLibraryService
 from backend.src.storage.repositories.lifecycle import InactiveKnowledgeBase, InactiveSource
 from backend.src.storage.repositories.chunks import ChunkRepository
@@ -189,6 +194,17 @@ def create_app(
                 logging.getLogger(__name__).warning(
                     "AGENT_BASE_URL or AGENT_API_TOKEN is not set; agent chat is unavailable"
                 )
+        demo_scenario = load_demo_scenario()
+        if demo_scenario is not None:
+            # DEMO_MODE: the scripted prompt is answered here; other messages reach the agent.
+            app.state.agent_client = DemoAgentClient(app.state.agent_client, demo_scenario)
+            if sessions is not None:
+                try:
+                    await ensure_demo_expert(sessions, demo_scenario.expert)
+                except (AppDatabaseUnavailable, SQLAlchemyError):
+                    logging.getLogger(__name__).warning(
+                        "Demo mode: the mock expert account could not be created"
+                    )
         app.state.document_uploads = document_uploads or DocumentUploadStore()
         catalog = None
         pool = KnowledgeAgentPool({})

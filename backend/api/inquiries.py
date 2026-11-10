@@ -7,6 +7,7 @@ cannot be probed. See backend/src/services/inquiries.py for the access rule.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -17,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.auth import require_current_user
 from backend.src.services.demo_proposals import with_demo_proposal
+from backend.src.services.demo_scenario import scripted_proposal
 from backend.src.services.inquiries import (
     ConversationNotFound,
     IneligibleAssignee,
@@ -312,12 +314,16 @@ async def add_demo_proposal(inquiry_id: UUID, user: CurrentUser, service: Servic
 
     The proposal replaces any earlier demo block in `proposed_fix` and is saved
     like a `PATCH`. It reads no knowledge and calls no model. 404 when the
-    caller does not own the inquiry; 409 once it has been submitted.
+    caller does not own the inquiry; 409 once it has been submitted. In
+    `DEMO_MODE` the scripted demo ticket waits its scripted analysis time first.
     """
 
     try:
         detail = await service.get(user, inquiry_id)
         context = InquiryContext.model_validate(detail.context)
+        scripted = scripted_proposal(detail.summary.title)
+        if scripted is not None:
+            await asyncio.sleep(scripted[1])
         context.proposed_fix = with_demo_proposal(
             context.proposed_fix, detail.summary.title, context.situation
         )

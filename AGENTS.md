@@ -189,6 +189,8 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
 - [File library](docs/features/file-library.md): each user's own files under `/v1/files`.
 - [Expert inquiries](docs/features/inquiries.md): `/v1/inquiries` drafts, submission, expert
   review and evidence; drafts from chat through the agent.
+- [Scripted incident demo](docs/development/demo-incident-flow.md): `DEMO_MODE` replays one
+  prepared chat → ticket → proposal → expert review case; its content is synthetic.
 - [Voice capture](docs/features/voice-capture.md), [uploads](docs/features/document-uploads.md),
   [speech service](deployments/speech/README.md): capture, storage and deployment.
 - [AI services API](deployments/ai-services-api/README.md): the one port in front of
