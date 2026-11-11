@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Factory Memo Architecture</title>
+
+<style>
+  :root {
+    --fs-scale: 1;
+    --fs-section: 16;
+    --fs-node-title: 14;
+    --fs-node-sub: 12;
+    --fs-kb-title: 16;
+    --fs-group-title: 11;
+    --line-height: 1.2;
+    --pad-x: 6;
+    --pad-y: 3;
+    --blue: #6699ff;
+    --blue-fill: #d4e3f8;
+    --green: #82b366;
+    --orange: #ffab40;
+    --red: #ff6666;
+    --red-fill: #f4cccc;
+    --purple: #9673d4;
+    --purple-fill: #dcd0e6;
+    --teal: #55bbaa;
+    --ink: #222;
+    --ink-soft: #3d3d3d;
+    --arrow-blue: #2860ce;
+    --arrow-green: #269d50;
+    --arrow-red: #ed3535;
+    --arrow-purple: #8a35ee;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 8px 10px; background: #fff; }
+  .diagram-wrapper { width: 100%; overflow-x: auto; }
+  svg {
+    display: block;
+    width: 100%;
+    min-width: 1100px;
+    max-width: 1600px;
+    height: auto;
+    margin: 0 auto;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+  text { text-anchor: middle; dominant-baseline: central; }
+  .start { text-anchor: start; }
+  .st { font-size: calc(var(--fs-section) * var(--fs-scale) * 1px); font-weight: 700; text-anchor: start; }
+  .t { font-size: calc(var(--fs-node-title) * var(--fs-scale) * 1px); font-weight: 700; fill: var(--ink); }
+  .s { font-size: calc(var(--fs-node-sub) * var(--fs-scale) * 1px); fill: var(--ink-soft); }
+  .kb { font-size: calc(var(--fs-kb-title) * var(--fs-scale) * 1px); font-weight: 700; fill: var(--ink); }
+  .gt { font-size: calc(var(--fs-group-title) * var(--fs-scale) * 1px); font-weight: 700; fill: #188338; }
+  .seed-label { font-size: 11px; font-weight: 700; fill: var(--arrow-purple); }
+
+  .sec { stroke-width: 0.7; }
+  .sec.blue { fill: #e9f1fc; stroke: var(--blue); }
+  .sec.query { fill: #edf2fb; stroke: var(--blue); }
+  .sec.green { fill: #eef6ec; stroke: var(--green); }
+  .sec.orange { fill: #fff5e5; stroke: var(--orange); }
+  .sec.teal { fill: #e8f5f3; stroke: var(--teal); }
+  .sec.purple { fill: #f5effc; stroke: none; }
+  .sec.red { fill: #fdf0f0; stroke: var(--red); }
+  .st.blue, .st.query { fill: #1b4f99; }
+  .st.green { fill: #226629; }
+  .st.orange { fill: #c63e0b; }
+  .st.teal { fill: #16776b; }
+  .st.purple { fill: #6030a0; }
+  .st.red { fill: #b02a2a; }
+
+  .node { stroke-width: 0.7; }
+  .n-blue { fill: var(--blue-fill); stroke: var(--blue); }
+  .n-bluew { fill: #fff; stroke: var(--blue); }
+  .n-greenw { fill: #fff; stroke: var(--green); }
+  .n-orangew { fill: #fff; stroke: var(--orange); }
+  .n-purplew { fill: #fff; stroke: var(--purple); }
+  .n-redw { fill: #fff; stroke: var(--red); }
+  .n-red { fill: var(--red-fill); stroke: var(--red); }
+  .n-purple { fill: var(--purple-fill); stroke: var(--purple); }
+  .obj { fill: #fff; stroke-width: 1.2; }
+  .obj.o-green { stroke: var(--arrow-green); }
+  .obj.o-orange { stroke: #e08a00; }
+  .obj.o-red { stroke: var(--arrow-red); }
+  .oh { font-size: 12px; font-weight: 700; text-anchor: start; }
+  .oh.o-green { fill: #226629; }
+  .oh.o-orange { fill: #c63e0b; }
+  .oh.o-red { fill: #b02a2a; }
+  .cap { font-size: 11.5px; fill: var(--ink-soft); text-anchor: start; }
+  .lb { font-size: 11.5px; font-weight: 700; text-anchor: start; }
+  .lb-red { fill: #b02a2a; }
+  .pill { stroke-width: 0.7; }
+  .p-draft { fill: #ffe9c7; stroke: var(--orange); }
+  .p-ok { fill: #dcedd6; stroke: var(--green); }
+  .p-off { fill: #eee; stroke: #aaa; }
+  .pt { font-size: 11.5px; font-weight: 700; fill: var(--ink); }
+  .n-green { fill: #dcedd6; stroke: var(--green); }
+  .n-orange { fill: #ffe9c7; stroke: var(--orange); }
+  .node.overflow { stroke: #f00; stroke-width: 3; }
+  .grp { fill: none; stroke: var(--arrow-green); stroke-width: 1.2; stroke-dasharray: 6 4; }
+  .db, .db-top { stroke: #4c89ed; stroke-width: 0.7; }
+  .db { fill: var(--blue-fill); }
+  .db-top { fill: none; }
+  .a { fill: none; stroke-width: 1.3; stroke-linejoin: round; }
+  .a-blue { stroke: var(--arrow-blue); marker-end: url(#h-blue); }
+  .a-green { stroke: var(--arrow-green); marker-end: url(#h-green); }
+  .a-red { stroke: var(--arrow-red); marker-end: url(#h-red); }
+  .a-purple { stroke: var(--arrow-purple); marker-end: url(#h-purple); }
+  .a.nohead { marker-end: none; }
+  .a.dashed { stroke-dasharray: 6 4; }
+</style>
+</head>
+
+<body>
+<div class="diagram-wrapper">
+<svg id="d" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diagram-title diagram-description">
+  <title id="diagram-title">Kiến trúc Factory Memo</title>
+  <desc id="diagram-description">Ba luồng đã triển khai: tích lũy know-how từ tài liệu vào kho tri thức, hỏi đáp xử lý lỗi với Digital Worker, và ticket gửi chuyên gia trên bảng Kanban.</desc>
+  <defs></defs>
+</svg>
+</div>
+
+<script>
+/* ====================================================================
+   LAYOUT  — plain numbers; every connector is derived from node rects.
+   Three lanes, one object each: know-how (top), chat (middle), ticket (bottom).
+   ==================================================================== */
+const W = 1600, H = 748;
+const LANE_X = 14, LANE_W = 1212;          // lanes 1 and 2; the KB column sits to their right
+const KB_X = 1250, KB_W = 336;
+const A_Y = 14, A_H = 208;                 // lane 1: build know-how
+const B_Y = 234, B_H = 236;                // lane 2: fault handling chat
+const C_Y = 512, C_H = 222;                // lane 3: ticket
+const CORR_Y = 496, CORR_X = 220;          // corridor for the chat -> ticket arrow
+
+/* ---------- helpers ---------- */
+const NS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('d');
+svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+const cs = getComputedStyle(document.documentElement);
+const cssNum = n => parseFloat(cs.getPropertyValue(n));
+const SCALE = cssNum('--fs-scale');
+const fs = n => cssNum('--fs-' + n) * SCALE;
+const LH = cssNum('--line-height');
+const PADX = cssNum('--pad-x'), PADY = cssNum('--pad-y');
+const FAMILY = 'Arial, Helvetica, sans-serif';
+const ctx = document.createElement('canvas').getContext('2d');
+const textW = (s, size, bold) => { ctx.font = `${bold ? 700 : 400} ${size}px ${FAMILY}`; return ctx.measureText(s).width; };
+
+function el(tag, attrs = {}, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  svg.appendChild(e);
+  return e;
+}
+
+// Greedy word-wrap. Arrays are used as-is (explicit line breaks).
+function wrap(text, size, bold, maxW) {
+  if (Array.isArray(text)) return text;
+  const lines = []; let cur = '';
+  for (const w of String(text).split(' ')) {
+    const t = cur ? cur + ' ' + w : w;
+    if (cur && textW(t, size, bold) > maxW) { lines.push(cur); cur = w; } else cur = t;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+const N = {};                 // id -> {x,y,w,h,cx,cy}
+const checks = [];            // overflow checks, run after render
+const L = (id, dy = 0) => [N[id].x, N[id].cy + dy];
+const R = (id, dy = 0) => [N[id].x + N[id].w, N[id].cy + dy];
+const T = (id, dx = 0) => [N[id].cx + dx, N[id].y];
+const B = (id, dx = 0) => [N[id].cx + dx, N[id].y + N[id].h];
+
+/* ---------- primitives ---------- */
+function section(x, y, w, h, cls, title, titleOffset = 20) {
+  el('rect', { class: `sec ${cls}`, x, y, width: w, height: h, rx: 7 });
+  el('text', { class: `st ${cls}`, x: x + 14, y: y + titleOffset }, title);
+}
+
+function node(id, x, y, w, h, title, sub = [], cls = 'bluew') {
+  const tS = fs('node-title'), sS = fs('node-sub');
+  const maxW = w - 2 * PADX;
+  const tl = wrap(title, tS, true, maxW), sl = wrap(sub, sS, false, maxW);
+  const tH = tS * LH, sH = sS * LH, gap = sl.length ? tS * 0.3 : 0;
+  const total = tH * tl.length + gap + sH * sl.length;
+  let cy = y + (h - total) / 2;
+  const rect = el('rect', { class: `node n-${cls}`, x, y, width: w, height: h, rx: 3 });
+  const texts = [];
+  const cx = x + w / 2;
+  tl.forEach(l => { texts.push(el('text', { class: 't', x: cx, y: cy + tH / 2 }, l)); cy += tH; });
+  cy += gap;
+  sl.forEach(l => { texts.push(el('text', { class: 's', x: cx, y: cy + sH / 2 }, l)); cy += sH; });
+  N[id] = { x, y, w, h, cx, cy: y + h / 2 };
+  checks.push({ id, rect, texts, x, y, w, h });
+}
+
+function bullet(x, y, text) {
+  el('text', { class: 's start', x, y }, '•');
+  return el('text', { class: 's start', x: x + 13, y }, text);
+}
+
+function path(pts, kind = 'blue', o = {}) {
+  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0]} ${p[1]}`).join(' ');
+  el('path', { class: `a a-${kind}${o.dashed ? ' dashed' : ''}${o.nohead ? ' nohead' : ''}`, d });
+}
+
+// arrow-head markers
+const defs = svg.querySelector('defs');
+for (const [k, c] of Object.entries({ blue: '--arrow-blue', green: '--arrow-green', red: '--arrow-red', purple: '--arrow-purple' })) {
+  const m = document.createElementNS(NS, 'marker');
+  Object.entries({ id: `h-${k}`, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 8, markerHeight: 8, markerUnits: 'userSpaceOnUse', orient: 'auto' })
+    .forEach(([a, v]) => m.setAttribute(a, v));
+  m.innerHTML = `<path d="M0 0 L10 5 L0 10 z" fill="${cs.getPropertyValue(c).trim()}"/>`;
+  defs.appendChild(m);
+}
+
+/* ====================================================================
+   DIAGRAM
+   ==================================================================== */
+// One record that moves through several steps: a white frame with the steps inside.
+function group(id, x, y, w, h, title, cls) {
+  const rect = el('rect', { class: `obj o-${cls}`, x, y, width: w, height: h, rx: 6 });
+  const head = el('text', { class: `oh o-${cls}`, x: x + 12, y: y + 15 }, title);
+  N[id] = { x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
+  checks.push({ id, rect, texts: [head], x, y, w, h });
+}
+// Left-aligned note inside a group; checked against the group frame.
+function caption(groupId, y, text) {
+  const t = el('text', { class: 'cap', x: N[groupId].x + 12, y }, text);
+  checks.find(c => c.id === groupId).texts.push(t);
+}
+function label(x, y, text, kind) {
+  el('text', { class: `lb lb-${kind}`, x, y }, text);
+}
+
+/* ---------- lane frames ---------- */
+section(LANE_X, A_Y, LANE_W, A_H, 'green', '① Tích lũy know-how: tài liệu → tri thức gắn với bằng chứng gốc');
+section(LANE_X, B_Y, LANE_W, B_H, 'query', '② Tương tác với Digital Worker: hỏi đáp dựa trên kinh nghiệm đã lưu');
+section(KB_X, A_Y, KB_W, B_Y + B_H - A_Y, 'blue', 'Kho tri thức');
+section(LANE_X, C_Y, W - 2 * LANE_X, C_H, 'red', '③ Ticket xử lý vấn đề');
+
+/* ---------- lane 1: source -> knowledge record -> KB ---------- */
+const A_ROW = 129;                          // every step of lane 1 is centred on this line
+node('in1', 28, 60, 172, 42, 'Tài liệu, báo cáo lỗi', 'PDF · DOCX · XLSX · TXT');
+node('in2', 28, A_ROW - 21, 172, 42, 'Ảnh, bản scan', 'PNG · JPEG');
+node('in3', 28, 156, 172, 42, 'Ghi âm micro', 'ASR → transcript');
+
+group('src', 236, 64, 454, 146, 'Nguồn tri thức: một tài liệu đi qua ba bước', 'green');
+node('raw', 248, A_ROW - 33, 132, 66, 'Lưu bản gốc', ['giữ nguyên file', 'làm bằng chứng'], 'green');
+node('conv', 397, A_ROW - 33, 132, 66, 'Chuyển văn bản', ['parser / OCR,', 'giữ vị trí trang, ô'], 'green');
+node('ext', 546, A_ROW - 33, 132, 66, 'Trích xuất', ['LLM → mục tri thức', 'hoặc chunk tài liệu'], 'green');
+caption('src', 188, 'Xử lý nền theo từng bước, tự thử lại khi lỗi; bản gốc không bị thay đổi');
+
+group('rec', 726, 64, 486, 146, 'Mục tri thức: một bản ghi, chỉ đổi trạng thái', 'orange');
+node('dra', 738, A_ROW - 33, 140, 66, 'Bản nháp', ['đối chiếu với nguồn,', 'tìm kiếm được ngay'], 'orange');
+node('con', 899, A_ROW - 33, 140, 66, 'Dò xung đột', ['ghi cặp nghi vấn,', 'không đổi trạng thái'], 'red');
+node('rev', 1060, A_ROW - 33, 140, 66, 'Chuyên gia duyệt', ['duyệt hoặc loại bỏ,', 'lưu lịch sử quyết định'], 'orange');
+caption('rec', 188, 'Mỗi mục giữ trích dẫn nguyên văn + vị trí trong nguồn (trang, ô, vùng ảnh)');
+
+const IN_TR = 218;                          // fan-in trunk of the three inputs
+path([R('in1'), [IN_TR, N.in1.cy], [IN_TR, A_ROW]], 'blue', { nohead: true });
+path([R('in3'), [IN_TR, N.in3.cy], [IN_TR, A_ROW]], 'blue', { nohead: true });
+path([R('in2'), L('raw')]);
+path([R('raw'), L('conv')]);
+path([R('conv'), L('ext')]);
+path([R('ext'), L('dra')]);
+path([R('dra'), L('con')]);
+path([R('con'), L('rev')]);
+
+/* ---------- knowledge base ---------- */
+const B_ROW_KB = 318;                     // same line as lane 2's main row
+const KB = { cx: KB_X + KB_W / 2, rx: 140, ry: 12, top: 70, bot: 432 };
+const KB_L = KB.cx - KB.rx, KB_R = KB.cx + KB.rx;
+el('path', { class: 'db', d: `M${KB_L} ${KB.top} A${KB.rx} ${KB.ry} 0 0 1 ${KB_R} ${KB.top} V${KB.bot} A${KB.rx} ${KB.ry} 0 0 1 ${KB_L} ${KB.bot} Z` });
+el('path', { class: 'db-top', d: `M${KB_L} ${KB.top} A${KB.rx} ${KB.ry} 0 0 0 ${KB_R} ${KB.top}` });
+el('text', { class: 'kb', x: KB.cx, y: 98 }, 'Knowledge Base');
+el('text', { class: 's', x: KB.cx, y: 116 }, 'PostgreSQL + pgvector');
+// what is stored: each knowledge item points back to its original evidence
+node('kch', KB_L + 14, 150, 112, 46, 'Mục tri thức', 'bài học rút ra', 'orange');
+node('ksr', KB_R - 126, 150, 112, 46, 'Tài liệu gốc', 'file, trang, ảnh', 'green');
+path([R('kch'), L('ksr')]);
+el('text', { class: 's', x: KB.cx, y: 212 }, 'mỗi mục dẫn về đúng đoạn trích gốc');
+// review states of an item
+const PILL_W = 80, PILL_GAP = 10, PILL_Y = 232;
+[['Chờ duyệt', 'draft'], ['Đã duyệt', 'ok'], ['Loại bỏ', 'off']].forEach(([text, kind], i) => {
+  const x = KB.cx - 1.5 * PILL_W - PILL_GAP + i * (PILL_W + PILL_GAP);
+  el('rect', { class: `pill p-${kind}`, x, y: PILL_Y, width: PILL_W, height: 22, rx: 11 });
+  el('text', { class: 'pt', x: x + PILL_W / 2, y: PILL_Y + 11 }, text);
+});
+el('text', { class: 's', x: KB.cx, y: 270 }, 'giữ lịch sử duyệt và cặp xung đột');
+// how it is read
+node('kfind', KB_L + 18, B_ROW_KB - 22, 2 * KB.rx - 36, 44, 'Tìm kiếm hybrid', 'từ khóa + vector', 'bluew');
+el('text', { class: 's', x: KB.cx, y: 360 }, 'trả về tri thức kèm bằng chứng,');
+el('text', { class: 's', x: KB.cx, y: 377 }, 'không trả về mục đã loại bỏ');
+path([R('rev'), [KB_L, A_ROW]]);
+
+/* ---------- lane 2: employee -> chat -> agent -> KB, answer comes back ---------- */
+const B_ROW = 318, ANS_Y = 418;
+node('usr', 28, B_ROW - 28, 172, 56, 'Nhân viên', 'mô tả triệu chứng lỗi', 'purple');
+node('chat', 240, B_ROW - 28, 170, 56, 'Hỏi đáp', 'giao diện chat', 'bluew');
+node('api', 450, B_ROW - 28, 200, 56, 'Backend API', 'đăng nhập, quyền trên hội thoại', 'bluew');
+node('agt', 690, B_ROW - 28, 220, 56, 'Agent (Digital Worker)', 'LLM suy luận, nhớ hội thoại', 'red');
+node('tool', 950, B_ROW - 28, 240, 56, 'Tìm kiếm tri thức', 'kinh nghiệm cũ liên quan đến lỗi', 'bluew');
+node('ans', 240, ANS_Y - 26, 410, 52, 'Câu trả lời kèm trích dẫn', 'gợi ý xử lý dẫn về nguồn, trang, đoạn trích gốc', 'purple');
+path([R('usr'), L('chat')]);
+path([R('chat'), L('api')]);
+path([R('api'), L('agt')]);
+path([R('agt'), L('tool')]);
+path([R('tool'), L('kfind')], 'green', { dashed: true });
+path([B('agt', -50), [N.agt.cx - 50, ANS_Y], R('ans')]);
+path([L('ans'), [N.usr.cx, ANS_Y], B('usr')]);
+
+/* ---------- lane 3: one ticket record across the four board columns ---------- */
+const C_ROW = 613;
+group('tkt', 240, 544, 986, 176, 'Ticket: cùng một bản ghi đi qua 4 cột của bảng Kanban', 'red');
+node('t1', 252, C_ROW - 35, 212, 70, 'To do', ['bản nháp', 'Agent soạn từ hội thoại'], 'redw');
+node('t2', 502, C_ROW - 35, 212, 70, 'In progress', ['Đề xuất xử lý của AI', '(demo: mẫu soạn sẵn)'], 'redw');
+node('t3', 752, C_ROW - 35, 212, 70, 'In review', ['chờ chuyên gia ⇄ cần bổ sung', 'chuyên gia xem, có thể hỏi lại'], 'redw');
+node('t4', 1002, C_ROW - 35, 212, 70, 'Done', ['chấp nhận hoặc sửa giải pháp,', 'hoặc từ chối'], 'redw');
+caption('tkt', 670, 'Ticket tự đủ ngữ cảnh: Tình huống · Quan sát · Việc đã thử · Đề xuất xử lý · Bằng chứng (trích dẫn từ KB + ảnh)');
+caption('tkt', 688, 'Mọi thao tác của chuyên gia và câu trả lời của nhân viên được lưu vĩnh viễn');
+caption('tkt', 706, 'Ticket và quyết định của chuyên gia không tự tạo hoặc duyệt tri thức trong KB');
+path([R('t1'), L('t2')], 'red');
+path([R('t2'), L('t3')], 'red');
+path([R('t3'), L('t4')], 'red');
+
+node('emp', 28, 632, 172, 56, 'Nhân viên', ['sửa nháp, chọn chuyên gia,', 'trả lời câu hỏi'], 'purple');
+node('exp', 1270, C_ROW - 35, 296, 70, 'Chuyên gia (từ xa)', ['chấp nhận · sửa · từ chối · hỏi lại', 'không cần đọc cả hội thoại'], 'purple');
+path([R('emp'), [N.tkt.x, N.emp.cy]]);
+path([L('exp'), [N.tkt.x + N.tkt.w, C_ROW]]);
+
+// chat -> ticket: the agent drafts the ticket from the conversation
+path([B('agt', 50), [N.agt.cx + 50, CORR_Y], [CORR_X, CORR_Y], [CORR_X, C_ROW], L('t1')], 'red');
+label(CORR_X + 12, CORR_Y - 12, 'Tạo ticket từ hội thoại, mang theo trích dẫn + ảnh', 'red');
+
+/* ---------- overflow check (outline red with ?debug) ---------- */
+const bad = [];
+for (const c of checks) {
+  for (const t of c.texts) {
+    const b = t.getBBox();
+    if (b.x < c.x + PADX || b.x + b.width > c.x + c.w - PADX || b.y < c.y + PADY || b.y + b.height > c.y + c.h - PADY) {
+      bad.push(`${c.id}: "${t.textContent}"`); c.rect.classList.add(location.search.includes('debug') ? 'overflow' : 'ov'); break;
+    }
+  }
+}
+if (bad.length) console.warn('Text overflow in:\n' + bad.join('\n'));
+window.__overflow = bad;
+</script>
+</body>
+</html>
