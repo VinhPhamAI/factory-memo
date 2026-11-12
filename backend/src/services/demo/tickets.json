@@ -1,0 +1,263 @@
+{
+  "requester_username": "demo.user",
+  "employees": [
+    {"username": "demo.operator", "display_name": "Lê Thị Lan – Công nhân vận hành (demo)"},
+    {"username": "demo.technician", "display_name": "Đỗ Minh Huy – Kỹ thuật viên bảo trì (demo)"}
+  ],
+  "tickets": [
+    {
+      "requester": "demo.user",
+      "title": "Servo MR-JE-AX505 Line 10 báo AL.50.1 sau mỗi ca chạy",
+      "status": "draft",
+      "created_hours_ago": 0.5,
+      "context": {
+        "situation": "Trục X của cell Line 10 dừng và báo AL.50.1 (quá tải nhiệt servo) khoảng 2 giờ sau khi khởi động ca. Tắt mở nguồn điều khiển thì chạy lại được nhưng vài giờ sau lỗi lặp lại.",
+        "observations": "MR Configurator2 hiển thị tỷ lệ tải hiệu dụng khoảng 135%. Vỏ motor nóng tay nhưng không có mùi khét. Bên ngoài cáp nguồn và dây U/V/W không thấy hư hỏng. Ray dẫn hướng khô, có bụi bám.",
+        "attempted_actions": "Đã reset alarm bằng cách tắt mở nguồn điều khiển 3 lần. Chưa tra mỡ ray, chưa tháo motor, chưa thay linh kiện nào.",
+        "proposed_fix": "Nghi ray dẫn hướng thiếu mỡ làm tăng tải. Muốn tra mỡ ray và đo lại tỷ lệ tải trước khi xét thay motor."
+      }
+    },
+    {
+      "requester": "demo.user",
+      "title": "Robot i4L cell lắp ráp C không khớp khóa liên động cửa sau khi thay tool",
+      "status": "draft",
+      "created_hours_ago": 4,
+      "context": {
+        "situation": "Sau khi mở cửa cell lắp ráp C để thay tool rồi đóng lại, hệ thống không nhận khóa liên động cửa nên robot không cấp được High Power.",
+        "observations": "Công tắc liên động ở vị trí đóng nhưng đèn tín hiệu không sáng. Cánh cửa hơi lệch so với khung khi nhìn từ phía trên. Theo nhật ký ca, việc này đã xảy ra khoảng 4 lần trong 6 tháng gần đây.",
+        "attempted_actions": "Đã mở đóng cửa lại hai lần, kết quả không đổi. Chưa chỉnh hay tháo công tắc.",
+        "proposed_fix": "Chưa rõ có cần chèn tấm đệm để căn lại công tắc như những lần trước hay không. Cần chuyên gia xác nhận độ dày đệm."
+      }
+    },
+    {
+      "requester": "demo.user",
+      "title": "Rò nước tunnel pin cavity 2 trên khuôn 1410C",
+      "status": "draft",
+      "created_hours_ago": 22,
+      "context": {
+        "situation": "Khuôn 1410C bị rò nước ở tunnel pin cavity 2 trong lúc chạy 1442 shot. Phiếu bảo dưỡng định kỳ đã đến hạn.",
+        "observations": "Nước rỉ ra quanh chân tunnel pin, đọng lại ở mặt khuôn. Chưa thấy ảnh hưởng đến chất lượng sản phẩm. Đường hút chân không của cavity này có hơi nước.",
+        "attempted_actions": "Đã lau khô và chạy thử 10 shot, vẫn rò. Chưa tháo khuôn khỏi máy.",
+        "proposed_fix": "Đề xuất xử lý cùng đợt bảo dưỡng định kỳ: thay mark lot, vệ sinh đường ống nước và đường chân không."
+      }
+    },
+    {
+      "requester": "demo.user",
+      "title": "PLC FX5U Line 4 báo lỗi 1921H khi đổi địa chỉ IP module Ethernet",
+      "status": "draft",
+      "created_hours_ago": 7,
+      "updated_hours_ago": 6.5,
+      "context": {
+        "situation": "Khi đổi địa chỉ IP của module Ethernet trên PLC FX5U Line 4, PLC báo lỗi 1921H và địa chỉ mới không được ghi.",
+        "observations": "Lỗi xuất hiện ngay sau lệnh ghi. Chương trình điều khiển có đặt đồng thời yêu cầu ghi và yêu cầu xóa trong cùng một chu kỳ quét.",
+        "attempted_actions": "Chưa xóa lỗi. Chưa tắt nguồn PLC. Chưa sửa chương trình.",
+        "proposed_fix": "Tách thứ tự đặt yêu cầu ghi và yêu cầu xóa trong chương trình."
+      },
+      "proposal": "Nhận định: lỗi 1921H nhiều khả năng do yêu cầu ghi và yêu cầu xóa của module bị đặt từ OFF sang ON cùng lúc.\n\nCác bước đề xuất:\n1. Giữ nguyên hiện trạng, chụp màn hình chương trình đoạn đổi địa chỉ IP và nội dung lỗi.\n2. Kiểm tra hai bit yêu cầu ghi và yêu cầu xóa (Un\\G56 và Un\\G58) trong chương trình.\n3. Sửa chương trình: đặt yêu cầu ghi trước, chờ khoảng 100 ms rồi mới đặt yêu cầu xóa.\n4. Sau khi sửa, xóa lỗi và tắt mở nguồn PLC, kiểm tra địa chỉ IP mới.\n5. Chạy thử một chu kỳ có kết nối thật trước khi trả máy sản xuất.\n\nCăn cứ: trao đổi sửa chữa trước đây trên PLC FX5U (tri thức nháp).\n\nCần chuyên gia xác nhận trước khi áp dụng: độ trễ 100 ms có phù hợp với chu kỳ quét của dây chuyền này không?"
+    },
+    {
+      "requester": "demo.user",
+      "title": "Cảnh báo E8.1 trên MR-JE-AX572 lặp lại sau khoảng 40 phút mỗi lần khởi động lại",
+      "status": "draft",
+      "created_hours_ago": 30,
+      "updated_hours_ago": 29,
+      "context": {
+        "situation": "Bộ servo MR-JE-AX572 ở cell đóng gói E báo cảnh báo E8.1 (quạt làm mát) khoảng 40 phút sau mỗi lần khởi động lại. Máy vẫn chạy nhưng tổ trưởng lo bị dừng đột ngột.",
+        "observations": "Quạt vẫn quay khi kiểm tra bằng mắt. Miếng xốp lọc ở cửa hút gió có nhiều bụi bìa carton. Tủ điện ấm hơn bình thường.",
+        "attempted_actions": "Đã khởi động lại bộ servo 2 lần. Chưa vệ sinh miếng xốp, chưa thay quạt hay bộ servo.",
+        "proposed_fix": "Vệ sinh miếng xốp lọc gió trước, chưa đặt mua bộ servo mới."
+      },
+      "proposal": "Nhận định: cảnh báo quạt sau khoảng 40 phút khởi động lại thường là dấu hiệu gió làm mát bị cản. Chưa có dấu hiệu quạt hoặc bộ servo hỏng.\n\nCác bước đề xuất:\n1. Ngắt nguồn và khóa an toàn (LOTO) trước khi mở nắp tủ.\n2. Tháo miếng xốp lọc ở cửa hút gió, thổi hoặc hút bụi, kiểm tra miếng xốp còn nguyên.\n3. Kiểm tra cánh quạt và lưới tản nhiệt có bám bụi bìa không.\n4. Lắp lại, cấp nguồn, chạy máy và theo dõi tối thiểu 60 phút.\n5. Ghi lại thời điểm cảnh báo có xuất hiện lại hay không.\n6. Chỉ xét thay quạt khi đã vệ sinh mà cảnh báo vẫn lặp lại.\n\nCăn cứ: kinh nghiệm xử lý trước đây tại cell đóng gói E (tri thức nháp, chỉ áp dụng cho cell này).\n\nCần chuyên gia xác nhận trước khi áp dụng: có nên thêm lịch vệ sinh định kỳ cho miếng xốp lọc không?"
+    },
+    {
+      "requester": "demo.user",
+      "title": "Máy kiểm tra tính năng VIM 0200 No.6 báo NG dòng điện liên tục",
+      "status": "open",
+      "created_hours_ago": 9,
+      "submitted_hours_ago": 8.5,
+      "context": {
+        "situation": "Máy kiểm tra tính năng VIM 0200 (No.6) báo NG dòng điện liên tục từ đầu ca, sản phẩm bị loại hàng loạt dù đã đổi lot.",
+        "observations": "Giá trị dòng đo dao động mạnh giữa các lần kiểm. Khi rung nhẹ dây tín hiệu thì giá trị đổi. Máy No.5 cùng lot vẫn đạt.",
+        "attempted_actions": "Đã kiểm tra lại cài đặt ngưỡng dòng, không thay đổi. Đã đổi sản phẩm mẫu chuẩn, kết quả vẫn NG.",
+        "proposed_fix": "Nghi connector hoặc dây tín hiệu tiếp xúc kém. Muốn thay thử connector dự phòng.",
+        "evidence": [
+          {
+            "kind": "citation",
+            "title": "Trao đổi sửa chữa – VIM 0196 thay connector dự phòng",
+            "location": "Lượt 3 · Kỹ thuật viên bảo trì",
+            "excerpt": "Connector kiểm tra sản phẩm hết tần suất sử dụng (khoảng 25.000 lần cắm) thì tiếp xúc kém, báo NG dòng điện lẫn lộn. Thay connector dự phòng thì hết lỗi.",
+            "evidence_id": "demo-evidence-vim-connector-1"
+          }
+        ]
+      },
+      "proposal": "Nhận định: NG dòng điện thay đổi khi rung dây thường do tiếp xúc kém ở connector hoặc dây tín hiệu.\n\nCác bước đề xuất:\n1. Dừng máy, ngắt nguồn và khóa an toàn (LOTO).\n2. Kiểm tra số lần sử dụng của connector kiểm tra so với tuổi thọ quy định.\n3. Kiểm tra chân connector và dây tín hiệu có cong, oxy hóa hoặc hở không.\n4. Thay thử connector dự phòng, kiểm tra lại bằng sản phẩm mẫu chuẩn.\n5. Chạy 20 sản phẩm, xác nhận tỷ lệ NG trở lại bình thường.\n\nCần chuyên gia xác nhận trước khi áp dụng: connector dự phòng có cùng mã linh kiện với connector đang lắp không?"
+    },
+    {
+      "requester": "demo.user",
+      "title": "Robot i4L cell xếp pallet báo lỗi -924, đèn High Power không nháy vàng",
+      "status": "open",
+      "created_hours_ago": 52,
+      "submitted_hours_ago": 50,
+      "context": {
+        "situation": "Robot i4L ở cell xếp pallet báo lỗi -924 mỗi khi yêu cầu cấp High Power. Dây chuyền xếp pallet dừng từ ca trước.",
+        "observations": "Sau khi nhấn yêu cầu cấp High Power, đèn High Power trên bảng điều khiển phía trước không nháy vàng. Không có mã lỗi nào khác. Hai tuần trước đèn này từng chớp tắt bất thường.",
+        "attempted_actions": "Đã khởi động lại bộ điều khiển. Đã kiểm tra nút dừng khẩn cấp và khóa liên động cửa, đều bình thường.",
+        "proposed_fix": "Nghi cụm đèn bảng điều khiển phía trước bị hỏng do rung từ băng tải. Muốn thay cụm đèn nếu chuyên gia đồng ý.",
+        "evidence": [
+          {
+            "kind": "citation",
+            "title": "Trao đổi sửa chữa – i4L cell xếp pallet",
+            "location": "Lượt 5 · Kỹ sư bảo trì cấp cao",
+            "excerpt": "Cụm đèn bảng điều khiển ở cell này hay hỏng sau 12–18 tháng vì rung từ băng tải xếp pallet. Trong tủ line có để sẵn một cụm đèn dự phòng.",
+            "evidence_id": "demo-evidence-i4l-lamp-1"
+          }
+        ]
+      },
+      "proposal": "Nhận định: lỗi -924 kèm đèn High Power không nháy vàng nhiều khả năng liên quan đến cụm đèn bảng điều khiển phía trước, không phải servo amplifier.\n\nCác bước đề xuất:\n1. Ngắt nguồn và khóa an toàn (LOTO) trước khi thao tác.\n2. Rút và cắm lại cáp XFP, kiểm tra chân giắc có lỏng không.\n3. Bật lại, yêu cầu cấp High Power và quan sát đèn.\n4. Nếu đèn vẫn không nháy, thay cụm đèn bằng cụm dự phòng trong tủ line.\n5. Chạy thử một chu trình ở tốc độ thấp rồi mới trả máy cho sản xuất.\n\nCăn cứ: trao đổi sửa chữa tại cell xếp pallet (tri thức nháp).\n\nCần chuyên gia xác nhận trước khi áp dụng: có nên chống rung cho cụm đèn để tránh lặp lại không?"
+    },
+    {
+      "requester": "demo.user",
+      "title": "Máy gia công bề mặt rô-to A-10 (VLA 0029) kẹt turret, không lùi hết hành trình",
+      "status": "needs_info",
+      "created_hours_ago": 28,
+      "submitted_hours_ago": 27,
+      "context": {
+        "situation": "Máy VLA 0029 báo lỗi 2117 khi turret dao đóng mở, turret không lùi về hết hành trình nên máy dừng giữa chu kỳ.",
+        "observations": "Phoi bám dính vào cụm turret dao. Lỗi chỉ xuất hiện sau khoảng 200–300 sản phẩm. Sau khi vệ sinh phoi thì chạy lại được một thời gian.",
+        "attempted_actions": "Đã vệ sinh phoi bám dính cụm turret và tra dầu. Chưa kiểm tra áp suất dầu thủy lực, chưa thay xy-lanh.",
+        "proposed_fix": "Vệ sinh phoi theo chu kỳ ngắn hơn. Cần chuyên gia cho biết có nên kiểm tra xy-lanh thủy lực không."
+      },
+      "events": [
+        {
+          "by": "expert",
+          "kind": "question",
+          "content": "Lỗi 2117 xảy ra ở hành trình nào của turret: lúc mở hay lúc đóng? Anh/chị đã đo áp suất dầu thủy lực lúc đó chưa? Nếu có, gửi giúp ảnh vị trí phoi bám.",
+          "hours_ago": 20
+        }
+      ]
+    },
+    {
+      "requester": "demo.user",
+      "title": "Máy gia công MC20 số 1 mất master ON đột ngột, sau phục hồi đo NG kích thước",
+      "status": "answered",
+      "created_hours_ago": 100,
+      "submitted_hours_ago": 99,
+      "context": {
+        "situation": "Máy MC20 số 1 đang chạy bình thường thì mất master ON đột ngột, báo lỗi sai lệch tọa độ trục X1. Sau khi phục hồi master ON và chạy thử, đo 1 sản phẩm thấy NG các kích thước.",
+        "observations": "Trước khi mất master ON không có tiếng động bất thường. Sản phẩm NG lệch kích thước đều theo một hướng. Nhiệt độ tủ điện bình thường.",
+        "attempted_actions": "Đã phục hồi master ON, về gốc các trục và chạy thử 1 sản phẩm. Đã dừng máy chờ ý kiến.",
+        "proposed_fix": "Hiệu chỉnh lại tọa độ gốc trục X1 trước khi chạy sản xuất."
+      },
+      "events": [
+        {
+          "by": "expert",
+          "kind": "question",
+          "content": "Trục X1 có bị va chạm hoặc kẹt trước khi mất master ON không? Giá trị sai lệch tọa độ báo trên màn hình là bao nhiêu?",
+          "hours_ago": 90
+        },
+        {
+          "by": "requester",
+          "kind": "reply",
+          "content": "Không có va chạm. Sai lệch báo trên màn hình khoảng 0,8 mm. Cáp encoder trục X1 đã kiểm tra, chưa thấy hở.",
+          "hours_ago": 80
+        },
+        {
+          "by": "expert",
+          "kind": "edited",
+          "content": "Không chỉ hiệu chỉnh gốc. Sai lệch 0,8 mm kèm mất master ON cho thấy cần kiểm tra thêm trước khi chạy lại:\n1. Kiểm tra giắc encoder trục X1 ở phía driver và phía motor.\n2. Hiệu chỉnh lại tọa độ gốc trục X1.\n3. Đo thử 5 sản phẩm liên tiếp, so với bản vẽ trước khi trả máy.\nNếu sai lệch vẫn lặp lại, báo lại để xem xét thay encoder.",
+          "hours_ago": 60
+        }
+      ]
+    },
+    {
+      "requester": "demo.user",
+      "title": "Cửa shutter di chuyển mở với tốc độ chậm, bị giật cục",
+      "status": "answered",
+      "created_hours_ago": 80,
+      "submitted_hours_ago": 78,
+      "context": {
+        "situation": "Tuần tra phát hiện cửa shutter di chuyển mở với tốc độ chậm và bị giật cục, có lúc dừng giữa hành trình.",
+        "observations": "Dầu bôi trơn thanh dẫn đã khô. Không có tiếng kêu bất thường từ động cơ. Cảm biến vị trí mở đóng đều tác động đúng.",
+        "attempted_actions": "Đã lau sạch thanh dẫn, tra dầu và cho chạy thử 10 lần. Chuyển động trơn hơn rõ rệt.",
+        "proposed_fix": "Ghi nhận xử lý: vệ sinh và tra dầu thanh dẫn. Đề nghị chuyên gia xác nhận và đưa vào chu kỳ bảo trì."
+      },
+      "events": [
+        {
+          "by": "expert",
+          "kind": "accepted",
+          "content": "Đồng ý với cách xử lý. Đưa việc tra dầu thanh dẫn vào lịch bảo trì tuần. Theo dõi thêm 1 tuần, nếu còn giật thì kiểm tra tốc độ động cơ.",
+          "hours_ago": 70
+        }
+      ]
+    },
+    {
+      "requester": "demo.user",
+      "title": "Đề nghị thay CPU FX5 ở cell gắp đặt vì mất cài đặt giao thức",
+      "status": "closed",
+      "created_hours_ago": 150,
+      "submitted_hours_ago": 149,
+      "context": {
+        "situation": "PLC FX5 ở cell gắp đặt mất cài đặt giao thức truyền thông, thiết bị bên ngoài không kết nối được. Thợ học việc đề nghị thay luôn module CPU.",
+        "observations": "PLC vẫn chạy chương trình chính. Chỉ phần truyền thông nối tiếp không hoạt động. Không có lỗi phần cứng trên đèn báo.",
+        "attempted_actions": "Chưa thay linh kiện. Chưa tải lại cài đặt giao thức từ phần mềm lập trình.",
+        "proposed_fix": "Thay module CPU để loại trừ hỏng bộ nhớ."
+      },
+      "events": [
+        {
+          "by": "expert",
+          "kind": "denied",
+          "content": "Chưa đủ căn cứ để thay CPU. Kiểm tra giá trị thanh ghi SD10692 và tải lại dữ liệu cài đặt giao thức từ phần mềm lập trình trước. Chỉ nếu lỗi vẫn lặp lại mới tạo ticket mới kèm kết quả kiểm tra.",
+          "hours_ago": 140
+        }
+      ]
+    },
+    {
+      "requester": "demo.operator",
+      "title": "Robot i4L R719 hết thời gian chờ nhưng bộ điều khiển không ghi alarm",
+      "status": "open",
+      "created_hours_ago": 2,
+      "submitted_hours_ago": 1.5,
+      "context": {
+        "situation": "Robot i4L R719 dừng do hết thời gian chờ (timeout) nhưng không có alarm nào trong nhật ký bộ điều khiển. Nhân viên vận hành đang định đổi thông số timeout.",
+        "observations": "Đèn bảng điều khiển phía trước nháy không đều trong lúc robot chờ. Sự cố xảy ra ngắt quãng, khoảng 2–3 lần mỗi ca.",
+        "attempted_actions": "Chưa đổi thông số. Chưa kiểm tra cáp hay giắc.",
+        "proposed_fix": "Kiểm tra trạng thái đèn bảng điều khiển và cáp XFP trước khi nghĩ đến lỗi phần cứng."
+      }
+    },
+    {
+      "requester": "demo.technician",
+      "title": "FX5-PLC203 Line 9 lỗi truyền thông master khi trục servo tăng tốc",
+      "status": "open",
+      "created_hours_ago": 30,
+      "submitted_hours_ago": 29,
+      "context": {
+        "situation": "Ở cell lắp ráp F Line 9, PLC FX5-PLC203 ghi lỗi truyền thông tại module master mỗi khi trục servo tăng tốc. Chưa có dừng chuyền nhưng lỗi xuất hiện ngày một nhiều.",
+        "observations": "Lỗi luôn trùng với thời điểm trục servo tăng tốc. Đèn lỗi ở trạm cục bộ số 3 nháy ngắn. Module master chạy bình thường khi trục đứng yên.",
+        "attempted_actions": "Chưa thay module master. Chưa đo nguồn 24 V cấp cho trạm cục bộ.",
+        "proposed_fix": "Đo nguồn 24 V tại trạm cục bộ số 3 trong lúc trục tăng tốc trước khi thay module."
+      },
+      "proposal": "Nhận định: lỗi chỉ xuất hiện khi trục tăng tốc cho thấy nguồn 24 V của trạm cục bộ có thể bị sụt. Chưa nên thay module master.\n\nCác bước đề xuất:\n1. Gắn đồng hồ đo có chức năng ghi min/max vào nguồn 24 V tại trạm cục bộ số 3.\n2. Cho trục tăng tốc vài lần và đọc giá trị thấp nhất.\n3. Nếu giá trị dưới 21,5 V thì kiểm tra nguồn cấp, dây nguồn và đấu nối chung với tải servo.\n4. Nếu nguồn ổn định thì mới kiểm tra cáp truyền thông và nối đất.\n\nCần chuyên gia xác nhận trước khi áp dụng: ngưỡng 21,5 V có đúng với trạm này không?"
+    },
+    {
+      "requester": "demo.operator",
+      "title": "MR-JE-AX501 báo AL.8E.5 chỉ khi chỉ mục nhanh",
+      "status": "answered",
+      "created_hours_ago": 120,
+      "submitted_hours_ago": 119,
+      "context": {
+        "situation": "Servo MR-JE-AX501 ở cell E báo AL.8E.5 (lỗi dữ liệu truyền) chỉ khi chạy chỉ mục tốc độ nhanh. Chạy chậm thì không lỗi.",
+        "observations": "Lỗi bắt đầu xuất hiện sau lần cập nhật chương trình PLC của cell. Cáp truyền thông và nối đất không có dấu hiệu hỏng.",
+        "attempted_actions": "Đã kiểm tra cáp, chạy thử ở tốc độ chậm không lỗi. Chưa xem lại chương trình PLC.",
+        "proposed_fix": "Kiểm tra số thứ tự dữ liệu truyền từ PLC đến servo."
+      },
+      "events": [
+        {
+          "by": "expert",
+          "kind": "edited",
+          "content": "Hướng kiểm tra đúng, bổ sung thêm:\n1. So sánh bộ đếm khối dữ liệu mà chương trình PLC gửi với bộ đếm servo mong đợi, đặc biệt sau lần cập nhật chương trình.\n2. Nếu bộ đếm tăng 2 thay vì 1 mỗi khối thì sửa lại về tăng 1.\n3. Chạy lại chỉ mục tốc độ nhanh 30 phút để xác nhận.",
+          "hours_ago": 100
+        }
+      ]
+    }
+  ]
+}

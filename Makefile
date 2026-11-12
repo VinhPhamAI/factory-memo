@@ -10,7 +10,7 @@ DEMO_RUN = docker compose --env-file .env -f deployments/docker-compose.yml run 
 	-v "$(CURDIR)/backend:/app/backend:ro" \
 	-v "$(CURDIR)/backend/src/services/demo:/app/backend/src/services/demo" api python -m
 
-# Hide the tickets and chats left by the scripted demo.
+# Hide the tickets and chats left by the scripted demo and restore the mock board tickets.
 demo-reset:
 	$(DEMO_RUN) backend.src.services.demo.reset
 

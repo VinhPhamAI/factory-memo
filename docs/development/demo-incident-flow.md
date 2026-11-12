@@ -20,6 +20,10 @@ base, and the proposal is not an approved procedure.
 The prepared case: an Omron i4L SCARA robot on Line 2 starts but does not
 move after a voltage dip (Control Power on, High Power off).
 
+With `DEMO_MODE=true` the `/tickets` board also holds 14 **mock tickets** in every
+column and status, so the board is not empty before the chat is run. See
+[Mock board tickets](#mock-board-tickets).
+
 ## Set up once
 
 1. Set `DEMO_MODE=true` in `.env`.
@@ -35,6 +39,32 @@ move after a voltage dip (Control Power on, High Power off).
 | `demo.user` | employee | Shared sign-in for chat, tickets and the file library |
 | `demo.admin` | admin | Creates and manages knowledge bases |
 | `demo.expert` | expert | Receives the demo ticket; reviews knowledge and tickets |
+
+## Mock board tickets
+
+`tickets.json` lists faults written like real factory incidents (servo alarms,
+PLC errors, robot High Power faults, turret jams, connector wear). Most come from
+the synthetic benchmark scenarios; some wording follows the plant's own
+maintenance-ticket screens.
+
+| Column | Status | Count | Content |
+| --- | --- | --- | --- |
+| To do | Draft | 3 | Description only, no AI proposal |
+| In progress | Draft with AI proposal | 2 | Proposal block under the user's own fix |
+| In review | Waiting for expert / Needs info | 5 | Submitted; one has the expert's question awaiting the employee's reply |
+| Done | Approved / Rejected | 4 | Accepted, revised (`edited`) or denied by the expert, one with a question and reply first |
+
+- `demo.user` sees the 11 tickets it requested. `demo.expert` sees the 9 submitted ones;
+  two mock colleagues (`demo.operator`, `demo.technician`) requested 3 of them.
+  Mock colleagues have no usable password.
+- Times are hours before seeding, so cards read "2 giờ trước", "hôm qua", and so on.
+- The API saves the tickets at start when `DEMO_MODE` is on, the demo accounts exist
+  and no mock ticket exists yet, including hidden ones. `make demo-accounts` saves
+  them too. Restarting never duplicates them or brings back ones you deleted.
+- `make demo-reset` hides the current mock tickets and saves a fresh set, so the
+  board returns to its prepared state. It skips this when the demo accounts do not exist.
+- Drag a card from **To do** to **In progress**, or send a draft to the expert, as with any
+  ticket. Mock content is not an approved procedure; each proposal asks for expert confirmation.
 
 ## Run the demo
 
@@ -64,6 +94,9 @@ No API restart or image rebuild is needed. The reset hides, for every user:
 - the chats those tickets were created from;
 - chats whose title is the start of the scripted prompt (20 characters or more).
 
+It then hides the mock board tickets and saves a fresh set (see
+[Mock board tickets](#mock-board-tickets)).
+
 Rows are marked deleted, as when a user deletes them in the app; nothing is
 removed from the database. Demo accounts and other tickets and chats are kept.
 
@@ -79,7 +112,7 @@ code; it receives the same events and responses as in the normal flow.
 | **Tạo ticket** on the scripted chat | Agent drafts the ticket | Ticket text comes from the scenario file |
 | AI proposal for a ticket with the scripted title | Keyword template | Scenario proposal, after `analysis_seconds` |
 | AI proposal for any other ticket | Keyword template | Unchanged |
-| API start | — | Creates the mock expert account if its username is free |
+| API start | — | Creates the mock expert account if its username is free; saves the mock board tickets if none exist |
 
 - **Chat.** At start, `backend/app.py` wraps the agent client in
   `DemoAgentClient`. The wrapper compares each message with the scripted
@@ -106,6 +139,7 @@ All demo code is in `backend/src/services/demo/`.
 | --- | --- |
 | `scenario.json` | The prepared case |
 | `scenario.py` | Scenario loading, `DemoAgentClient`, mock expert, reset query |
+| `tickets.json`, `tickets.py` | Mock board tickets and the code that saves them with validation |
 | `proposals.py` | Keyword-template proposals for other tickets; uses the scenario proposal for the scripted ticket |
 | `accounts.py`, `create_accounts.py` | Demo accounts and the command that creates them |
 | `reset.py` | The reset command |
@@ -130,6 +164,18 @@ start in demo mode.
 | `proposal` | AI proposal shown on the ticket (plain text, at most 3500 characters) |
 | `expert` | Username and display name of the mock expert |
 
+## Change the mock tickets
+
+Edit `tickets.json`, then run `make demo-reset` (or restart the API after deleting the
+rows). An invalid file stops the API start in demo mode. The file is validated:
+
+- `status` must be reachable by the `events` from `open` using the real transition rules
+  (for example `question` by the expert, `reply` by the requester, then `edited`);
+- events are listed oldest first and `*_hours_ago` values never increase;
+- `edited`, `denied`, `question` and `reply` events need `content`;
+- `proposal` adds the AI proposal block; the whole `proposed_fix` is at most 4000 characters;
+- ticket titles are unique, because they identify seeded tickets.
+
 ## Demo accounts
 
 - The first `make demo-accounts` writes `accounts.json` with random passwords.
@@ -149,6 +195,10 @@ start in demo mode.
 - Use the prompt as the first message of a chat. The agent does not see the
   scripted turn, so follow-up questions are answered without it.
 - Scripted citations have no source links because no stored source exists.
+- Mock tickets' chats are hidden and have no history, so **Mở cuộc trò chuyện** on them
+  opens nothing useful. Their evidence is synthetic text with no stored source.
+- Two API processes starting at once on an empty database can save the mock set twice.
+  Run `make demo-reset` to leave one set.
 - A ticket created outside the scripted chat gets the scripted proposal only
   if its title equals the scenario's ticket title.
 - The `make` targets run a one-off API container on the current `backend/`

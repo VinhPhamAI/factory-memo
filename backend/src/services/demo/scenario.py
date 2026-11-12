@@ -363,17 +363,37 @@ async def ensure_demo_expert(
         AppDatabaseUnavailable: The application database could not be reached.
     """
 
-    username = normalize_username(expert.username)
     async with app_transaction(sessions) as session:
-        if await session.scalar(select(User.id).where(User.username == username)) is not None:
-            return
-        password_hash = await asyncio.to_thread(PasswordHasher().hash, secrets.token_urlsafe(32))
-        session.add(
-            User(
-                username=username, display_name=expert.display_name,
-                password_hash=password_hash, role=UserRole.EXPERT.value,
-            )
-        )
+        await ensure_mock_user(session, expert.username, expert.display_name, UserRole.EXPERT)
+
+
+async def ensure_mock_user(
+    session: AsyncSession, username: str, display_name: str, role: UserRole
+) -> UUID:
+    """Return the ID of a mock account, creating it when its username is free.
+
+    A new account gets a random password that is not kept, so nobody can sign
+    in as it. An existing account with that username is left as is.
+
+    Args:
+        session: Open transaction of the application database.
+        username: Login name; stored in its normalized form.
+        display_name: Name shown on tickets.
+        role: Role of a new account.
+    """
+
+    username = normalize_username(username)
+    existing = await session.scalar(select(User.id).where(User.username == username))
+    if existing is not None:
+        return existing
+    password_hash = await asyncio.to_thread(PasswordHasher().hash, secrets.token_urlsafe(32))
+    user = User(
+        username=username, display_name=display_name,
+        password_hash=password_hash, role=role.value,
+    )
+    session.add(user)
+    await session.flush()
+    return user.id
 
 
 async def reset_demo_data(

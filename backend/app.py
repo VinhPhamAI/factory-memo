@@ -54,6 +54,7 @@ from backend.src.services.demo.scenario import (
     ensure_demo_expert,
     load_demo_scenario,
 )
+from backend.src.services.demo.tickets import DemoAccountMissing, read_ticket_seed, seed_demo_tickets
 from backend.src.services.file_library import FileLibraryService
 from backend.src.storage.repositories.lifecycle import InactiveKnowledgeBase, InactiveSource
 from backend.src.storage.repositories.chunks import ChunkRepository
@@ -204,6 +205,18 @@ def create_app(
                 except (AppDatabaseUnavailable, SQLAlchemyError):
                     logging.getLogger(__name__).warning(
                         "Demo mode: the mock expert account could not be created"
+                    )
+                try:
+                    seeded = await seed_demo_tickets(
+                        sessions, read_ticket_seed(), demo_scenario.expert
+                    )
+                    if seeded:
+                        logging.getLogger(__name__).info("Demo mode: saved %d mock tickets", seeded)
+                except DemoAccountMissing as exc:
+                    logging.getLogger(__name__).warning("Demo mode: mock tickets not saved: %s", exc)
+                except (AppDatabaseUnavailable, SQLAlchemyError):
+                    logging.getLogger(__name__).warning(
+                        "Demo mode: the mock tickets could not be saved", exc_info=True
                     )
         app.state.document_uploads = document_uploads or DocumentUploadStore()
         catalog = None

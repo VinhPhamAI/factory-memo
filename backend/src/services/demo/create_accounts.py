@@ -18,6 +18,7 @@ from backend.src.services.demo.accounts import (
     load_or_create_accounts,
 )
 from backend.src.services.demo.scenario import read_scenario
+from backend.src.services.demo.tickets import read_ticket_seed, seed_demo_tickets
 from backend.src.storage.app_database import (
     app_database_url_from_env,
     create_app_engine,
@@ -28,6 +29,8 @@ from backend.src.storage.app_database import (
 async def create_accounts() -> list[str]:
     """Create or update the demo accounts from the credentials file; return what was done.
 
+    Also saves the mock tickets of the board when none exist yet.
+
     Raises:
         SystemExit: `APP_DATABASE_URL` is not set.
         AppDatabaseUnavailable: The application database could not be reached.
@@ -36,10 +39,16 @@ async def create_accounts() -> list[str]:
     url = app_database_url_from_env()
     if not url:
         raise SystemExit("APP_DATABASE_URL is not set")
-    accounts = load_or_create_accounts(ACCOUNTS_PATH, read_scenario().expert)
+    scenario = read_scenario()
+    accounts = load_or_create_accounts(ACCOUNTS_PATH, scenario.expert)
     engine = create_app_engine(url)
     try:
-        return await ensure_demo_accounts(create_session_factory(engine), accounts)
+        sessions = create_session_factory(engine)
+        done = await ensure_demo_accounts(sessions, accounts)
+        seeded = await seed_demo_tickets(sessions, read_ticket_seed(), scenario.expert)
+        if seeded:
+            done.append(f"saved {seeded} mock ticket(s)")
+        return done
     finally:
         await engine.dispose()
 

@@ -34,6 +34,13 @@ from backend.src.services.demo.scenario import (
 from backend.src.services.auth import AuthService
 from backend.src.services.demo.accounts import ensure_demo_accounts, load_or_create_accounts
 from backend.src.services.demo.scenario import ensure_demo_expert, reset_demo_data
+from backend.src.services.demo.tickets import (
+    DemoAccountMissing,
+    SeedTicket,
+    TicketSeed,
+    read_ticket_seed,
+    seed_demo_tickets,
+)
 from backend.src.services.file_library import FileLibraryService
 from backend.src.services.inquiries import InquiryService
 from backend.src.storage.app_database import create_session_factory
@@ -122,6 +129,48 @@ class ScenarioFileTests(unittest.TestCase):
             block = with_demo_proposal("ý của tôi", title, "")
             self.assertTrue(block.startswith("ý của tôi\n\n" + DEMO_PROPOSAL_MARKER))
             self.assertTrue(block.endswith(scenario.proposal))
+
+
+class TicketSeedFileTests(unittest.TestCase):
+    def test_file_fills_every_column_and_status(self) -> None:
+        seed = read_ticket_seed()
+        self.assertEqual(
+            {ticket.status for ticket in seed.tickets},
+            {"draft", "open", "needs_info", "answered", "closed"},
+        )
+        proposals = [t for t in seed.tickets if t.status == "draft" and t.proposal]
+        plain = [t for t in seed.tickets if t.status == "draft" and not t.proposal]
+        self.assertTrue(proposals and plain)
+        for ticket in seed.tickets:
+            if ticket.proposal:
+                self.assertIn(DEMO_PROPOSAL_MARKER, ticket.proposed_fix())
+        self.assertGreaterEqual({t.requester for t in seed.tickets}, {seed.requester_username})
+
+    def test_history_must_lead_to_the_status(self) -> None:
+        base = read_ticket_seed().tickets[0].model_dump()
+        submitted = {**base, "status": "open", "created_hours_ago": 5, "submitted_hours_ago": 4}
+        SeedTicket.model_validate(submitted)
+        for change in (
+            {"status": "answered"},  # no event leads there
+            {"events": [{"by": "requester", "kind": "accepted", "hours_ago": 1}]},  # wrong actor
+            {"events": [{"by": "expert", "kind": "denied", "hours_ago": 1}]},  # reason missing
+            {"submitted_hours_ago": 6},  # submitted before creation
+            {"status": "draft", "submitted_hours_ago": None, "events": [
+                {"by": "expert", "kind": "accepted", "hours_ago": 1}]},
+        ):
+            with self.assertRaises(ValueError, msg=change):
+                SeedTicket.model_validate({**submitted, **change})
+
+    def test_requester_and_titles_are_checked(self) -> None:
+        ticket = read_ticket_seed().tickets[0].model_dump()
+        with self.assertRaises(ValueError):
+            TicketSeed.model_validate(
+                {"requester_username": "a", "tickets": [{**ticket, "requester": "someone"}]}
+            )
+        with self.assertRaises(ValueError):
+            TicketSeed.model_validate(
+                {"requester_username": ticket["requester"], "tickets": [ticket, ticket]}
+            )
 
 
 class DemoAgentClientTests(unittest.IsolatedAsyncioTestCase):
@@ -309,6 +358,60 @@ class DemoFlowRouteTest(ConversationTestCase):
             roles.append(self.client.get("/auth/me", headers=bearer).json()["role"])
         self.assertEqual(roles, ["employee", "admin", "expert"])
         self.assertEqual(len({account.password for account in accounts.accounts}), 3)
+
+    def test_mock_board_reaches_the_demo_accounts(self) -> None:
+        seed = read_ticket_seed()
+        expert = self.scenario.expert
+        with self.assertRaises(DemoAccountMissing):
+            asyncio.run(
+                seed_demo_tickets(
+                    self.sessions, seed.model_copy(update={"requester_username": "nobody.here"}), expert
+                )
+            )
+        path = Path(tempfile.mkdtemp()) / "accounts.json"
+        self.addCleanup(shutil.rmtree, path.parent, ignore_errors=True)
+        asyncio.run(ensure_demo_expert(self.sessions, expert))
+        accounts = load_or_create_accounts(path, expert)
+        asyncio.run(ensure_demo_accounts(self.sessions, accounts, password_hasher=FAST_HASHER))
+
+        self.assertEqual(asyncio.run(seed_demo_tickets(self.sessions, seed, expert)), len(seed.tickets))
+        # A restart (not a replace) neither duplicates nor revives hidden tickets.
+        self.assertEqual(asyncio.run(seed_demo_tickets(self.sessions, seed, expert)), 0)
+
+        def board(account) -> list[dict]:
+            self.client.cookies.clear()
+            login = self.client.post(
+                "/auth/login", json={"username": account.username, "password": account.password}
+            )
+            self.assertEqual(login.status_code, 200, login.text)
+            self.client.cookies.clear()
+            headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+            found = {}
+            for box in ("sent", "assigned"):
+                for item in self.client.get(f"/v1/inquiries?box={box}", headers=headers).json()["inquiries"]:
+                    found[item["id"]] = item
+            return list(found.values())
+
+        employee, _, expert_account = accounts.accounts
+        mine = board(employee)
+        self.assertEqual(len(mine), sum(t.requester == seed.requester_username for t in seed.tickets))
+        stages = [item["stage"] for item in mine]
+        for stage in ("todo", "in_progress", "in_review", "done"):
+            self.assertIn(stage, stages)
+        self.assertEqual({item["status"] for item in mine}, {"draft", "open", "needs_info", "answered", "closed"})
+        self.assertEqual([item["updated_at"] for item in mine], sorted((i["updated_at"] for i in mine), reverse=True))
+
+        reviewer = board(expert_account)
+        submitted = [t for t in seed.tickets if t.status != "draft"]
+        self.assertEqual(len(reviewer), len(submitted))
+        self.assertTrue({item["requester_name"] for item in reviewer} >= {e.display_name for e in seed.employees})
+
+        # Replace hides the visible set and saves a fresh one.
+        self.assertEqual(
+            asyncio.run(seed_demo_tickets(self.sessions, seed, expert, replace=True)), len(seed.tickets)
+        )
+        self.assertEqual(len(board(employee)), len(mine))
+        self.assertTrue(set(i["id"] for i in board(employee)).isdisjoint(i["id"] for i in mine))
 
 
 if __name__ == "__main__":
