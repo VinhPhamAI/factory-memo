@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.api.auth import (
     AuthHttpSettings,
@@ -81,6 +82,27 @@ async def knowledge_storage_unavailable(
         {"detail": "Application storage is temporarily unavailable"},
         status_code=503,
     )
+
+
+async def require_compatible_knowledge_storage(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    """Validate knowledge storage and normalize retryable readiness failures.
+
+    Args:
+        sessions: Application-database session factory used for validation.
+
+    Raises:
+        KnowledgeStorageUnavailable: The database is unreachable, its schema is
+            not ready, or its embedding dimension is incompatible.
+    """
+
+    try:
+        await verify_embedding_dimension(sessions)
+    except (EmbeddingMismatch, ValueError, SQLAlchemyError, OSError) as exc:
+        raise KnowledgeStorageUnavailable(
+            f"Knowledge storage validation failed: {type(exc).__name__}"
+        ) from exc
 
 
 def create_app(
@@ -154,23 +176,9 @@ def create_app(
             or inquiry_service is None
         )
         sessions = None
-        knowledge_ready = False
         if url:
-            # Keep the shared pool available even when KB validation fails below.
             app_engine = create_app_engine(url)
             sessions = create_session_factory(app_engine)
-            try:
-                await verify_embedding_dimension(sessions)
-            except (EmbeddingMismatch, ValueError, SQLAlchemyError, OSError) as exc:
-                logging.getLogger(__name__).warning(
-                    "Knowledge storage is unavailable; chat and file services remain configured: %s",
-                    type(exc).__name__,
-                )
-            except BaseException:
-                await app_engine.dispose()
-                raise
-            else:
-                knowledge_ready = True
             app.state.auth_service = auth_service or AuthService(AuthStore(sessions))
             app.state.conversation_store = conversation_store or ConversationStore(sessions)
             app.state.file_library = file_library or FileLibraryService(
@@ -225,13 +233,16 @@ def create_app(
         manager = None
         app.state.sources = sources
         app.state.chunk_search = chunk_search
-        if sessions is not None and knowledge_ready:
+        if sessions is not None:
             source_repository = sources or SourceRepository(sessions)
             app.state.sources = source_repository
             app.state.chunk_search = chunk_search or ChunkSearchService(
                 sessions, ChunkRepository(sessions), source_repository
             )
-            catalog = KnowledgeBaseCatalog(KnowledgeBaseRepository(sessions))
+            catalog = KnowledgeBaseCatalog(
+                KnowledgeBaseRepository(sessions),
+                validate_storage=lambda: require_compatible_knowledge_storage(sessions),
+            )
             pool = KnowledgeAgentPool({}, sessions=sessions, catalog=catalog)
             capture = VoiceCaptureService(
                 {}, sources=source_repository, resolve_kb=catalog.resolve
@@ -248,9 +259,10 @@ def create_app(
             capture.on_ingested = manager.queue_conflicts
             try:
                 await catalog.ensure_loaded()
-            except Exception:
+            except KnowledgeStorageUnavailable as exc:
                 logging.getLogger(__name__).warning(
-                    "Could not load application knowledge bases", exc_info=True
+                    "Knowledge storage is not ready; catalog access will retry: %s",
+                    type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__,
                 )
         app.state.knowledge_agents = pool
         app.state.voice_capture = capture

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Annotated, Any, Protocol
 from uuid import UUID
 
@@ -51,15 +51,48 @@ def max_created_from_env() -> int:
 class KnowledgeBaseCatalog:
     """Cache database catalog rows and publish their policy specs to listeners."""
 
-    def __init__(self, repository: KnowledgeBaseRepository, *, listeners: Iterable[SpecListener] = (), max_created: int | None = None) -> None:
+    def __init__(
+        self,
+        repository: KnowledgeBaseRepository,
+        *,
+        listeners: Iterable[SpecListener] = (),
+        max_created: int | None = None,
+        validate_storage: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        """Create a catalog whose storage check is retried until it succeeds.
+
+        Args:
+            repository: Application-database knowledge-base rows.
+            listeners: Services that receive catalog policy changes.
+            max_created: Maximum active UI-created knowledge bases.
+            validate_storage: Optional compatibility check run before catalog
+                access. Failures are not cached, so a database that starts late
+                can recover without restarting the API.
+        """
+
         self._repository = repository
         self._entries: dict[str, KnowledgeBaseEntry] = {}
         self._specs: dict[str, KnowledgeBaseSpec] = {}
         self._listeners = list(listeners)
         self._max_created = max_created_from_env() if max_created is None else max_created
+        self._validate_storage = validate_storage
+        self._storage_validated = validate_storage is None
+        self._storage_lock = asyncio.Lock()
         self._loaded = False
         self._lock = asyncio.Lock()
         self._watcher: asyncio.Task[None] | None = None
+
+    async def _ensure_storage_ready(self) -> None:
+        """Validate storage once, retrying a failed check on later access."""
+
+        if self._storage_validated:
+            return
+        async with self._storage_lock:
+            if self._storage_validated:
+                return
+            if self._validate_storage is not None:
+                await self._validate_storage()
+            self._storage_validated = True
 
     async def ensure_loaded(self) -> None:
         """Load active rows once and notify listeners of every valid policy."""
@@ -69,6 +102,7 @@ class KnowledgeBaseCatalog:
         async with self._lock:
             if self._loaded:
                 return
+            await self._ensure_storage_ready()
             for row in await self._repository.list_active():
                 self._add(row)
             self._loaded = True
@@ -77,6 +111,7 @@ class KnowledgeBaseCatalog:
         """Reconcile this process with committed catalog changes before serving requests."""
 
         async with self._lock:
+            await self._ensure_storage_ready()
             rows = {row.name: row for row in await self._repository.list_active()}
             for name in self._entries.keys() - rows.keys():
                 self._remove(name)
@@ -88,6 +123,7 @@ class KnowledgeBaseCatalog:
     async def detail(self, name: str) -> KnowledgeBaseDetail:
         """Return details for an active name or raise HTTP 404."""
 
+        await self._ensure_storage_ready()
         detail = await self._repository.detail(name)
         if detail is None:
             raise HTTPException(404, "Knowledge base not found")
@@ -99,6 +135,7 @@ class KnowledgeBaseCatalog:
         """Change the display fields and publish the current catalog."""
 
         async with self._lock:
+            await self._ensure_storage_ready()
             updated = await self._repository.rename(name, title=title, description=description)
             if updated is None:
                 raise HTTPException(404, "Knowledge base not found")
@@ -110,6 +147,7 @@ class KnowledgeBaseCatalog:
         """Remove a KB from the active catalog and notify local services."""
 
         async with self._lock:
+            await self._ensure_storage_ready()
             try:
                 deleted = await self._repository.delete(name)
             except DefaultKnowledgeBaseError as exc:
@@ -120,6 +158,7 @@ class KnowledgeBaseCatalog:
 
     async def set_default(self, name: str) -> None:
         """Persist the Library's default and refresh local policy metadata."""
+        await self._ensure_storage_ready()
         if not await self._repository.set_default(name):
             raise HTTPException(404, "Knowledge base not found")
         await self.refresh()

@@ -1430,8 +1430,6 @@ export function KnowledgeSourcePage() {
                 ? `${counts.draft} mục chờ duyệt`
                 : REVIEWS[source.review]}
             </strong>{" "}
-            · {MODES[source.mode ?? "knowledge"]}. Đối chiếu với bằng chứng
-            trước khi duyệt; mỗi quyết định được lưu lại.
           </p>
         ) : (
           <>

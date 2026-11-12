@@ -12,6 +12,8 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from backend.app import create_app
+from backend.api.knowledge_bases import KnowledgeBaseCatalog
+from backend.src.storage.repositories.knowledge_bases import KnowledgeBaseRepository
 from backend.src.storage.orm import User
 from backend.tests.test_auth import FRONTEND_ORIGIN, PASSWORD, SETTINGS
 from backend.tests.test_database_migrations import DATABASE_URL, MigratedDatabaseTest
@@ -40,6 +42,38 @@ class MissingDatabaseStartupTest(unittest.TestCase):
             response = client.post('/v1/documents/general/uploads', headers=ALICE_HEADERS,
                                    files={'file': ('note.txt', b'original note', 'text/plain')})
             self.assertEqual(response.status_code, 503, response.text)
+
+    def test_knowledge_catalog_recovers_after_database_becomes_ready(self) -> None:
+        """Retry transient startup validation without restarting the API."""
+
+        validation = mock.AsyncMock(
+            side_effect=[OSError("database starting"), OSError("database starting"), None]
+        )
+        list_active = mock.AsyncMock(return_value=[])
+        with (
+            mock.patch('backend.app.load_dotenv'),
+            mock.patch.dict('os.environ', {
+                'APP_DATABASE_URL': 'postgresql+psycopg://test:test@database/test',
+                'EMBEDDING_DIM': '3',
+            }),
+            mock.patch('backend.app.AgentSettings.from_env', return_value=None),
+            mock.patch('backend.app.verify_embedding_dimension', validation),
+            mock.patch.object(KnowledgeBaseRepository, 'list_active', list_active),
+            mock.patch.object(KnowledgeBaseCatalog, 'start_listener'),
+            TestClient(create_app(auth_service=StubAuthService())) as client,
+        ):
+            unavailable = client.get('/v1/knowledge-bases', headers=ALICE_HEADERS)
+            self.assertEqual(unavailable.status_code, 503, unavailable.text)
+
+            recovered = client.get('/v1/knowledge-bases', headers=ALICE_HEADERS)
+            self.assertEqual(recovered.status_code, 200, recovered.text)
+            self.assertEqual(recovered.json()['knowledge_bases'], [])
+
+            still_ready = client.get('/v1/knowledge-bases', headers=ALICE_HEADERS)
+            self.assertEqual(still_ready.status_code, 200, still_ready.text)
+
+        self.assertEqual(validation.await_count, 3)
+        self.assertEqual(list_active.await_count, 2)
 
 
 @unittest.skipUnless(DATABASE_URL, 'TEST_DATABASE_URL is not set')
