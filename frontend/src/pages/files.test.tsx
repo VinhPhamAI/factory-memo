@@ -176,7 +176,7 @@ describe("file library page", () => {
     expect(screen.queryByRole("button", { name: "Làm mới" })).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByText("Nhận PDF, XLSX, DOCX, JPEG, PNG; tối đa 100 MiB mỗi file.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Tải tài liệu lên" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Tải tài liệu lên" })).not.toBeInTheDocument();
   });
 
   it("lists files with type, size and actions", async () => {
@@ -224,12 +224,12 @@ describe("file library page", () => {
       return Response.json({ files: [] });
     });
     await screen.findByTestId("files-empty");
-    await waitFor(() => expect(screen.getByTestId("files-upload")).toBeEnabled());
+    await waitFor(() => expect(screen.getByTestId("files-dropzone")).toHaveAttribute("aria-disabled", "false"));
 
     pick(
       new File(["%PDF-"], "new.pdf"),
       new File(["MZ"], "renamed.pdf"),
-      new File(["text"], "notes.txt"),
+      new File(["a,b"], "notes.csv"),
     );
 
     await waitFor(() => expect(screen.getAllByTestId("toast")).toHaveLength(3));
@@ -238,14 +238,56 @@ describe("file library page", () => {
     expect(ok).toHaveAttribute("role", "status");
     expect(renamed).toHaveTextContent("“renamed.pdf”: Chỉ nhận PDF");
     expect(renamed).toHaveAttribute("role", "alert");
-    expect(notes).toHaveTextContent("“notes.txt”: Chỉ nhận PDF");
+    expect(notes).toHaveTextContent("“notes.csv”: Chỉ nhận PDF");
     expect(screen.getByTestId("library-file")).toHaveTextContent("new.pdf");
     // Results are popups, not a list in the page.
     expect(screen.queryByTestId("files-results")).not.toBeInTheDocument();
-    // notes.txt is refused in the browser and never sent.
+    // notes.csv is refused in the browser and never sent.
     expect(
       fetch.mock.calls.filter(([, init]) => init?.method === "POST"),
     ).toHaveLength(3);
+  });
+
+  it("uploads files dropped on the drop zone and confirms the result", async () => {
+    showFiles((url, init) => {
+      if (url.endsWith("/v1/documents/knowledge_base_seed1/files"))
+        return Response.json({ id: "source-1", kb: "knowledge_base_seed1", job: { id: "job-1", status: "queued" } }, { status: 201 });
+      if (init?.method === "POST") return Response.json(manual, { status: 201 });
+      return Response.json({ files: [] });
+    });
+    await waitFor(() => expect(screen.getByTestId("files-dropzone")).toHaveAttribute("aria-disabled", "false"));
+    const zone = screen.getByTestId("files-dropzone");
+    expect(zone).toHaveAttribute("data-state", "idle");
+
+    const file = new File(["%PDF-"], "manual.pdf");
+    const dataTransfer = { types: ["Files"], files: [file], dropEffect: "none" };
+    fireEvent.dragOver(zone, { dataTransfer });
+    expect(zone).toHaveAttribute("data-state", "over");
+    expect(zone).toHaveTextContent("Thả tài liệu để tải lên");
+    fireEvent.dragLeave(zone, { dataTransfer });
+    expect(zone).toHaveAttribute("data-state", "idle");
+
+    fireEvent.drop(zone, { dataTransfer });
+    await waitFor(() => expect(zone).toHaveAttribute("data-state", "done"));
+    expect(zone).toHaveTextContent("Đã tải lên 1 tài liệu");
+    expect(screen.getByTestId("library-file")).toHaveClass("is-new");
+  });
+
+  it("ignores dragged content that is not a file", async () => {
+    showFiles(() => Response.json({ files: [] }));
+    await waitFor(() => expect(screen.getByTestId("files-dropzone")).toHaveAttribute("aria-disabled", "false"));
+    const zone = screen.getByTestId("files-dropzone");
+    fireEvent.dragOver(zone, { dataTransfer: { types: ["text/plain"], files: [] } });
+    expect(zone).toHaveAttribute("data-state", "idle");
+  });
+
+  it("does not accept drops without a knowledge base", async () => {
+    const fetch = showFiles(() => Response.json({ files: [] }), ["another_kb"]);
+    await screen.findByRole("alert");
+    const zone = screen.getByTestId("files-dropzone");
+    expect(zone).toHaveAttribute("data-state", "disabled");
+    fireEvent.drop(zone, { dataTransfer: { types: ["Files"], files: [new File(["%PDF-"], "manual.pdf")] } });
+    expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
   });
 
   it("keeps the uploaded file and reports a queue failure", async () => {
@@ -255,7 +297,7 @@ describe("file library page", () => {
       if (init?.method === "POST") return Response.json(manual, { status: 201 });
       return Response.json({ files: [] });
     });
-    await waitFor(() => expect(screen.getByTestId("files-upload")).toBeEnabled());
+    await waitFor(() => expect(screen.getByTestId("files-dropzone")).toHaveAttribute("aria-disabled", "false"));
     pick(new File(["%PDF-"], "manual.pdf"));
     expect(await screen.findByRole("alert")).toHaveTextContent("Worker unavailable");
     expect(screen.getByTestId("library-file")).toHaveTextContent("manual.pdf");
@@ -264,7 +306,7 @@ describe("file library page", () => {
   it("does not upload without a knowledge base", async () => {
     const fetch = showFiles(() => Response.json({ files: [] }), ["another_kb"]);
     expect(await screen.findByRole("alert")).toHaveTextContent("Chưa có kho kiến thức mặc định");
-    expect(screen.getByTestId("files-upload")).toBeDisabled();
+    expect(screen.getByTestId("files-dropzone")).toHaveAttribute("aria-disabled", "true");
     pick(new File(["%PDF-"], "manual.pdf"));
     expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
   });
@@ -276,7 +318,7 @@ describe("file library page", () => {
       if (init?.method === "POST") return Response.json(manual, { status: 201 });
       return Response.json({ files: [] });
     });
-    await waitFor(() => expect(screen.getByTestId("files-upload")).toBeEnabled());
+    await waitFor(() => expect(screen.getByTestId("files-dropzone")).toHaveAttribute("aria-disabled", "false"));
     pick(new File(["%PDF-"], "manual.pdf"));
     expect(await screen.findByRole("alert")).toHaveTextContent("File đã có trong kho kiến thức");
     expect(screen.queryByRole("button", { name: "Đưa vào xử lý" })).toBeNull();

@@ -50,6 +50,8 @@ class DetectFileTypeTest(unittest.TestCase):
             ("photo.jpeg", JPEG, "image/jpeg"),
             ("report.docx", DOCX, DOCX_CONTENT_TYPE),
             ("sheet.xlsx", XLSX, XLSX_CONTENT_TYPE),
+            ("notes.txt", "Bước 1. Ngắt nguồn.".encode(), "text/plain"),
+            ("README.md", b"# Title\n\n- item", "text/markdown"),
         ]
         for filename, content, expected in cases:
             with self.subTest(filename=filename):
@@ -69,10 +71,29 @@ class DetectFileTypeTest(unittest.TestCase):
             ("report.xlsx", DOCX),
             ("broken.docx", b"PK\x03\x04 not really a zip"),
             ("empty-ish.pdf", b"%PD"),
+            ("binary.txt", b"MZ\x90\x00 executable"),
+            ("nul.md", b"text\x00more"),
+            ("latin1.txt", "café".encode("latin-1")),
+            ("truncated.txt", "é".encode()[:1]),
         ]
         for filename, content in cases:
             with self.subTest(filename=filename), self.assertRaises(UnsupportedFileType):
                 self.detect(filename, content)
+
+    def test_text_encodings_match_the_text_converter(self) -> None:
+        cases = [
+            ("bom.txt", b"\xef\xbb\xbfhello"),
+            ("utf16.txt", "Bước 1".encode("utf-16")),
+            ("utf16be.md", b"\xfe\xff" + "ok".encode("utf-16-be")),
+        ]
+        for filename, content in cases:
+            with self.subTest(filename=filename):
+                self.assertIn(self.detect(filename, content), {"text/plain", "text/markdown"})
+
+    def test_multibyte_character_across_a_read_chunk_is_not_damage(self) -> None:
+        content = ("a" * 7 + "ế" * 5).encode()
+        with mock.patch("backend.src.services.file_types._TEXT_CHUNK_BYTES", 8):
+            self.assertEqual(self.detect("chunk.txt", content), "text/plain")
 
     def test_damaged_archives_are_unsupported_not_server_errors(self) -> None:
         errors = [
@@ -88,7 +109,7 @@ class DetectFileTypeTest(unittest.TestCase):
                 self.detect("report.docx", DOCX)
 
     def test_unsupported_extensions_are_rejected(self) -> None:
-        for filename in ["notes.txt", "program.exe", "slides.pptx", "no-extension", "manual.pdf.exe", ".pdf"]:
+        for filename in ["notes.csv", "program.exe", "slides.pptx", "no-extension", "manual.pdf.exe", ".pdf"]:
             with self.subTest(filename=filename), self.assertRaises(UnsupportedFileType):
                 self.detect(filename, PDF)
 

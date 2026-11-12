@@ -123,7 +123,9 @@ describe("file library client", () => {
   it("refuses unsupported, empty and oversized files before sending", async () => {
     expect(checkFile(pdf("MANUAL.PDF"))).toBeNull();
     expect(checkFile(pdf("photo.jpeg"))).toBeNull();
-    expect(checkFile(pdf("notes.txt"))?.status).toBe(415);
+    expect(checkFile(pdf("notes.TXT"))).toBeNull();
+    expect(checkFile(pdf("README.md"))).toBeNull();
+    expect(checkFile(pdf("notes.csv"))?.status).toBe(415);
     expect(checkFile(pdf("program.pdf.exe"))?.status).toBe(415);
     expect(checkFile(pdf("empty.pdf", 0))?.status).toBe(422);
     const big = pdf("big.pdf");
@@ -131,7 +133,7 @@ describe("file library client", () => {
     expect(checkFile(big)?.status).toBe(413);
 
     const client = fakeClient([]);
-    expect((await rejection(uploadFile(client, pdf("notes.txt")))).status).toBe(
+    expect((await rejection(uploadFile(client, pdf("notes.csv")))).status).toBe(
       415,
     );
     expect(client.authorizedFetch).not.toHaveBeenCalled();

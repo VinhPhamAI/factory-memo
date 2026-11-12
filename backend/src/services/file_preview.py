@@ -2,16 +2,33 @@
 
 from pathlib import Path
 
-from backend.src.services.file_types import DOCX_CONTENT_TYPE, XLSX_CONTENT_TYPE
+import codecs
+
+from backend.src.services.file_types import (
+    DOCX_CONTENT_TYPE,
+    TEXT_CONTENT_TYPES,
+    XLSX_CONTENT_TYPE,
+    text_encoding,
+)
+
+EXCERPT_CHARS = 4000
+# Enough bytes for the excerpt even when every character takes four bytes.
+_EXCERPT_READ_BYTES = EXCERPT_CHARS * 4
 
 
 def create_file_preview(path: Path, content_type: str) -> tuple[bytes, str]:
-    """Render a first page or a short office-file text excerpt.
+    """Render a first page or a short text excerpt of an office, TXT or Markdown file.
 
     Raises:
         ValueError: The file cannot be previewed or has no readable content.
     """
     try:
+        if content_type in TEXT_CONTENT_TYPES:
+            with path.open("rb") as source:
+                raw = source.read(_EXCERPT_READ_BYTES)
+            # final=False drops a character cut off at the end of the read.
+            decoded = codecs.getincrementaldecoder(text_encoding(raw))().decode(raw, final=False)
+            return (decoded[:EXCERPT_CHARS].strip() or "Không có văn bản xem trước.").encode(), "text/plain; charset=utf-8"
         if content_type == DOCX_CONTENT_TYPE:
             from docx import Document
 

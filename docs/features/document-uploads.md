@@ -8,7 +8,7 @@ The original bytes are stored once in the personal library and are also read by
 KB processing. Files appear in the owner's library. If attachment fails, the
 file remains there; retrying attachment does not upload its bytes again.
 
-This tab accepts PDF, DOCX, XLSX, PNG and JPEG, with the same signature checks
+This tab accepts PDF, DOCX, XLSX, PNG, JPEG, TXT and Markdown, with the same signature checks
 and 100 MiB limit as the [file library](file-library.md). **Chỉ lưu** creates a
 raw KB source for later processing. **Auto** queues conversion and extraction.
 Extracted knowledge remains searchable as drafts, pending human review.

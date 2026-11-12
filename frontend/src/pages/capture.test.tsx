@@ -97,7 +97,7 @@ describe("document upload tab", () => {
     expect(screen.getByTestId("document-upload")).toBeDisabled();
     expect(screen.getByTestId("document-files")).toHaveAttribute(
       "accept",
-      ".pdf,.xlsx,.docx,.jpg,.jpeg,.png",
+      ".pdf,.xlsx,.docx,.jpg,.jpeg,.png,.txt,.md",
     );
 
     pick(new File(["pdf bytes"], "manual.pdf", { type: "application/pdf" }));
@@ -144,7 +144,7 @@ describe("document upload tab", () => {
     );
     const huge = new File(["bytes"], "large.pdf");
     Object.defineProperty(huge, "size", { value: 100 * 1024 * 1024 + 1 });
-    pick(new File([], "empty.pdf"), new File(["text"], "notes.txt"), huge);
+    pick(new File([], "empty.pdf"), new File(["a,b"], "notes.csv"), huge);
     fireEvent.click(screen.getByTestId("document-upload"));
     await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(3));
     expect(

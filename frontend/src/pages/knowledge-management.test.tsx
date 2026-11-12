@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, Outlet, RouterProvider } from "react-router-dom";
 import { KnowledgeNavigation } from "@/components/knowledge-navigation";
@@ -387,7 +387,7 @@ describe("knowledge management", () => {
     });
     fireEvent.click(screen.getByTestId("extract-source"));
     await screen.findByTestId("document-chunk");
-    expect(screen.getByText("1 mục chờ duyệt")).toBeInTheDocument();
+    expect(screen.queryByText("1 mục chờ duyệt")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Duyệt" }));
     await waitFor(() =>
       expect(screen.getByTestId("document-chunk")).toHaveAttribute(
@@ -700,6 +700,17 @@ describe("knowledge management", () => {
     expect(await screen.findByTestId("source-progress")).toHaveTextContent(
       "Đang chờ trích xuất",
     );
+    // The step the job is producing is marked; finished steps are not.
+    const steps = within(
+      screen.getByRole("list", { name: "Tiến trình nguồn dữ liệu" }),
+    );
+    expect(steps.getByText("Đang chờ trích xuất").closest("li")).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    expect(steps.getByText("Đã có văn bản").closest("li")).not.toHaveAttribute(
+      "aria-current",
+    );
     expect(screen.getByText(/Tự thử lại lúc/)).toHaveTextContent(
       "Lần thử 1/3 lỗi: Dịch vụ LLM không phản hồi",
     );
@@ -717,6 +728,11 @@ describe("knowledge management", () => {
       await screen.findByText(/Trích xuất lỗi \(lần thử 3\/3\)/),
     ).toBeInTheDocument();
     expect(screen.getByTestId("extract-source")).not.toBeDisabled();
+    expect(
+      within(screen.getByRole("list", { name: "Tiến trình nguồn dữ liệu" }))
+        .getByText("Đã trích xuất")
+        .closest("li"),
+    ).not.toHaveAttribute("aria-current");
   });
   it("reports identical content already extracted elsewhere instead of queueing it", async () => {
     const raw = rawText();

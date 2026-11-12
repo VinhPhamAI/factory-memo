@@ -10,6 +10,8 @@ export const ACCEPTED_EXTENSIONS = [
   ".jpg",
   ".jpeg",
   ".png",
+  ".txt",
+  ".md",
 ] as const;
 
 /** Public metadata of a file in the signed-in user's library. */
@@ -45,7 +47,7 @@ const MESSAGES: Record<number, string> = {
   404: "File không còn tồn tại.",
   411: "Trình duyệt không gửi kích thước file. Hãy thử trình duyệt khác.",
   413: "File quá lớn (tối đa 100 MiB).",
-  415: "Chỉ nhận PDF, XLSX, DOCX, JPEG, PNG và nội dung phải đúng với đuôi file.",
+  415: "Chỉ nhận PDF, XLSX, DOCX, JPEG, PNG, TXT, MD và nội dung phải đúng với đuôi file.",
   422: "File trống hoặc tên file không hợp lệ.",
   503: "Máy chủ tạm thời không xử lý được. Hãy thử lại sau.",
 };

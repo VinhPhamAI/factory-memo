@@ -23,7 +23,7 @@ test("upload and list own files; wrong types show an error", async ({
   const owner = await (await browser.newContext()).newPage();
   await signUpAndIn(owner, "File Owner");
   await expect(owner.getByTestId("files-empty")).toBeVisible();
-  await expect(owner.getByTestId("files-upload")).toBeEnabled();
+  await expect(owner.getByTestId("files-dropzone")).toHaveAttribute("aria-disabled", "false");
 
   await owner.getByTestId("files-input").setInputFiles([
     { name: "Hướng dẫn máy.pdf", mimeType: "application/pdf", buffer: pdf },

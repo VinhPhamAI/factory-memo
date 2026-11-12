@@ -227,7 +227,7 @@ function KnowledgeAdminWorkspace() {
                   : "Khi đặt làm mặc định, chỉ tài liệu tải lên sau đó vào kho này. Tài liệu cũ vẫn ở kho hiện tại."}
               </p>
               <KnowledgeBaseSettings
-                key={selectedItem.name}
+                key={`settings:${selectedItem.name}`}
                 name={selectedItem.name}
                 role="admin"
                 revision={revision}
@@ -236,7 +236,7 @@ function KnowledgeAdminWorkspace() {
                 onChanged={reload}
               />
               <KnowledgeBaseSourceList
-                key={selectedItem.name}
+                key={`sources:${selectedItem.name}`}
                 kb={selectedItem.name}
                 revision={revision}
                 returnTo={`/admin/knowledge-bases?kb=${encodeURIComponent(selectedItem.name)}`}

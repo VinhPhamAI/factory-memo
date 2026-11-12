@@ -108,8 +108,32 @@ const PROGRESS = {
   extract: ["Đang chờ trích xuất", "Đang trích xuất"],
   conflict: ["Chờ kiểm tra mâu thuẫn", "Đang kiểm tra mâu thuẫn"],
 };
+/**
+ * Scroll the panel holding `target` so the target sits in the middle of the
+ * part of the panel left visible below its sticky heading. Stacked layouts do
+ * not scroll the panel itself, so the page scrolls instead.
+ */
+function centerInPanel(target: HTMLElement, behavior: ScrollBehavior) {
+  const panel = target.closest<HTMLElement>(".vc-panel");
+  if (!panel || panel.scrollHeight <= panel.clientHeight) {
+    target.scrollIntoView({ behavior, block: "center" });
+    return;
+  }
+  const head = panel.querySelector<HTMLElement>(".vc-panel-head")?.offsetHeight ?? 0;
+  const area = panel.getBoundingClientRect();
+  const box = target.getBoundingClientRect();
+  const wanted = area.top + head + (area.height - head) / 2;
+  panel.scrollBy({ top: box.top + box.height / 2 - wanted, behavior });
+}
+
 const isRunning = (source: ManagedSource) =>
   ["queued", "running"].includes(source.processing.status ?? "");
+/** Lifecycle step a queued or running job is producing; -1 when none. */
+const activeStageIndex = (source: ManagedSource) => {
+  if (!isRunning(source)) return -1;
+  const stage = source.processing.job?.stage ?? "extract";
+  return stage === "convert" ? 1 : stage === "extract" ? 2 : -1;
+};
 const canExtract = (source: ManagedSource) =>
   source.kind !== "document" &&
   (source.stage === "converted" ||
@@ -1127,6 +1151,8 @@ export function KnowledgeSourcePage() {
     nonce: number;
   }>();
   const [mobileTab, setMobileTab] = useState("knowledge");
+  // Bumped on every evidence click so repeated clicks on one quote scroll again.
+  const [jump, setJump] = useState(0);
   const [audioObjectUrl, setAudioObjectUrl] = useState<string>();
   const audio = useRef<HTMLAudioElement>(null);
   const preview = useRef<HTMLPreElement>(null);
@@ -1140,6 +1166,31 @@ export function KnowledgeSourcePage() {
     setLocated(startLocated);
     setQuote(startLocated?.quote ?? "");
   }, [kb, kind, sourceId, startLocated]);
+
+  // Scroll after the highlight is rendered. Images in the located preview load
+  // later and push the text down, so re-center while they settle.
+  useEffect(() => {
+    const pre = preview.current;
+    if (!jump || !pre) return;
+    const panel = pre.closest<HTMLElement>(".vc-panel");
+    // Without a matching quote, show the top of the panel (located preview first).
+    const align = (behavior: ScrollBehavior) => {
+      const mark = pre.querySelector<HTMLElement>("mark");
+      if (mark) centerInPanel(mark, behavior);
+      else panel?.scrollTo({ top: 0, behavior });
+    };
+    align("smooth");
+    const settle = () => align("auto");
+    panel?.addEventListener("load", settle, true);
+    const stop = window.setTimeout(
+      () => panel?.removeEventListener("load", settle, true),
+      2000,
+    );
+    return () => {
+      window.clearTimeout(stop);
+      panel?.removeEventListener("load", settle, true);
+    };
+  }, [jump]);
 
   useEffect(() => {
     if (!audioConversationId || !audioAvailable) {
@@ -1310,14 +1361,14 @@ export function KnowledgeSourcePage() {
       });
     setQuote(evidence.quote);
     setMobileTab("transcript");
-    preview.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setJump((value) => value + 1);
   }
 
   function showLocated(reference: LocatedReference) {
     setLocated(reference);
     setQuote(reference.quote ?? "");
     setMobileTab("transcript");
-    preview.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setJump((value) => value + 1);
   }
 
   if (!validKind) return <Navigate to={back.to} replace />;
@@ -1338,6 +1389,12 @@ export function KnowledgeSourcePage() {
     );
 
   const running = isRunning(source);
+  const activeStage = activeStageIndex(source);
+  // While a job produces a step, name the work in progress ("Đang ...") instead of the result.
+  const activeLabel =
+    PROGRESS[source.processing.job?.stage === "convert" ? "convert" : "extract"][
+      source.processing.status === "queued" ? 0 : 1
+    ];
   const counts = { draft: 0, approved: 0, deprecated: 0 };
   for (const item of [...source.records, ...source.chunks])
     counts[item.status]++;
@@ -1410,27 +1467,26 @@ export function KnowledgeSourcePage() {
         {Object.entries(STAGES).map(([key, label], index) => (
           <li
             key={key}
-            className={
-              index <= ["raw", "converted", "extracted"].indexOf(source.stage)
-                ? "complete"
-                : ""
-            }
+            className={cn(
+              index <= ["raw", "converted", "extracted"].indexOf(source.stage) &&
+                "complete",
+              index === activeStage && "active",
+            )}
+            aria-current={index === activeStage ? "step" : undefined}
           >
             <span>{index + 1}</span>
-            {label}
+            {index === activeStage ? activeLabel : label}
           </li>
         ))}
       </ol>
       <section className="km-processing" aria-label="Xử lý nguồn dữ liệu">
         <ConflictJobNote processing={source.processing} />
         {source.stage === "extracted" ? (
-          <p>
-            <strong>
-              {counts.draft
-                ? `${counts.draft} mục chờ duyệt`
-                : REVIEWS[source.review]}
-            </strong>{" "}
-          </p>
+          counts.draft === 0 && (
+            <p>
+              <strong>{REVIEWS[source.review]}</strong>
+            </p>
+          )
         ) : (
           <>
             {running ? (

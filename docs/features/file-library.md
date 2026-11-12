@@ -62,9 +62,10 @@ Metadata fields: `id`, `filename`, `content_type`, `size_bytes`, `sha256`, `crea
 The internal storage location is never returned. The list has no pagination.
 Preview requires the same ownership as download and uses `private, no-store`.
 PDF and images render the first page as a PNG up to 480 pixels on the long
-edge. DOCX previews contain up to 30 paragraphs, and XLSX previews contain up
-to 15 rows and 8 columns from the active sheet; both are limited to 4,000
-characters. Corrupt or unreadable files return `422`.
+edge. DOCX previews contain up to 30 paragraphs, XLSX previews contain up
+to 15 rows and 8 columns from the active sheet, and TXT/Markdown previews
+contain the start of the file as plain text (not rendered Markdown); all are
+limited to 4,000 characters. Corrupt or unreadable files return `422`.
 
 | Code | Meaning |
 |---|---|
@@ -97,6 +98,8 @@ match one row. The server sets `content_type`; the browser's MIME type is ignore
 | `.png` | `image/png` | `89 50 4E 47 0D 0A 1A 0A` | |
 | `.docx` | Word Open XML | `PK` ZIP header | `word/document.xml` inside the archive |
 | `.xlsx` | Excel Open XML | `PK` ZIP header | `xl/workbook.xml` inside the archive |
+| `.txt` | `text/plain` | none | Whole file decodes as UTF-8 (BOM allowed) or BOM-marked UTF-16, with no NUL characters |
+| `.md` | `text/markdown` | none | Same as `.txt` |
 
 Limits:
 
@@ -104,7 +107,8 @@ Limits:
   browsers do this for form uploads. A request whose `Content-Length` exceeds the limit plus 1 MiB
   multipart overhead is refused before its body is read. The copy to disk also stops
   as soon as the limit is passed.
-- The check reads signatures only. It does not detect files damaged after the first bytes.
+- PDF and image checks read signatures only. They do not detect files damaged after the first bytes.
+  Text files are decoded in full, so a Latin-1 or otherwise non-UTF-8 text file is refused with `415`.
   A PDF must start with `%PDF-` at byte 0; PDFs with leading junk bytes are refused.
 - A damaged DOCX/XLSX archive is refused with `415`, never a server error.
 - Identical files uploaded twice are stored as two separate files.
@@ -168,7 +172,8 @@ Without `APP_DATABASE_URL`, the API starts, but file library routes return `503`
 
 The **Thư viện tài liệu** navigation link opens `/files`:
 
-- **Tải tài liệu lên** uploads one or more files to the default KB. Each new
+- Drag files onto the upload area or click **chọn từ máy** to upload one or more
+  files to the default KB. Each new
   source requests knowledge processing. Upload and queue success appear as a
   popup; attachment, duplicate and queue problems appear on the file row. The
   browser refuses unsupported extensions, empty files and files over 100 MiB
@@ -184,11 +189,11 @@ The **Thư viện tài liệu** navigation link opens `/files`:
   | PDF | Bounded first-page preview (**Trang đầu**) | **Mở PDF**, **Tải xuống** |
   | PNG/JPEG up to 12 MiB | Original bytes (**Ảnh gốc**) | **Tải xuống** |
   | PNG/JPEG over 12 MiB | Bounded preview (**Ảnh thu nhỏ**) | **Mở ảnh gốc**, **Tải xuống** |
-  | DOCX/XLSX | Server text excerpt (**Trích đoạn**), partial content only | **Tải xuống** |
+  | DOCX/XLSX/TXT/MD | Server text excerpt (**Trích đoạn**), partial content only | **Tải xuống** |
 
   A `422` preview response shows that the file has no preview; it can still be
   downloaded.
-- **Mở tệp gốc** opens PDF and images in a new tab; Office files download because
+- **Mở tệp gốc** opens PDF and images in a new tab; Office and text files download because
   browsers do not natively display them. **Tải xuống** saves the original.
   Each card shows the latest processing status and a **Xem chi tiết** link to the
   source details; the menu also has **Mở chi tiết tri thức** (one entry per KB when

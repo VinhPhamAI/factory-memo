@@ -85,7 +85,7 @@ test("employee submits a file-backed inquiry; expert asks, employee replies, exp
     // Employee adds the evidence file to the library.
     await signIn(employeePage, employee, employeeName, "/files");
     // Uploads start only after the page has loaded the default knowledge base.
-    await expect(employeePage.getByTestId("files-upload")).toBeEnabled();
+    await expect(employeePage.getByTestId("files-dropzone")).toHaveAttribute("aria-disabled", "false");
     await employeePage.getByTestId("files-input").setInputFiles({
       name: fileName,
       mimeType: "application/pdf",

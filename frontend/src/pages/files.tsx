@@ -4,7 +4,6 @@ import {
   FolderOpen,
   Loader2,
   Trash2,
-  CloudUpload,
   Search,
   MoreHorizontal,
   ExternalLink,
@@ -20,6 +19,7 @@ import { listConfiguredKnowledgeBases } from "@/services/knowledge-api";
 import type { KnowledgeBase } from "@/types";
 import { FilePreview } from "@/components/file-preview";
 import { LibraryFileDialog } from "@/components/library-file-dialog";
+import { LibraryDropzone, type UploadProgress } from "@/components/library-dropzone";
 import { listManagedSources, removeManagedSource, sourceLink, sourceProcessingLabel, type ManagedSource } from "@/services/knowledge-management";
 import {
   ACCEPTED_EXTENSIONS,
@@ -50,6 +50,8 @@ const TYPE_LABELS: Record<string, string> = {
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
     "DOCX",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX",
+  "text/plain": "TXT",
+  "text/markdown": "MD",
 };
 
 const messageOf = (error: unknown) =>
@@ -71,6 +73,9 @@ export function FilesPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const [storedCount, setStoredCount] = useState(0);
+  const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [defaultKb, setDefaultKb] = useState("");
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
@@ -153,9 +158,16 @@ export function FilesPage() {
       return next;
     });
 
+  /** Flag a stored file so its card animates in, then clear the flag. */
+  const markFresh = (id: string) => {
+    setFreshIds((current) => new Set(current).add(id));
+    setTimeout(() => setFreshIds((current) => { const next = new Set(current); next.delete(id); return next; }), 2500);
+  };
+
   async function upload(selected: File[]) {
     if (!kbReady || uploading) return;
     setUploading(true);
+    setStoredCount(0);
     try {
       const current = await listConfiguredKnowledgeBases(new AbortController().signal, client);
       if (!current.some((item) => item.name === defaultKb && item.is_default)) {
@@ -169,18 +181,27 @@ export function FilesPage() {
       setUploading(false);
       return;
     }
-    for (const file of selected) {
-      let stored: LibraryFile;
+    let stored = 0;
+    for (const [index, file] of selected.entries()) {
+      setProgress({ done: index, total: selected.length, name: file.name });
+      let saved: LibraryFile;
       try {
-        stored = await uploadFile(client, file);
-        setFiles((current) => [stored, ...current]);
+        saved = await uploadFile(client, file);
+        setFiles((current) => [saved, ...current]);
+        markFresh(saved.id);
+        stored += 1;
       } catch (error) {
         toasts.show("error", `“${file.name}”: ${messageOf(error)}`);
         continue;
       }
-      await queueFile(stored, defaultKb);
+      await queueFile(saved, defaultKb);
     }
+    setProgress(null);
     setUploading(false);
+    if (stored) {
+      setStoredCount(stored);
+      setTimeout(() => setStoredCount(0), 2800);
+    }
   }
 
   async function queueFile(file: LibraryFile, targetKb: string) {
@@ -245,15 +266,6 @@ export function FilesPage() {
             <Search size={18} aria-hidden="true" />
             <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm tài liệu" aria-label="Tìm tài liệu" />
           </label>
-          <Button
-            className="files-upload-button"
-            onClick={() => input.current?.click()}
-            disabled={uploading || !kbReady}
-            data-testid="files-upload"
-          >
-            {uploading ? <Loader2 className="animate-spin" /> : <CloudUpload />}
-            Tải tài liệu lên
-          </Button>
           <input
             ref={input}
             type="file"
@@ -269,6 +281,13 @@ export function FilesPage() {
           />
         </div>
       </header>
+      <LibraryDropzone
+        disabled={!kbReady}
+        progress={progress}
+        storedCount={storedCount}
+        onFiles={(dropped) => void upload(dropped)}
+        onBrowse={() => input.current?.click()}
+      />
       {kbError && <p className="vc-notice error" role="alert">{kbError}</p>}
       {sourcesError && <p className="vc-notice error" role="alert">{sourcesError}</p>}
 
@@ -286,7 +305,7 @@ export function FilesPage() {
         <div className="km-empty" data-testid="files-empty">
           <FolderOpen size={32} />
           <h2>Chưa có file nào</h2>
-          {kbReady && <p>Bấm “Tải tài liệu lên” để thêm tài liệu đầu tiên.</p>}
+          {kbReady && <p>Tài liệu bạn tải lên sẽ xuất hiện ở đây.</p>}
         </div>
       ) : (
         <section className="library-recent" aria-labelledby="library-recent-title">
@@ -295,7 +314,7 @@ export function FilesPage() {
           {!files.some((file) => file.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && <p className="vc-muted">Không tìm thấy file phù hợp.</p>}
         <ul className="library-grid">
           {files.filter((file) => file.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map((file) => (
-            <li className="library-card" key={file.id} data-testid="library-file">
+            <li className={`library-card${freshIds.has(file.id) ? " is-new" : ""}`} key={file.id} data-testid="library-file">
               <div className="library-card-image">
                 {/* Pointer shortcut; the filename button is the keyboard target. */}
                 <div className="library-preview-target" onClick={() => setPreviewFile(file)}>

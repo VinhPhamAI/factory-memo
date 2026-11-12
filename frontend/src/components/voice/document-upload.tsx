@@ -144,7 +144,7 @@ export function DocumentUpload({
         />
         <small id="document-upload-help">
           {libraryClient
-            ? "PDF, XLSX, DOCX, JPEG, PNG."
+            ? "PDF, XLSX, DOCX, JPEG, PNG, TXT, MD."
             : "PDF, hình ảnh, TXT, PPTX, DOCX, XLSX và các loại file khác."}{" "}
           Có thể chọn nhiều lần để thêm file vào danh sách, tối đa 100 MiB mỗi
           file.

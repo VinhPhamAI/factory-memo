@@ -328,6 +328,21 @@ class OfflineFileApiTest(OfflineLibrary):
                 self.assertEqual(preview.status_code, 200, preview.text)
                 self.assertIn(expected, preview.text)
 
+    def test_text_files_are_accepted_and_previewed(self) -> None:
+        self.library.max_bytes = 100_000
+        for name, content, content_type in [
+            ("notes.txt", "Bước 1. Ngắt nguồn.".encode(), "text/plain"),
+            ("README.MD", "# Quy trình\n\nKiểm tra áp suất.".encode("utf-8-sig"), "text/markdown"),
+        ]:
+            with self.subTest(name=name):
+                created = self.client.post("/v1/files", headers=ALICE_HEADERS, files={"file": (name, content, "application/octet-stream")})
+                self.assertEqual(created.status_code, 201, created.text)
+                self.assertEqual(created.json()["content_type"], content_type)
+                preview = self.client.get(f"/v1/files/{created.json()['id']}/preview", headers=ALICE_HEADERS)
+                self.assertEqual(preview.status_code, 200, preview.text)
+                self.assertTrue(preview.headers["content-type"].startswith("text/plain"))
+                self.assertEqual(preview.text, content.decode("utf-8-sig"))
+
 
 class UnconfiguredFileLibraryTest(unittest.TestCase):
     def test_signed_in_requests_report_unavailable_without_a_service(self) -> None:
@@ -458,7 +473,9 @@ class FileLibraryApiTest(PostgresAuthTest):
     def test_rejected_uploads_leave_nothing_stored(self) -> None:
         cases = [
             ("program.pdf", b"MZ\x90\x00 executable", 415),
-            ("notes.txt", b"plain text", 415),
+            ("notes.csv", b"a,b", 415),
+            ("binary.txt", b"MZ\x00\x90 executable", 415),
+            ("latin1.md", "caf\xe9".encode("latin-1"), 415),
             ("archive.docx", b"PK\x03\x04 not a zip", 415),
             ("empty.pdf", b"", 422),
             ("big.pdf", PDF + b"x" * MAX_TEST_BYTES, 413),
