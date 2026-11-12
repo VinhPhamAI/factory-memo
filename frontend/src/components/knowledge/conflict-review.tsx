@@ -91,21 +91,7 @@ export function ConflictJobNote({
         Kiểm tra mâu thuẫn lỗi: {job.error || "Không rõ nguyên nhân"}
       </p>
     );
-  const result = processing.conflicts;
-  if (!result)
-    return job?.status === "done" ? (
-      <p className="vc-muted">Đã kết thúc job kiểm tra mâu thuẫn.</p>
-    ) : null;
-  const count =
-    (result.open ?? 0) + (result.pending ?? 0) + (result.needs_review ?? 0);
-  return (
-    <p className="vc-muted">
-      Đã kiểm tra mâu thuẫn · {count} cặp cần xem xét tại lần kiểm tra này.
-      {result.truncated
-        ? " Đã chạm giới hạn số cặp; kết quả chưa bao phủ tất cả ứng viên."
-        : ""}
-    </p>
-  );
+  return null;
 }
 
 function RecordSide({

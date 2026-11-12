@@ -357,7 +357,7 @@ describe("conflict review", () => {
     expect(fetchMock).toHaveBeenCalledTimes(calls);
   });
 
-  it("shows conflict job failures independently of completed extraction", () => {
+  it("shows active or failed conflict jobs but hides completed summaries", () => {
     const job = {
       stage: "conflict",
       status: "failed",
@@ -393,8 +393,6 @@ describe("conflict review", () => {
         }}
       />,
     );
-    expect(screen.getByText(/3 cặp cần xem xét/)).toHaveTextContent(
-      "chưa bao phủ tất cả ứng viên",
-    );
+    expect(screen.queryByText(/cặp cần xem xét/)).not.toBeInTheDocument();
   });
 });

@@ -21,14 +21,14 @@ from backend.src.storage.repositories.base import Repository, violated_constrain
 
 
 CATALOG_CHANNEL = "knowledge_base_catalog"
-NAME_UNIQUE_CONSTRAINT = "uq_knowledge_bases_name"
+ACTIVE_NAME_UNIQUE_INDEX = "ux_knowledge_bases_active_name"
 # Serializes the limit check and the insert of concurrent creations.
 _CREATE_LOCK_KEY = "knowledge_bases:create"
 _DEFAULT_LOCK_KEY = "knowledge_bases:default"
 
 
 class KnowledgeBaseNameTaken(ValueError):
-    """Another knowledge base, possibly a deleted one, already uses the name."""
+    """Another active knowledge base already uses the name."""
 
 
 class KnowledgeBaseLimitReached(ValueError):
@@ -182,7 +182,7 @@ class KnowledgeBaseRepository(Repository):
             The created knowledge base.
 
         Raises:
-            KnowledgeBaseNameTaken: The name is used, including by a deleted one.
+            KnowledgeBaseNameTaken: The name is used by an active knowledge base.
             KnowledgeBaseLimitReached: `limit` active knowledge bases already exist.
             KnowledgeStorageUnavailable: The database could not be reached.
         """
@@ -213,7 +213,7 @@ class KnowledgeBaseRepository(Repository):
                 session.add(row)
                 await self._notify(session, name)
         except IntegrityError as exc:
-            if violated_constraint(exc) == NAME_UNIQUE_CONSTRAINT:
+            if violated_constraint(exc) == ACTIVE_NAME_UNIQUE_INDEX:
                 raise KnowledgeBaseNameTaken(name) from exc
             raise
         return _entry(row)

@@ -151,7 +151,7 @@ class LibraryConversionTests(unittest.IsolatedAsyncioTestCase):
                 content = document.tobytes()
             key = store.library.publish(store.library.save_temp(io.BytesIO(content), max_bytes=100_000))
             source = SimpleNamespace(
-                id=uuid4(), extracted_text=None, metadata={},
+                id=uuid4(), title="manual.pdf", extracted_text=None, metadata={},
                 file=SimpleNamespace(storage_key=key, filename="manual.pdf", content_type="application/pdf"),
             )
 

@@ -105,7 +105,7 @@ def record(**values) -> KnowledgeRecord:
 
 @unittest.skipUnless(DATABASE_URL, "TEST_DATABASE_URL is not set")
 class KnowledgeBaseRepositoryTest(RepositoryTest):
-    async def test_names_stay_taken_after_soft_deletion(self) -> None:
+    async def test_active_names_conflict_and_deleted_names_can_be_reused(self) -> None:
         repository = KnowledgeBaseRepository(self.sessions)
         created = await repository.create(
             name="line_a", title="Line A", description="", template="general", created_by=self.user.id
@@ -120,9 +120,12 @@ class KnowledgeBaseRepositoryTest(RepositoryTest):
                          .values(deleted_at=datetime.now(timezone.utc)))
         self.assertIsNone(await repository.get_by_name("line_a"))
         self.assertNotIn("line_a", [entry.name for entry in await repository.list_active()])
-        with self.assertRaises(KnowledgeBaseNameTaken):
-            await repository.create(name="line_a", title="Again", description="", template="general",
-                                    created_by=self.user.id)
+        recreated = await repository.create(
+            name="line_a", title="Again", description="", template="general",
+            created_by=self.user.id,
+        )
+        self.assertNotEqual(recreated.id, created.id)
+        self.assertEqual((recreated.name, recreated.title), ("line_a", "Again"))
 
     async def test_detail_counts_source_status_and_chunk_kind(self) -> None:
         """Include zero-filled counts, grouped by status and chunk kind."""

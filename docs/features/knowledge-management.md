@@ -30,8 +30,10 @@ source download returns `404` after removal.
    mới** shows the current default.
 2. Choose **Tạo kho kiến thức**, or select a KB to inspect its counts. **Sửa thông
    tin** edits its title and description; **Xóa kho** deletes it. The stable code
-   cannot be changed. The code, template, creator and dates are under **Chi tiết
-   kỹ thuật**.
+   cannot be changed while that KB exists. After deleting a KB, its code can be
+   used for a newly created KB; the deleted KB and its content remain preserved
+   under their original database ID. The code, template, creator and dates are
+   under **Chi tiết kỹ thuật**.
 3. Choose **Đặt làm mặc định** to direct future library uploads to that KB.
    Select another default before deleting the current default.
 
@@ -118,8 +120,7 @@ uploads can be downloaded as authenticated attachments.
 ## Extraction modes
 
 Choose a mode **per source**, before extraction. On the source page the choice
-is under the **Cách trích xuất: …** disclosure; the KB and source IDs, kind, content
-type, stage and mode are under **Chi tiết kỹ thuật**. On phones, the
+is under the **Cách trích xuất: …** disclosure. On phones, the
 **Bằng chứng gốc** and **Kiến thức trích xuất** tabs switch between the evidence
 and the results.
 

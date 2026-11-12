@@ -152,7 +152,9 @@ class ApplicationKnowledgeManagementTest(unittest.IsolatedAsyncioTestCase):
 
         inventory = await manager.inventory("factory")
         self.assertEqual([item["kind"] for item in inventory["sources"]], ["upload", "upload", "conversation"])
+        self.assertEqual(inventory["sources"][0]["file_id"], str(uploaded_file.id))
         self.assertEqual(inventory["sources"][0]["file_sha256"], uploaded_file.sha256)
+        self.assertIsNone(inventory["sources"][2]["file_id"])
         self.assertIsNone(inventory["sources"][2]["file_sha256"])
         knowledge = await manager.detail("factory", "upload", str(upload_id))
         documents = await manager.detail("factory", "document", str(document_id))

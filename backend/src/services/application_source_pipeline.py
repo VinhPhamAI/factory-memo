@@ -24,6 +24,7 @@ from backend.api.voice_capture import default_ingestion_factory
 from backend.src.agents.rag import Document, chunk_document
 from backend.src.agents.rag.indexing import index_config
 from backend.src.services.converters import ConverterError, Segment, convert_file
+from backend.src.services.demo.knowledge_extraction import load_demo_knowledge_extraction
 from backend.src.services.knowledge_conflicts import link_updates, stale
 from backend.src.services.knowledge_ingestion import transcript_sha256
 from backend.src.services.located_evidence import (
@@ -349,24 +350,40 @@ class ApplicationSourcePipeline:
         _kb_name, _spec, source = await self._source(job)
         if source.file is None:
             raise JobFailed("Chỉ file tải lên cần bước chuyển đổi.")
+        demo = load_demo_knowledge_extraction(source.title, source.file.content_type)
         if source.extracted_text is None:
-            try:
-                converted = await convert_file(
-                    self.uploads.content_path(source.file.storage_key),
-                    source.file.content_type,
-                    source.file.filename,
-                )
-            except ConverterError as exc:
-                raise JobFailed(exc.message, retry=exc.retry) from exc
-            text = converted.text
-            conversion: dict[str, Any] = {
-                "converter": converted.converter,
-                "version": 1,
-                "sha256": hashlib.sha256(text.encode()).hexdigest(),
-                "at": now(),
-                "details": converted.details,
-                "segments": [segment.to_json() for segment in converted.segments],
-            }
+            if demo is not None:
+                await asyncio.sleep(demo.timing.conversion_seconds)
+                text = demo.text
+                conversion: dict[str, Any] = {
+                    "converter": "demo_artifact",
+                    "version": 1,
+                    "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                    "at": now(),
+                    "details": {
+                        "demo": True,
+                        "configured_title": demo.title,
+                    },
+                    "segments": [],
+                }
+            else:
+                try:
+                    converted = await convert_file(
+                        self.uploads.content_path(source.file.storage_key),
+                        source.file.content_type,
+                        source.file.filename,
+                    )
+                except ConverterError as exc:
+                    raise JobFailed(exc.message, retry=exc.retry) from exc
+                text = converted.text
+                conversion = {
+                    "converter": converted.converter,
+                    "version": 1,
+                    "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                    "at": now(),
+                    "details": converted.details,
+                    "segments": [segment.to_json() for segment in converted.segments],
+                }
             source = await self.sources.update(
                 job.knowledge_base_id,
                 job.source_id,
@@ -473,6 +490,11 @@ class ApplicationSourcePipeline:
         if source.extracted_text is None:
             raise JobFailed("File chưa được chuyển đổi sang văn bản.")
         text = source.extracted_text
+        demo = (
+            load_demo_knowledge_extraction(source.title, source.file.content_type)
+            if source.file is not None and mode == "knowledge"
+            else None
+        )
         if await self.chunks.has_results(job.knowledge_base_id, source.id, mode):
             runs = ExtractionRunRepository(self.sessions, job.knowledge_base_id)
             for run in await runs.for_source(source.id):
@@ -544,10 +566,20 @@ class ApplicationSourcePipeline:
         if confirmation:
             state["overlap_confirmed"] = True
 
-        store = self._store(job.knowledge_base_id, source, spec, defer_writes=True)
-        if mode == "knowledge":
-            ingestion, settings = self._ingestion_factory(spec, store)
+        store = None
+        if demo is not None:
+            settings = {
+                "version": 1,
+                "demo_artifact": demo.title,
+                "artifact_sha256": hashlib.sha256(demo.text.encode()).hexdigest(),
+                "records": len(demo.records),
+            }
         else:
+            store = self._store(job.knowledge_base_id, source, spec, defer_writes=True)
+        if mode == "knowledge" and demo is None:
+            ingestion, settings = self._ingestion_factory(spec, store)
+        elif mode != "knowledge":
+            assert store is not None
             ingestion, settings = None, index_config(spec.chunking)
         embedding_model = embedding_model_from_env()
         # Recorded so a later model change is detected before searching or ingesting.
@@ -570,6 +602,7 @@ class ApplicationSourcePipeline:
             raise JobFailed(str(exc)) from exc
 
         run: ExtractionRun | None = None
+        write_chunks: Callable[..., Any] | None = None
         try:
             try:
                 run = await runs.start(
@@ -588,7 +621,25 @@ class ApplicationSourcePipeline:
                 source.id,
                 metadata={"management": state, "content_sha256": digest},
             )
-            if mode == "knowledge":
+            if demo is not None:
+                await asyncio.sleep(demo.timing.extraction_seconds)
+                records, references = demo.instantiate(source.id)
+                write_chunks = partial(
+                    self.chunks.add_records_and_updates,
+                    job.knowledge_base_id,
+                    source.id,
+                    records,
+                    leading_keys=spec.embedding_context_keys,
+                    references_by_record=references,
+                )
+                state.update(
+                    stored=len(records),
+                    merged=[],
+                    consolidation={"demo_artifact": demo.title},
+                    demo_artifact=demo.title,
+                )
+            elif mode == "knowledge":
+                assert store is not None
                 conversation = RawConversation(
                     id=source.id,
                     transcript=text,
@@ -608,7 +659,9 @@ class ApplicationSourcePipeline:
                     } for record in result.merged],
                     consolidation=result.consolidation,
                 )
+                write_chunks = store.write_chunks
             else:
+                assert store is not None
                 passages = chunk_document(
                     Document(
                         id=str(source.id),
@@ -627,7 +680,7 @@ class ApplicationSourcePipeline:
                     text,
                     segments_from_metadata(source.metadata),
                 )
-                store.write_chunks = partial(
+                write_chunks = partial(
                     self.chunks.add_passages,
                     job.knowledge_base_id,
                     source.id,
@@ -656,8 +709,8 @@ class ApplicationSourcePipeline:
         async def persist(session: AsyncSession) -> None:
             """Store chunks and finish the extraction with the job's transaction."""
 
-            if store.write_chunks is not None:
-                await store.write_chunks(session=session)
+            if write_chunks is not None:
+                await write_chunks(session=session)
             await runs.finish(
                 run.id, "done", session=session,
                 result={"stored": state.get("stored", 0), "job_id": str(job.id)},
@@ -676,6 +729,10 @@ class ApplicationSourcePipeline:
         """Judge suspected conflicts and return the summary for the job result."""
 
         _kb_name, spec, source = await self._source(job)
+        if source.file is not None and load_demo_knowledge_extraction(
+            source.title, source.file.content_type
+        ) is not None:
+            return {"skipped": "scripted demo extraction"}
         detector = spec.conflict_factory(spec) if spec.conflict_factory is not None else None
         if detector is None:
             return {"skipped": "conflict detection disabled"}

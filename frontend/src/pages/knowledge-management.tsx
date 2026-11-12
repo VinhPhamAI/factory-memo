@@ -1739,39 +1739,6 @@ export function KnowledgeSourcePage() {
           </div>
         </>
       )}
-      <details className="km-technical" data-testid="source-technical">
-        <summary>Chi tiết kỹ thuật</summary>
-        <dl className="km-kb-metadata">
-          <div>
-            <dt>Kho</dt>
-            <dd>
-              <code>{kb}</code>
-            </dd>
-          </div>
-          <div>
-            <dt>Mã nguồn</dt>
-            <dd>
-              <code>{source.id}</code>
-            </dd>
-          </div>
-          <div>
-            <dt>Loại nguồn</dt>
-            <dd>{source.kind}</dd>
-          </div>
-          <div>
-            <dt>Định dạng</dt>
-            <dd>{source.content_type ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Giai đoạn</dt>
-            <dd>{source.stage}</dd>
-          </div>
-          <div>
-            <dt>Cách trích xuất</dt>
-            <dd>{source.mode ?? "—"}</dd>
-          </div>
-        </dl>
-      </details>
     </main>
   );
 }

@@ -337,6 +337,14 @@ class Phase7ApiTest(MigratedDatabaseTest):
                          .json()["knowledge_bases"], [])
         self.assertEqual(qa.post("/v1/knowledge-agent/factory/stream", headers=employee,
                                  json={"query": "Pump?", "thread_id": "phase7"}).status_code, 404)
-        self.assertEqual(api.post("/v1/knowledge-bases", headers=expert, json={
-            "name": "factory", "title": "Name is reserved",
-        }).status_code, 409)
+        recreated = api.post("/v1/knowledge-bases", headers=expert, json={
+            "name": "factory", "title": "Recreated factory",
+        })
+        self.assertEqual(recreated.status_code, 201, recreated.text)
+        self.assertEqual(recreated.json()["name"], "factory")
+        with Session(self.engine) as session:
+            rows = session.scalars(select(KnowledgeBase).where(
+                KnowledgeBase.name == "factory",
+            )).all()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(sum(row.deleted_at is None for row in rows), 1)

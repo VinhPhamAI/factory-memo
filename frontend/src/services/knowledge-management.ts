@@ -96,6 +96,8 @@ export interface ManagedSource {
   kind: SourceKind;
   name: string;
   content_type: string;
+  /** Exact stored file row used by this source; null for text sources. */
+  file_id?: string | null;
   file_sha256?: string | null;
   created_at: string | null;
   stage: "raw" | "converted" | "extracted";

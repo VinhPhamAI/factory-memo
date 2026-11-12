@@ -7,7 +7,7 @@ import { CapturePage } from "./capture";
 import { FilesPage } from "./files";
 
 const kbs = {
-  knowledge_bases: [{ name: "general", description: "General knowledge" }],
+  knowledge_bases: [{ name: "general", description: "General knowledge", is_default: true }],
 };
 
 function showCapture() {
@@ -77,6 +77,15 @@ describe("document upload tab", () => {
         };
         stored.push(result);
         return Response.json(result, { status: 201 });
+      }
+      // The library lists files through their sources in the default KB.
+      if (url.includes("/knowledge-management/general/sources?offset=")) {
+        return Response.json({
+          sources: [{ id: "s1", kb: "general", kind: "upload", name: "x", file_sha256: "a".repeat(64), stage: "raw", review: "none", processing: { status: "queued" } }],
+          next_offset: null,
+          warnings: [],
+          qa_mode: "knowledge",
+        });
       }
       throw new Error(`Unexpected request: ${url}`);
     });

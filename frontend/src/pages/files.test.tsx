@@ -25,7 +25,7 @@ const manual: LibraryFile = {
 type Handler = (url: string, init?: RequestInit) => Response;
 
 /** Render the page with a client whose requests are answered by `handler`. */
-const source = { id: "s1", kb: "knowledge_base_seed1", kind: "upload", name: "manual.pdf", file_sha256: manual.sha256, stage: "raw", review: "none", processing: { status: "queued" } };
+const source = { id: "s1", kb: "knowledge_base_seed1", kind: "upload", name: "manual.pdf", file_id: manual.id, file_sha256: manual.sha256, stage: "raw", review: "none", processing: { status: "queued" } };
 
 function showFiles(handler: Handler, kbNames = ["knowledge_base_seed1"], sourceItems = [source]) {
   const authorizedFetch = vi.fn(async (url: string, init?: RequestInit) =>
@@ -84,13 +84,14 @@ describe("library file preview", () => {
     URL.revokeObjectURL ??= () => {};
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const sourceItems = items.map((item) => ({ ...source, id: `s-${item.id}`, name: item.filename, file_id: item.id, file_sha256: item.sha256 }));
     showFiles((url) => {
       requested.push(url);
       const id = url.match(/\/v1\/files\/([^/]+)\//)?.[1];
       if (url.endsWith("/preview") && id) return preview(id);
       if (url.endsWith("/content")) return pngResponse();
       return Response.json({ files: items });
-    });
+    }, ["knowledge_base_seed1"], sourceItems);
     return requested;
   }
 
@@ -190,7 +191,12 @@ describe("file library page", () => {
   });
 
   it("filters library cards by filename", async () => {
-    showFiles(() => Response.json({ files: [manual, { ...manual, id: "file-2", filename: "pump.xlsx" }] }));
+    const pump = { ...manual, id: "file-2", filename: "pump.xlsx", sha256: "b".repeat(64) };
+    showFiles(
+      () => Response.json({ files: [manual, pump] }),
+      ["knowledge_base_seed1"],
+      [source, { ...source, id: "s2", name: pump.filename, file_id: pump.id, file_sha256: pump.sha256 }],
+    );
     expect(await screen.findAllByTestId("library-file")).toHaveLength(2);
     fireEvent.change(screen.getByRole("searchbox", { name: "Tìm tài liệu" }), { target: { value: "PUMP" } });
     expect(screen.getAllByTestId("library-file")).toHaveLength(1);
@@ -347,14 +353,27 @@ describe("file library page", () => {
     expect(await screen.findByRole("menuitem", { name: "Mở chi tiết tri thức" })).toHaveAttribute("href", href);
   });
 
-  it("keeps an older KB source visible after the Library default changes", async () => {
-    const prior = { ...source, kb: "another_kb" };
-    showFiles(() => Response.json({ files: [manual] }), ["knowledge_base_seed1", "another_kb"], [prior]);
+  it("separates identical uploads that belong to different KBs", async () => {
+    const other = { ...manual, id: "file-9", filename: "other-kb.pdf" };
+    const unattached = { ...manual, id: "file-8", filename: "no-source.pdf", sha256: "8".repeat(64) };
+    const elsewhere = { ...source, id: "s9", kb: "another_kb", name: "other-kb.pdf", file_id: other.id };
+    showFiles(() => Response.json({ files: [manual, other, unattached] }), ["knowledge_base_seed1", "another_kb"], [source, elsewhere]);
+    const cards = await screen.findAllByTestId("library-file");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveTextContent("manual.pdf");
+    expect(screen.getByRole("heading", { name: /Kho knowledge_base_seed1/ })).toBeInTheDocument();
+    expect(screen.queryByText("other-kb.pdf")).not.toBeInTheDocument();
+    expect(screen.queryByText("no-source.pdf")).not.toBeInTheDocument();
+  });
+
+  it("still shows a default-KB file's other-KB sources in its state dialog", async () => {
+    const prior = { ...source, id: "s2", kb: "another_kb" };
+    showFiles(() => Response.json({ files: [manual] }), ["knowledge_base_seed1", "another_kb"], [source, prior]);
     await screen.findByTestId("library-file");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Tùy chọn manual.pdf" }));
     await user.click(await screen.findByRole("menuitem", { name: "Trạng thái xử lý" }));
-    expect(await screen.findByText(/Kho another_kb/)).toBeInTheDocument();
+    expect(await screen.findByText(/kho another_kb/)).toBeInTheDocument();
   });
 
   it("selects files and removes their knowledge source without deleting the library file", async () => {
@@ -364,7 +383,7 @@ describe("file library page", () => {
     await user.click(screen.getByRole("button", { name: "Chọn manual.pdf" }));
     expect(screen.getByText("Đã chọn 1 file")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Gỡ khỏi kho kiến thức" }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent("File vẫn còn trong Thư viện tài liệu");
+    expect(await screen.findByRole("dialog")).toHaveTextContent("File gốc vẫn được lưu trong tài khoản của bạn");
     await user.click(screen.getByTestId("files-confirm-delete"));
     await waitFor(() => expect(fetch.mock.calls.some(([url, init]) => url.endsWith("/sources/upload/s1") && init?.method === "DELETE")).toBe(true));
     expect(screen.getByTestId("library-file")).toBeInTheDocument();

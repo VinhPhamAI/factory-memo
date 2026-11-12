@@ -6109,6 +6109,10 @@ button.ref-chip:hover,
   font-size: 13px;
   font-weight: 600;
 }
+.library-kb {
+  font-weight: 500;
+  color: #7a8ba1;
+}
 .library-grid {
   grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
   gap: 22px 18px;
@@ -6342,16 +6346,16 @@ button.ref-chip:hover,
 /* Files were stored. */
 .library-drop[data-state="done"] {
   border-style: solid;
-  border-color: var(--fm-green-line);
-  background: var(--fm-green-soft);
+  border-color: #8fb2e6;
+  background: #eaf3ff;
 }
 .library-drop[data-state="done"] .library-drop-icon {
-  background: var(--ok);
+  background: var(--fm-focus);
   color: #fff;
   animation: library-drop-pop 0.4s var(--drop-ease);
 }
 .library-drop[data-state="done"] .library-drop-text strong {
-  color: var(--fm-green-ink);
+  color: #175eac;
 }
 .library-drop[data-state="disabled"] {
   border-color: var(--fm-line);
@@ -6389,7 +6393,7 @@ button.ref-chip:hover,
     transform: scale(1);
   }
 }
-/* A freshly stored file rises in and its preview flashes green once. */
+/* A freshly stored file rises in and its preview flashes blue once. */
 .library-card.is-new {
   animation: library-drop-in 0.35s cubic-bezier(0.2, 0, 0, 1);
 }
@@ -6399,8 +6403,8 @@ button.ref-chip:hover,
 @keyframes library-new-flash {
   0%,
   40% {
-    border-color: var(--ok);
-    box-shadow: 0 0 0 3px rgb(18 161 80 / 0.18);
+    border-color: var(--fm-focus);
+    box-shadow: 0 0 0 3px rgb(36 89 174 / 0.18);
   }
 }
 @media (prefers-reduced-motion: reduce) {

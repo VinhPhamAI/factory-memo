@@ -66,13 +66,19 @@ class KnowledgeBase(RecordDates, Base):
 
     __tablename__ = "knowledge_bases"
     __table_args__ = (
+        Index(
+            "ux_knowledge_bases_active_name",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         Index("ux_knowledge_bases_default", "is_default", unique=True,
               postgresql_where=text("is_default AND deleted_at IS NULL")),
     )
 
     id: Mapped[UUID] = uuid_primary_key()
-    # Stable name, unique even after soft deletion.
-    name: Mapped[str] = mapped_column(Text, unique=True)
+    # Stable while active; a new collection may reuse a deleted collection's name.
+    name: Mapped[str] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     # Built-in knowledge base whose extraction and retrieval policy this one copies.

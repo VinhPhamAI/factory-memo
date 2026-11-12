@@ -20,6 +20,11 @@ base, and the proposal is not an approved procedure.
 The prepared case: an Omron i4L SCARA robot on Line 2 starts but does not
 move after a voltage dip (Control Power on, High Power off).
 
+The demo also includes one scripted PDF extraction. In `DEMO_MODE`, uploading
+the configured PDF title replays saved converted text and knowledge records so
+the source detail page can be demonstrated without OCR, extraction-model or
+embedding-provider calls.
+
 With `DEMO_MODE=true` the `/tickets` board also holds 14 **mock tickets** in every
 column and status, so the board is not empty before the chat is run. See
 [Mock board tickets](#mock-board-tickets).
@@ -81,6 +86,34 @@ maintenance-ticket screens.
    "Nguyễn Văn Hùng – Chuyên gia bảo trì (demo)" and select **Gửi chuyên gia**.
    The card moves to **In review**.
 7. Optional: sign in as `demo.expert` to answer the ticket.
+
+## Run the scripted PDF extraction
+
+The artifact in
+`backend/src/services/demo/knowledge_extraction.json` was captured from source
+`01a1d01e-d82e-7550-be8c-71317b216a18`. It contains the converted text and 19
+draft knowledge records from `report2.pdf`.
+
+1. Keep `DEMO_MODE=true` and run the API plus convert and extract workers.
+2. Upload a PDF whose title matches the artifact's `title` value, then choose
+   knowledge extraction.
+3. The convert worker waits for `timing.conversion_seconds` and saves the
+   artifact text. The extract worker waits for `timing.extraction_seconds` and
+   saves the artifact records. Edit those two values to change the visible demo
+   duration, then restart the workers so they reload the cached configuration.
+4. Open the source detail page. The original uploaded PDF remains the evidence
+   file, while the text and knowledge cards come from the saved artifact.
+
+Title matching ignores case, surrounding whitespace and repeated whitespace,
+but still requires the upload content type to be PDF. The K110044 Line 2 case is
+saved first; all other records retain their original relative order. Every
+record receives a fresh ID and remains a searchable draft. Stored relations are
+remapped to those fresh IDs and the saved page references are retained.
+
+This is a title-triggered scripted demo. A different PDF uploaded with the same
+configured title also receives the saved output, so use the prepared PDF when
+demonstrating page evidence. Outside `DEMO_MODE`, or for any other title, the
+normal conversion, extraction and conflict paths are unchanged.
 
 ## Reset and run again
 

@@ -83,6 +83,10 @@ export function FilesPage() {
   const [kbError, setKbError] = useState("");
   const [sources, setSources] = useState<ManagedSource[]>([]);
   const [sourcesError, setSourcesError] = useState("");
+  const [sourcesLoaded, setSourcesLoaded] = useState(false);
+  // Files stored in this page session; shown before their source appears and
+  // until the user removes them from the knowledge base.
+  const [sessionIds, setSessionIds] = useState<Set<string>>(new Set());
   const [sourcesRevision, setSourcesRevision] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [stateFile, setStateFile] = useState<LibraryFile | null>(null);
@@ -123,7 +127,7 @@ export function FilesPage() {
             offset = page.next_offset;
           }
         }
-        if (!abort.signal.aborted) { setSources(all); setSourcesError(""); }
+        if (!abort.signal.aborted) { setSources(all); setSourcesError(""); setSourcesLoaded(true); }
       } catch {
         if (!abort.signal.aborted) setSourcesError("Không tải được trạng thái tri thức. Hãy tải lại trang.");
       } finally {
@@ -134,8 +138,18 @@ export function FilesPage() {
     return () => { abort.abort(); clearTimeout(timer); };
   }, [client, defaultKb, knowledgeBases, sourcesRevision, kbReady]);
 
-  const sourcesFor = (file: LibraryFile) => sources.filter((source) => source.file_sha256 === file.sha256);
-  const sourceFor = (file: LibraryFile) => sourcesFor(file).find((source) => source.kb === defaultKb) ?? sourcesFor(file)[0];
+  const sourcesFor = (file: LibraryFile) => sources.filter((source) => source.file_id === file.id);
+  const sourceFor = (file: LibraryFile) => sourcesFor(file).find((source) => source.kb === defaultKb);
+  // The library lists only files that belong to the default KB, plus files stored
+  // or failed to attach in this session so their state and retry stay reachable.
+  const belongsToDefaultKb = (file: LibraryFile) =>
+    sources.some((source) => source.kb === defaultKb && source.file_id === file.id) ||
+    sessionIds.has(file.id) ||
+    !!rowErrors[file.id];
+  const visibleFiles = kbReady ? files.filter(belongsToDefaultKb) : [];
+  const defaultKbTitle = knowledgeBases.find((item) => item.name === defaultKb)?.title || defaultKb;
+  const matching = visibleFiles.filter((file) => file.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const filtering = kbReady && !sourcesLoaded && !sourcesError;
 
   useEffect(() => {
     let active = true;
@@ -188,6 +202,7 @@ export function FilesPage() {
       try {
         saved = await uploadFile(client, file);
         setFiles((current) => [saved, ...current]);
+        setSessionIds((current) => new Set(current).add(saved.id));
         markFresh(saved.id);
         stored += 1;
       } catch (error) {
@@ -251,6 +266,8 @@ export function FilesPage() {
         toasts.show("error", `“${file.filename}”: ${error instanceof Error ? error.message : "Không gỡ được nguồn."}`);
       }
     }
+    const removed = new Set(pendingRemove.map((file) => file.id));
+    setSessionIds((current) => new Set([...current].filter((id) => !removed.has(id))));
     setSelected(new Set());
     setPendingRemove([]);
     setDeleting(false);
@@ -297,11 +314,11 @@ export function FilesPage() {
         </p>
       )}
 
-      {loading && !files.length ? (
+      {(loading || filtering) && !visibleFiles.length ? (
         <p className="vc-muted">
           <Loader2 className="animate-spin" size={16} /> Đang tải danh sách…
         </p>
-      ) : !files.length && !loadError ? (
+      ) : !visibleFiles.length && !loadError ? (
         <div className="km-empty" data-testid="files-empty">
           <FolderOpen size={32} />
           <h2>Chưa có file nào</h2>
@@ -309,11 +326,11 @@ export function FilesPage() {
         </div>
       ) : (
         <section className="library-recent" aria-labelledby="library-recent-title">
-          <h2 id="library-recent-title">Mới thêm gần đây</h2>
-          {selected.size > 0 && <div className="library-selection"><span>Đã chọn {selected.size} file</span><Button variant="outline" size="sm" disabled={sourcesError !== "" || !files.some((file) => selected.has(file.id) && sourceFor(file))} onClick={() => setPendingRemove(files.filter((file) => selected.has(file.id) && sourceFor(file)))}>Gỡ khỏi kho kiến thức</Button><Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>Bỏ chọn</Button></div>}
-          {!files.some((file) => file.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && <p className="vc-muted">Không tìm thấy file phù hợp.</p>}
+          <h2 id="library-recent-title">Mới thêm gần đây{kbReady && <span className="library-kb"></span>}</h2>
+          {selected.size > 0 && <div className="library-selection"><span>Đã chọn {selected.size} file</span><Button variant="outline" size="sm" disabled={sourcesError !== "" || !visibleFiles.some((file) => selected.has(file.id) && sourceFor(file))} onClick={() => setPendingRemove(visibleFiles.filter((file) => selected.has(file.id) && sourceFor(file)))}>Gỡ khỏi kho kiến thức</Button><Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>Bỏ chọn</Button></div>}
+          {!matching.length && <p className="vc-muted">Không tìm thấy file phù hợp.</p>}
         <ul className="library-grid">
-          {files.filter((file) => file.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map((file) => (
+          {matching.map((file) => (
             <li className={`library-card${freshIds.has(file.id) ? " is-new" : ""}`} key={file.id} data-testid="library-file">
               <div className="library-card-image">
                 {/* Pointer shortcut; the filename button is the keyboard target. */}
@@ -394,7 +411,7 @@ export function FilesPage() {
           <DialogHeader>
             <DialogTitle>Gỡ khỏi kho kiến thức?</DialogTitle>
             <DialogDescription>
-              Gỡ {pendingRemove.length === 1 ? `“${pendingRemove[0].filename}” khỏi kho ${sourceFor(pendingRemove[0])?.kb ?? ""}` : `${pendingRemove.length} file đã chọn khỏi các kho tương ứng`}. File vẫn còn trong Thư viện tài liệu; tri thức chỉ còn tìm kiếm được nếu có nguồn khác đang hoạt động. Nguồn có thể được dùng chung với file trùng nội dung.
+              Gỡ {pendingRemove.length === 1 ? `“${pendingRemove[0].filename}” khỏi kho ${sourceFor(pendingRemove[0])?.kb ?? ""}` : `${pendingRemove.length} file đã chọn khỏi các kho tương ứng`}. File gốc vẫn được lưu trong tài khoản của bạn nhưng sẽ không còn hiện trong thư viện của kho này; tri thức chỉ còn tìm kiếm được nếu có nguồn khác đang hoạt động. Cùng một file có thể được liên kết với nhiều kho.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

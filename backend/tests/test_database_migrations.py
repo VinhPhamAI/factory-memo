@@ -226,6 +226,30 @@ class MigrationRevisionTest(MigratedDatabaseTest):
             )
         self.assertEqual(size, EMBEDDING_DIM)
 
+    def test_knowledge_base_names_are_unique_only_while_active(self) -> None:
+        """A deleted collection keeps history without reserving its name."""
+
+        owner = uuid4()
+        with self.engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO users (id, username, display_name, password_hash, role) "
+                "VALUES (:id, 'kb-owner', 'KB owner', 'x', 'admin')"
+            ), {"id": owner})
+            conn.execute(text(
+                "INSERT INTO knowledge_bases "
+                "(id, name, title, template, created_by, deleted_at) "
+                "VALUES (:id, 'reusable', 'Old', 'general', :owner, now())"
+            ), {"id": uuid4(), "owner": owner})
+            conn.execute(text(
+                "INSERT INTO knowledge_bases (id, name, title, template, created_by) "
+                "VALUES (:id, 'reusable', 'New', 'general', :owner)"
+            ), {"id": uuid4(), "owner": owner})
+        with self.assertRaises(IntegrityError), self.engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO knowledge_bases (id, name, title, template, created_by) "
+                "VALUES (:id, 'reusable', 'Duplicate', 'general', :owner)"
+            ), {"id": uuid4(), "owner": owner})
+
     def test_downgrade_removes_tables_and_upgrade_restores_them(self) -> None:
         database = DisposableDatabase(DATABASE_URL or "")
         database.create()

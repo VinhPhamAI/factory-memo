@@ -1,0 +1,1236 @@
+{
+  "title": "report_261110.pdf",
+  "timing": {
+    "conversion_seconds": 10,
+    "extraction_seconds": 8
+  },
+  "text": "<!-- page 1 -->\n\n# Báo cáo xử lý bất thường ngày 10/11\n\n## Tổng quan\n\n## K110041: Của shutter mỏ chậm, giật\n\nVi trí: DC3\n\nThiết bị: VEH 0019 (Thổi khí No.1)\n\n• Thời gian: 07:45-16:45 (9,0 h)\n\nTình trạng: Hoàn thành\n\n## K110043: NG dòng điện\n\n• Vi trí: CVTF2\n\nThiết bị: VIM 0200 (Máy kiểm tra tính năng No.6)\n\nThời gian: 08:10-10:10 (2,0 h)\n\nTình trạng: Hoàn thành\n\n## K110044: Không bật được High Power sau sụt áp\n\n• Vi trí: LINE2\n\n- Thiết bị: Robot SCARA Omron i4L (trạm gắp đặt Line 2)\n\nThời gian: 07:40-09:10 (1,5 h)\n\nTình trạng: Hoàn thành\n\n## K110045: Sập master ON\n\n• Vi trí: SL6\n\nThiết bị: VALA 0001 (Máy gia công MC20 số 1)\n\nThời gian: 10:40-16:40 (6,0 h)\n\nTình trạng: Hoàn thành\n\n## K110046: Lỗi 2117, turret không lùi\n\n• Vị trí: VCT4\n\nThiết bị: VLA 0029 (Máy gia công bề mặt Rô-to A-10, A1)\n\nThời gian: 12:00-16:00 (4,0 h)\n\n<!-- page 2 -->\n\nTình trạng: Hoàn thành\n\n## K110047: Nước làm mát quá nhiệt\n\n• Vi trí: VCT4\n\nThiết bị: VSC 0009 (Máy rửa Rô-to No.4)\n\nThời gian: Từ 09:13\n\nTình trạng: Đang xử lý\n\n## K110048: Không nhận khóa liên động của\n\n• Vi trí: LINE3\n\n- Thiết bị: Robot SCARA Omron i4L (cell lắp ráp C)\n\nThời gian: Từ 13:20\n\nTình trạng: Đang xử lý\n\n## K110049: Lỗi -924, đèn High Power không nháy\n\nVi trí: PACK2\n\n- Thiết bị: Robot SCARA Omron i4L (cell xếp pallet)\n\nThời gian: Từ ca trước\n\nTình trạng: Đang xử lý\n\n## K110041: Của shutter mở chậm, giật cục, VEH 0019\n\n## Thông tin chung\n\nSố phiếu: K110041\n\n• Vi trí: DC3\n\nThiết bị: VEH 0019 (Thổi khí No.1)\n\nLoại công trình: PM\n\nMúc độ ưu tiên: Bình thường\n\nTên công việc: Xử lý bất thường của shutter di chuyển mở chậm\n\nNhóm bảo dưỡng: Có khí\n\nTình trạng: Hoàn thành\n\n## Thời gian\n\nBắt đầu: 11-11-2026 07:45\n\n• Hoàn thành: 11-11-2026 16:45\n\n<!-- page 3 -->\n\nThời gian bảo dưỡng: 9,0 h\n\n## Phân tích hư hỏng\n\nHiện trạng: Tuần tra phát hiện cửa shutter di chuyển mở với tốc độ chậm và bị giật cực, có lúc dùng giữa hành trình. Dầu bôi trơn thanh dẫn đã khô. Không có tiếng kêu bất thường từ động cơ. Cảm biến vị trí mở và đóng đều tác động đúng.\n\nVùng thao tác: Cửa shutter, thanh dẫn\n\nLinh kiện đồng bộ: Thanh dẫn shutter, động cơ truyền động\n\nHiện tượng: Chuyển động giật, tốc độ chậm\n\nBiện pháp xử lý: Vệ sinh, cấp dầu\n\nNguyên nhân: Dầu bôi trơn thanh dẫn khô, ma sát tăng.\n\nNguyên nhân gốc: Thanh dẫn chưa nằm trong chu kỳ tra dầu định kỳ (giả thuyết).\n\nTại sao 1W: Ma sát giữa shutter và thanh dẫn tăng nên của di chuyển chậm và giật.\n\nTại sao 2W: Lớp dầu trên thanh dẫn đã khô.\n\nTại sao 3W: Chưa có lịch tra dầu thanh dẫn trong bảo trì định kỳ (giả thuyết).\n\nÝ kiến chỉ đạo: Đưa việc tra dầu thanh dẫn vào lịch bảo trì tuần. Nếu còn giật sau 1 tuần thì kiểm tra tốc độ động cơ.\n\n## Công việc\n\n## Thanh dẫn shutter\n\nNội dung xử lý: Lau sạch thanh dẫn, tra dầu\n\nKết quả: Thanh dẫn sạch, không có vết xước đáng kể\n\nTình trạng: Đã thực hiện\n\n## Cảm biến vị trí mở/đóng\n\nNội dung xử lý: Kiểm tra tác động của cảm biến\n\nKết quả: Tác động đúng ở cả hai vị trí\n\nTình trạng: Đã thực hiện\n\nChạy thủ\n\nNội dung xử lý: Cho shutter mở đóng 10 lần\n\nKết quả: Chuyển động trơn hơn rõ rệt, không dùng giữa hành trình\n\nTình trạng: Đã thực hiện\n\n## Kết quả và phê duyệt\n\n<!-- page 4 -->\n\nKết quả xác nhận: Chạy thử 10 lần không giật, không dùng giữa hành trình. Chưa theo dõi sau 1 tuần.\n\nPhạm vi áp dụng: Shutter VEH 0019 No.1. Chưa kiểm tra tốc độ động cơ.\n\nTài liệu đỉnh kèm: k110041-guide-rail.jpg (thanh dẫn trước khi tra dấu)\n\nGhi chú: Theo dõi lại sau 1 tuần; nếu còn giật, kiểm tra tốc độ động cơ.\n\n• Phê duyệt: TL: đã duyệt. SV: đã duyệt. MGR: đã duyệt.\n\n### K110043: NG dòng điện, VIM 0200 No.6\n\n## Thông tin chung\n\nSố phiếu: K110043\n\n• Vị trí: CVTF2\n\nThiết bị: VIM 0200 (Máy kiểm tra tính năng No.6)\n\nLoại công trình: BM\n\nMúc độ ưu tiên: Cao\n\nTên công việc: Xử lý bất thường NG động điện\n\nNhóm bảo dưỡng: Điện - điều khiển\n\nTình trạng: Hoàn thành\n\n## Thời gian\n\nBắt đầu: 11-11-2026 08:10\n\n• Hoàn thành: 11-11-2026 10:10\n\nThời gian bảo dưỡng: 2,0 h\n\n## Phân tích hư hỏng\n\nHiện trạng: Máy báo NG dòng điện liên tục từ đầu ca, sản phẩm bị loại hàng loạt dù đã đổi lot. Giá trị dòng đo dao động mạnh giữa các lần kiểm. Khi rung nhẹ dây tin hiệu thì giá trị thay đổi. Máy No.5 cùng lot vẫn đạt. Ngưỡng dòng cài đặt không đổi. Kiểm tra bằng sản phẩm mẫu chuẩn văn NG.\n\nVùng thao tác: Đầu kiểm tra sản phẩm\n\nLinh kiện động bộ: Connector kiểm tra sản phẩm, dây tín hiệu\n\nHiện tượng: Giá trị đo không ổn định\n\nBiện pháp xử lý: Thay thế\n\nNguyên nhân: Chân connector kiểm tra tiếp xúc kém sau khi hết tần suất sử dụng.\n\nNguyên nhân gốc: Connector vượt số lần cắm quy định (khoảng 25.000 lần), chưa được thay theo chu kỳ.\n\nTại sao 1W: Tiếp xúc giữa connector và sản phẩm không ổn định nên giá trị dòng đo dao động.\n\nTại sao 2W: Connector đã quá tuổi thợ sổ lần cắm.\n\n<!-- page 5 -->\n\nTại sao 3W: Số lần cắm của connector không được theo dõi để thay trước khi hỏng.\n\nÝ kiến chỉ đạo: Bổ sung theo dõi số lần cắm cho connector kiểm tra của các máy VIM.\n\n## Công việc\n\n## Nguyỡng dòng và sản phẩm mẫu\n\nNội dung xử lý: Kiểm tra lại cải đặt ngưỡng, thử bằng sản phẩm mẫu chuẩn\n\nKết quả: Ngưỡng đúng; sản phẩm mẫu văn NG\n\nTình trạng: Đã thực hiện\n\n## Dây tín hiệu\n\nNội dung xử lý: Rung nhẹ dây khi đang đo\n\nKết quả: Giá trị đo thay đổi theo rung\n\nTình trạng: Đã thực hiện\n\n## Connector kiểm tra\n\nNội dung xử lý: Thay connector dự phòng\n\nKết quả: Hết lỗi NG dòng điện\n\nTình trạng: Đã thực hiện\n\n## Linh kiện thay thế\n\n## Connector kiểm tra VIM 0200 (dự phòng)\n\nSố lượng: 1\n\nTình trạng linh kiện cũ: Chân tiếp xúc mòn, đã sử dụng khoảng 25.000 lần cấm\n\n## Kết quả và phê duyệt\n\nKết quả xác nhận: Chạy 20 sản phẩm liên tiếp, tỷ lệ NG trỏ về bình thường.\n\nPhạm vi áp dụng: VIM 0200 No.6. Không suy ra cho máy dùng loại connector khác.\n\nTài liệu đỉnh kèm: k110043-connector-old.jpg (chân connector mòn)\n\nGhi chú: Số lần cắm 25.000 lấy từ ghi nhận bảo trì của máy VIM 0196; chưa đối chiếu với thông số kỹ thuật của máy No.6.\n\n• Phê duyệt: TL: đã duyệt. SV: đã duyệt. MGR: đã duyệt.\n\n<!-- page 6 -->\n\n# K110044: Không bật được High Power sau sụt áp, robot i4L Line 2\n\n## Thông tin chung\n\nSố phiếu: K110044\n\n• Vi trí: LINE2\n\nThiết bị: Robot SCARA Omron i4L (trạm gắp đặt Line 2)\n\nLoại công trình: BM\n\nMức độ ưu tiên: Khẩn cấp\n\nTên công việc: Xử lý robot không bật được High Power sau sụt áp\n\nNhóm bảo dưỡng: Điện - điều khiển\n\nTình trạng: Hoàn thành\n\n## Thời gian\n\nBắt đầu: 11-11-2026 07:40\n\n• Hoàn thành: 11-11-2026 09:10\n\nThời gian bảo dưỡng: 1,5 h\n\n## Phân tích hư hỏng\n\nHiện trạng: Sau lần sụt áp đấu ca, robot khởi động bình thường nhưng không chuyển động. Đèn Control Power sáng, đèn High Power không lên khi bấm nút bật. Bộ điều khiển khởi động xong, không báo mã lỗi. Khởi động lại bộ điều khiển một lần, kết quả không đổi. Dây chuyển dùng tại trạm này.\n\n• Vùng thao tác: Mạch cho phép (enable) High Power\n\nLinh kiện động bộ: Giác cấu nối XSYSTEM, công tác của an toàn, contactor High Power\n\nHiện tượng: Control Power có, High Power không lên\n\nBiện pháp xử lý: Điều chỉnh (cảm lại giác)\n\nNguyên nhân: Giác cấu nối XSYSTEM của mạch cho phép High Power lỏng nên mạch hổ.\n\nNguyên nhân gốc: Giác XSYSTEM là giấc tự làm, lỏng sau nhiều chu kỳ nóng - nguội (giả thuyết, theo ghi nhận sửa chữa trước đây tại trạm này).\n\nTại sao 1W: High Power không được cấp vì mạch cho phép đang hổ.\n\nTại sao 2W: Giác XSYSTEM tiếp xúc không chắc sau sụt áp.\n\nTại sao 3W: Giấc tự làm, không chắc chắn bằng giấc chính hãng (giả thuyết).\n\n- Ý kiến chỉ đạo: Dùng ở bước đầu tiên khác phục được. Không thay servo amplifier khi mạch cho phép chưa được loại trừ. Chạy thủ một chu trình tốc độ thấp trước khi trả máy.\n\n<!-- page 7 -->\n\n## Công việc\n\nCác bước đi từ dễ đến khó và dùng ở bước đầu tiên khác phục được lỗi.\n\n## An toàn\n\nNội dung xử lý: Ngất High Power, khóa và treo thẻ (LOTO)\n\nKết quả: Hoàn tất trước khi chạm vào giấc\n\nTình trạng: Đã thực hiện\n\n## Giác XSYSTEM\n\nNội dung xử lý: Rút giấc, kiểm tra chân giấc, cắm lại cho chắc, bật thủ High Power\n\nKết quả: Giấc lỏng; sau khi cắm lại, đèn High Power sáng\n\nTình trạng: Đã thực hiện\n\n## Công tắc của an toàn\n\nNội dung xử lý: Đóng chặt cửa, gõ nhẹ vỏ công tắc\n\nKết quả: Không cần: lỗi đã hết sau bước giác XSYSTEM\n\nTình trạng: Chưa thực hiện\n\n## Contactor High Power\n\nNội dung xử lý: Đo điện trở cuộn hút (giá trị đúng khoảng 120 Ω)\n\nKết quả: Không cần: lỗi đã hết sau bước giác XSYSTEM\n\nTình trạng: Chưa thực hiện\n\n## Servo amplifier\n\nNội dung xử lý: Chưa xét đến\n\nKết quả: Không có dấu hiệu hỏng\n\nTình trạng: Chưa thực hiện\n\n## Chạy thủ\n\nNội dung xử lý: Chạy một chu trình ở tốc độ thấp\n\nKết quả: Robot chạy bình thường\n\nTình trạng: Đã thực hiện\n\n## Kết quả và phê duyệt\n\n<!-- page 8 -->\n\nKết quả xác nhận: Đèn High Power sáng, robot chạy một chu trình tốc độ thấp bình thường rồi trả máy cho sản xuất. Chưa theo dõi lâu hơn.\n\nPhạm vi áp dụng: Trạm gắp đặt Line 2. Việc giấc XSYSTEM hay lỏng là ghi nhận riêng của trạm này, chưa được chuyên gia duyệt; không áp dụng mặc định cho robot i4L ở trạm khác.\n\nTài liệu đính kèm: k110044-xsystem-connector.jpg (giấc XSYSTEM)\n\n• Ghi chú: Căn cứ: Số tay Omron i4L trang 37 (robot chỉ chuyển động khi High Power được cấp và cho phép; Control Power phải có trước). Câu hỏi chờ chuyên gia: có nên thay giấc XSYSTEM tự làm bằng giấc chính hãng để tránh lặp lại không; nếu lỗi tài diễn thì xét công tắc của an toàn và contactor theo thứ tự trên.\n\n• Phê duyệt: TL: đã duyệt. SV: chờ duyệt. MGR: chờ duyệt.\n\n## K110045: Sáp master ON, MC20 số 1\n\n## Thông tin chung\n\nSố phiếu: K110045\n\n• Vi trí: SL6\n\nThiết bị: VALA 0001 (Máy gia công MC20 số 1, OP1.2.3)\n\nLoại công trình: BM\n\nMúc độ ưu tiên: Khản cấp\n\nTên công việc: Điều tra, xử lý bất thường sập master ON\n\nNhóm bảo dưỡng: Điện - điều khiển\n\nTình trạng: Hoàn thành\n\n## Thời gian\n\nBắt đầu: 11-11-2026 10:40\n\n• Hoàn thành: 11-11-2026 16:40\n\nThời gian bảo dưỡng: 6,0 h\n\n## Phân tích hư hỏng\n\nHiện trạng: Máy đang hoạt động bình thường thì đột ngột mất master ON. Báo lỗi sai lệch tọa độ trực X1 khoảng 0,8 mm. Không có va chạm hoặc kẹt trực trước đó. Nhiệt độ tủ điện bình thường. Sau khi phục hồi master ON và chạy lại, 1 sản phẩm đo NG các kích thước theo cùng một hướng.\n\n• Vùng thao tác: Trục X1\n\nLinh kiện đồng bộ: Encoder trực X1, cáp encoder, driver servo X1\n\nHiện tượng: Sai lệch tọa độ\n\nBiện pháp xử lý: Điều chỉnh\n\n<!-- page 9 -->\n\nNguyên nhân: Tiếp xúc kém tại giấc encoder X1 phía driver (giả thuyết, phù hợp với việc giấc hơi lỏng khi kiểm tra).\n\nNguyên nhân gốc: Giác encoder lỏng do rung động lâu ngày (giả thuyết).\n\nTại sao 1W: Driver mất tín hiệu phản hồi encoder trong thời gian ngắn, lệch tọa độ vượt ngưỡng, hệ thống cắt master ON.\n\nTại sao 2W: Giấc encoder phía driver tiếp xúc không ổn định.\n\nTại sao 3W: Chưa xác định.\n\n- Ý kiến chỉ đạo: Đo 5 sản phẩm liên tiếp trước khi trả máy cho sản xuất. Nếu sai lệch lặp lại, xem xét thay encoder.\n\n## Công việc\n\n## Master ON\n\nNội dung xử lý: Phục hồi master ON, về gốc các trục\n\nKết quả: Máy phục hồi bình thường\n\nTình trạng: Đã thực hiện\n\n## Giắc encoder X1\n\nNội dung xử lý: Kiểm tra giác phía driver và phía motor, cắm lại, làm sạch tiếp điểm\n\nKết quả: Giác phía driver hỏi lỏng; phía motor bình thường\n\nTình trạng: Đã thực hiện\n\n## Tọa độ gốc X1\n\nNội dung xử lý: Hiệu chỉnh lại tọa độ gốc trục X1\n\nKết quả: Sai lệch về trong dung sai\n\nTình trạng: Đã thực hiện\n\n## Sản phẩm kiểm tra\n\nNội dung xử lý: Chạy và đo 5 sản phẩm liên tiếp theo bản vẽ\n\nKết quả: 5/5 đạt\n\nTình trạng: Đã thực hiện\n\n## Thông số đo\n\n## Sai lệch tọa độ X1(mm)\n\n• Trước: 0,8\n\n• Sau: 0.02\n\nGiới hạn: ≤0,05\n\n<!-- page 10 -->\n\n## Kết quả và phê duyệt\n\nKết quả xác nhận: 5/5 sản phẩm đạt kích thước. Theo dõi 2 giờ sau khi trả máy, không mất master ON lại.\n\nPhạm vi áp dụng: MC20 số 1. Nguyên nhân gốc chưa được xác nhận bằng thủ nghiệm riêng.\n\nTài liệu đỉnh kèm: k110045-alarm-screen.jpg (màn hình báo lỗi); k110045-encoder-connector.jpg (giấc encoder X1)\n\nGhi chú: Nếu lỗi lặp lại, thay cấp encoder X1 trước khi xem xét thay encoder.\n\n• Phê duyệt: TL: đã duyệt. SV: đã duyệt. MGR: chờ duyệt.\n\n## K110046: Lỗi 2117, turret không lùi hết hành trình, VLA 0029\n\n## Thông tin chung\n\nSố phiếu: K110046\n\n• Vi trí: VCT4\n\nThiết bị: VLA 0029 (Máy gia công bề mặt Rô-to A-10, A1)\n\nLoại công trình: BM\n\nMúc độ ưu tiên: Cao\n\nTên công việc: Xử lý bất thường lỗi quá thời gian xác nhận turret\n\nNhóm bảo dưỡng: Process 1\n\nTình trạng: Hoàn thành\n\n## Thời gian\n\nBắt đầu: 11-11-2026 12:00\n\n• Hoàn thành: 11-11-2026 16:00\n\nThời gian bảo dưỡng: 4,0 h\n\n## Phân tích hư hỏng\n\nHiện trạng: Phôi bám dính cụm turret dao. Khi turret đóng mở, không lùi về hết hành trình, máy dùng với lỗi 2117. Lỗi lặp lại sau khoảng 200-300 sản phẩm.\n\n• Vùng thao tác: 1 (Thân máy)\n\nLinh kiện đồng bộ: BM5 (Bộ đài dao), MC2 (U gá động)\n\nHiện tượng: Không xác nhận: sau khi về sinh, máy chạy lại bình thường.\n\nBiện pháp xử lý: Vệ sinh, cấp dầu\n\nNguyên nhân: Lỗi tiếp xúc: phối kẹt giữa các bề mặt trượt của turret.\n\n<!-- page 11 -->\n\nNguyên nhân gốc: Phôi gia công bám dính lâu ngày.\n\nTại sao 1W: Xy-lanh đóng mở turret không lùi về hết hành trình.\n\nTại sao 2W: Phôi bám dính tích tụ tại bề mặt trượt của cụm turret.\n\nTại sao 3W: Chu kỳ về sinh phôi hiện tại dài hơn tốc độ tích tụ phôi (giả thuyết).\n\nÝ kiến chỉ đạo: Rút ngắn chu kỳ về sinh cụm turret. Theo dõi tần suất lỗi 2117 trong 1 tuần.\n\n## Công việc\n\n## Dầu thủy lực\n\nNội dung xử lý: Xả dầu áp dư\n\nKết quả: Turret đóng mỏ được, lùi về hết hành trình\n\nTình trạng: Đã thực hiện\n\n## Cụm turret\n\nNội dung xử lý: Vệ sinh phôi bám dính cụm turret, tra dầu bề mặt trượt\n\nKết quả: OK, đóng mở tròn tru\n\nTình trạng: Đã thực hiện\n\n## Kết quả và phê duyệt\n\nKết quả xác nhận: Chạy thứ 30 chu kỳ đóng mở turret không lỗi. Chưa theo dõi lâu hơn một ca.\n\nPhạm vi áp dụng: VLA 0029 (A1). Chưa kiểm tra các máy VLA khác.\n\nTài liệu đỉnh kèm: k110046-turret-before.jpg (phối bám tại turret); k110046-turret-after.jpg (sau vệ sinh)\n\nGhi chú: Chưa đo áp suất dầu thủy lực; chưa loại trừ mòn xy-lanh.\n\n• Phê duyệt: TL: đã duyệt. SV: chờ duyệt. MGR: chờ duyệt.\n\n### K110047: Nước làm mát quá nhiệt, VSC 0009 No.4\n\n## Thông tin chung\n\nSố phiếu: K110047\n\n• Vi trí: VCT4\n\nThiết bị: VSC 0009 (Máy rửa Rô-to No.4)\n\nLoại công trình: BM\n\nMúc độ ưu tiên: Cao\n\nTên công việc: Điều tra, xử lý nước làm mát bị quá nhiệt\n\nNhóm bảo dưỡng: Có khí\n\n<!-- page 12 -->\n\nTình trạng: Đang xử lý\n\n## Thời gian\n\nBắt đầu: 11-11-2026 09:13\n\n• Hoàn thành: (chưa hoàn thành)\n\nThời gian bảo dưỡng: Đang tính\n\n## Phân tích hư hỏng\n\nHiện trạng: Máy báo nước làm mát quá nhiệt, dùng chu trình rửa. Đầu ca nhiệt độ nước tăng dần theo số chu kỳ. Chưa xác định vị trí tắc hoặc hỏng.\n\nVùng thao tác: Hệ thống nước làm mát\n\nLinh kiện động bộ: Bơm tuần hoàn, bộ trao đổi nhiệt, lọc nước\n\nHiện tượng: Nhiệt độ nước vượt ngưỡng cài đặt\n\nBiện pháp xử lý: Đang điều tra\n\nNguyên nhân: Chưa xác định. Đang nghi lọc nước hoặc bộ trao đổi nhiệt bám cặn, giảm lưu lượng (giả thuyết).\n\nNguyên nhân gốc: Chưa xác định.\n\nTại sao 1W: Nước làm mất không thải đủ nhiệt (giả thuyết).\n\nTại sao 2W: Chưa xác định.\n\nTại sao 3W: Chưa xác định.\n\nÝ kiến chỉ đạo: Kiểm tra lưu lượng và nhiệt độ vào/ra bộ trao đổi nhiệt trước khi thay bớm. Báo cáo trước khi mở bộ trao đổi nhiệt.\n\n## Công việc\n\nNhiệt độ nước\n\nNội dung xử lý: Đo nhiệt độ nước làm mát tại bề và đầu ra bơm\n\nKết quả: Nhiệt độ bề cao hơn mức cài đặt cạnh báo\n\nTình trạng: Đã thực hiện\n\nLọc nước\n\nNội dung xử lý: Kiểm tra, sức rửa lọc nước\n\nKết quả: Lọc có cặn, đã súc rủa\n\nTình trạng: Đã thực hiện\n\n## Lưu lượng\n\nNội dung xử lý: Đo lưu lượng sau bóm\n\n<!-- page 13 -->\n\nKết quả: Chưa thực hiện (chờ dụng cụ đo)\n\nTình trạng: Chưa thực hiện\n\n## Bộ trao đổi nhiệt\n\nNội dung xử lý: Kiểm tra cận bám\n\nKết quả: Chưa thực hiện\n\nTình trạng: Chưa thực hiện\n\n## Kết quả và phê duyệt\n\n• Kết quả xác nhận: Chưa xác nhận. Đã sức rửa lọc nhưng chưa chạy lại máy để xem nhiệt độ có giảm không.\n\nPhạm vi áp dụng: VSC 0009 No.4.\n\nTài liệu đính kèm: k110047-filter.jpg (lọc nước trước khi sức rửa)\n\nGhi chú: Máy còn dùng. Cần đo lưu lượng và kiểm tra bộ trao đổi nhiệt trước khi kết luận.\n\n• Phê duyệt: TL: chưa trình. SV: chưa trình. MGR: chưa trình.\n\n## K110048: Không nhận khóa liên động của sau khi thay tool, robot i4L cell lắp ráp C\n\n## Thông tin chung\n\nSố phiếu: K110048\n\n• Vi trí: LINE3\n\n- Thiết bị: Robot SCARA Omron i4L (cell lắp ráp C)\n\nLoại công trình: BM\n\nMúc độ ưu tiên: Cao\n\nTên công việc: Điều tra lỗi không nhận khóa liên động của sau khi thay tool\n\nNhóm bảo dưỡng: Điện - điều khiển\n\nTình trạng: Đang xử lý\n\n## Thời gian\n\nBắt đầu: 11-11-2026 13:20\n\n• Hoàn thành: (chưa hoàn thành)\n\nThời gian bảo dưỡng: Đang tính\n\n## Phân tích hư hỏng\n\n<!-- page 14 -->\n\nHiện trạng: Sau khi mở cửa cell để thay tool rồi đóng lại, hệ thống không nhận khóa liên động của nên robot không cấp được High Power. Công tắc liên động ở vị trí đóng nhưng đèn tín hiệu không sáng. Cánh cửa hơi lệch so với khung khi nhìn từ phía trên. Mở đóng lại hai lần không khắc phục được.\n\nVùng thao tác: Mạch liên động an toàn của cell\n\nLinh kiện động bộ: Cánh cửa, bản lề, chia tác động, công tác liên động và giá đỡ\n\nHiện tượng: Cửa đã đóng nhưng tín hiệu khóa liên động không ON; High Power không được phép cấp\n\nBiện pháp xử lý: Đang điều tra; chưa điều chỉnh hoặc thay linh kiện\n\nNguyên nhân: Chưa xác định. Cánh cửa lệch có thể làm chia tác động không vào hết công tắc liên động (giả thuyết).\n\nNguyên nhân gốc: Chưa xác định. Nhật ký ca ghi nhận hiện tượng tương tự khoảng 4 lần trong 6 tháng; có thể liên quan đến bản lề hoặc giá đỡ dịch chuyển (giả thuyết).\n\nTại sao 1W: High Power không được cấp vì mạch liên động của chưa xác nhận trạng thái an toàn.\n\nTại sao 2W: Công tắc liên động không phát tính hiệu dữ của ở vị trí đóng.\n\nTại sao 3W: Chưa xác định; cần đo độ lệch của và kiểm tra chia tác động, dây dẫn, công tác.\n\n- Ý kiến chỉ đạo: Không đấu tất mạch an toàn. Thực hiện LOTO trước khi kiểm tra cơ khí hoặc dây dẫn. Đo độ lệch và khe hở trước khi chỉnh giá đồ; chưa chèn tấm đệm khi chưa có kích thước được chuyên gia xác nhận.\n\n## Công việc\n\n## Của cell\n\nNội dung xử lý: Mở và đóng lại của hai lần\n\nKết quả: Đèn tín hiệu khóa liên động vẫn không sáng\n\nTình trạng: Đã thực hiện\n\n## Cánh cửa và khung\n\nNội dung xử lý: Kiểm tra trực quan từ phía trên\n\nKết quả: Cánh cửa có dấu hiệu lệch so với khung\n\nTình trạng: Đã thực hiện\n\n## Chia và công tác liên động\n\nNội dung xử lý: Đo độ lệch, khe hở; kiểm tra dây và đầu nối theo tài liệu của thiết bị\n\nKết quả: Chưa thực hiện\n\nTình trạng: Chưa thực hiện\n\n## Giá đồ công tắc\n\n<!-- page 15 -->\n\nNội dung xử lý: Căn chỉnh hoặc chèn đệm theo kích thước đã được chuyên gia xác nhận\n\nKết quả: Chưa thực hiện; đang chờ xác nhận phương án và độ dày tấm đệm\n\nTình trạng: Chưa thực hiện\n\n## Kết quả và phê duyệt\n\nKết quả xác nhận: Chưa xác nhận. Robot chưa được cấp High Power và cell chưa trả lại sản xuất.\n\nPhạm vi áp dụng: Cell lắp ráp C. Không áp dụng kích thước căn chỉnh hoặc tấm đệm của cell khác khi chưa đo và đối chiếu tài liệu thiết bị.\n\nTài liệu đính kèm: Chưa có. Cần bổ sung ảnh vị trí công tác, chia tác động và độ lệch của trước khi điều chỉnh.\n\n• Ghi chú: Nhật ký ca ghi nhận lỗi tương tự khoảng 4 lần trong 6 tháng, nhưng chưa có kết quả đo hoặc nguyên nhân đã được xác nhận. Câu hỏi chờ chuyên gia: có cần chèn đệm không, và độ dày cho phép là bao nhiêu?\n\n• Phê duyệt: TL: chưa trình. SV: chưa trình. MGR: chưa trình.\n\n## K110049: Lỗi -924, đèn High Power không nháy vàng, robot i4L cell xếp pallet\n\n## Thông tin chung\n\nSố phiếu: K110049\n\n• Vi trí: PACK2\n\n- Thiết bị: Robot SCARA Omron i4L (cell xếp pallet)\n\nLoại công trình: BM\n\nMúc độ ưu tiên: Khản cấp\n\nTên công việc: Điều tra lỗi -924 khi yêu cầu cấp High Power\n\nNhóm bảo dưỡng: Điện - điều khiển\n\nTình trạng: Đang xử lý\n\n## Thời gian\n\nBắt đầu: 10-11-2026 19:10\n\n• Hoàn thành: (chưa hoàn thành)\n\nThời gian bảo dưỡng: Đang tính\n\n## Phân tích hư hỏng\n\n<!-- page 16 -->\n\nHiện trạng: Robot báo lỗi -924 mỗi khi yêu cầu cấp High Power. Đèn High Power trên bảng điều khiển phía trước không nháy và không có mã lỗi khác. Hai tuần trước đèn từng chóp tắt bất thường. Khôi động lại bộ điều khiển không khác phục được. Dây chuyển xếp pallet dùng từ ca trước.\n\nVùng thao tác: Bảng điều khiển phía trước và mạch yêu cầu cấp High Power\n\nLinh kiện động bộ: Cụm đèn High Power, cáp XFP, nút dùng khẩn cấp và khóa liên động của\n\nHiện tượng: Lỗi -924; đèn High Power không nháy vàng khi có yêu cầu\n\nBiện pháp xử lý: Đang điều tra; chưa thay linh kiện\n\nNguyên nhân: Chưa xác định. Cụm đèn hoặc tiếp xúc cáp XFP có thể bắt thường (giả thuyết).\n\nNguyên nhân gốc: Chưa xác định. Ghi nhận sửa chữa trước đây tại cell này cho rằng rung từ bằng tải có thể làm cụm đèn hồng sau 12-18 tháng; đây là tri thức nháp, chưa được chuyên gia duyệt.\n\nTại sao 1W: Robot không hoàn tất trình tự cấp High Power khi lỗi -924 xuất hiện.\n\nTại sao 2W: Tín hiệu hoặc cụm hiện thị High Power ở bảng điều khiển có dấu hiệu bất thường (giả thuyết).\n\nTại sao 3W: Chưa xác định; cần kiểm tra cáp XFP và cụm đèn trước khi kết luận.\n\n- Ý kiến chỉ đạo: Thực hiện LOTO trước khi thao tác. Kiểm tra và cắm lại cáp XFP trước; chỉ thay cụm đèn bằng linh kiện đúng mã sau khi được chuyên gia xác nhận. Chưa có căn cứ để thay servo amplifier.\n\n## Công việc\n\n## Bộ điều khiển\n\nNội dung xử lý: Khởi động lại\n\nKết quả: Lỗi -924 vẫn xuất hiện khi yêu cầu cấp High Power\n\nTình trạng: Đã thực hiện\n\n## Dùng khẩn và liên động của\n\nNội dung xử lý: Kiểm tra trạng thái\n\nKết quả: Không phát hiện bất thường\n\nTình trạng: Đã thực hiện\n\n## Cáp XFP\n\nNội dung xử lý: Sau LOTO, kiểm tra chân giấc, rút và cắm lại rồi thử cấp High Power\n\nKết quả: Chưa thực hiện\n\nTình trạng: Chưa thực hiện\n\n## Cụm đèn High Power\n\nNội dung xử lý: Nếu lỗi còn, đối chiếu mã và thay thủ bằng cụm dự phòng trong tủ line\n\nKết quả: Chưa thực hiện; đang chờ chuyên gia xác nhận\n\n<!-- page 17 -->\n\nTình trạng: Chưa thực hiện\n\n## Chạy thủ\n\nNội dung xử lý: Khi hết lỗi, chạy một chu trình ở tổc độ thấp trước khi trả máy sản xuất\n\nKết quả: Chưa thực hiện\n\n## Kết quả và phê duyệt\n\nTình trạng: Chưa thực hiện\n\nKết quả xác nhận: Chưa xác nhận. Robot còn báo lỗi -924 và dây chuyển chưa hoạt động lại.\n\nPhạm vi áp dụng: Cell xếp pallet PACK2. Nhận định về cụm đèn chỉ dựa trên ghi nhận riêng của cell này; không áp dụng mặc định cho robot i4L ở vị trí khác.\n\nTài liệu đính kèm: Chưa có. Cần bổ sung ảnh màn hình lỗi, trạng thái đèn High Power và cáp XFP.\n\nGhi chú: Câu hỏi chờ chuyên gia: có cho phép thay thử cụm đèn dự phòng không, và có cần bổ sung biện pháp chống rung nếu xác nhận cụm đèn hỏng không?\n\n• Phê duyệt: TL: đã trình. SV: chờ duyệt. MGR: chờ duyệt.",
+  "records": [
+    {
+      "artifact_id": "98e12220-4331-4197-bd8f-c464ce451c09",
+      "subject": "Robot SCARA Omron i4L (trạm gắp đặt Line 2)",
+      "claim": "Sau lần sụt áp đầu ca, robot khởi động bình thường nhưng không chuyển động: đèn Control Power sáng, đèn High Power không lên khi bấm nút bật, bộ điều khiển không báo mã lỗi và khởi động lại không khắc phục. Sau LOTO, kiểm tra thấy giắc cấu nối XSYSTEM của mạch cho phép High Power lỏng; cắm lại thì đèn High Power sáng và robot chạy một chu trình tốc độ thấp bình thường rồi được trả cho sản xuất, chưa theo dõi lâu hơn.",
+      "type": "case",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Đèn Control Power sáng, đèn High Power không lên khi bấm nút bật."
+          },
+          {
+            "quote": "Giấc lỏng; sau khi cắm lại, đèn High Power sáng"
+          },
+          {
+            "quote": "Đèn High Power sáng, robot chạy một chu trình tốc độ thấp bình thường rồi trả máy cho sản xuất. Chưa theo dõi lâu hơn."
+          }
+        ],
+        "certainty": "stated",
+        "applies_to": "Trạm gắp đặt Line 2"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            89,
+            961,
+            1128,
+            1107
+          ],
+          "page": 6,
+          "type": "page",
+          "label": "text",
+          "quote": "Đèn Control Power sáng, đèn High Power không lên khi bấm nút bật.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            87,
+            519,
+            704,
+            550
+          ],
+          "page": 7,
+          "type": "page",
+          "label": "text",
+          "quote": "Giấc lỏng; sau khi cắm lại, đèn High Power sáng",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            87,
+            36,
+            1118,
+            105
+          ],
+          "page": 8,
+          "type": "page",
+          "label": "text",
+          "quote": "Đèn High Power sáng, robot chạy một chu trình tốc độ thấp bình thường rồi trả máy cho sản xuất. Chưa theo dõi lâu hơn.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "1559c69f-74e3-4987-a647-21072c0fcbf8",
+      "subject": "Cell xếp pallet PACK2 - cụm đèn High Power",
+      "claim": "Thực hiện LOTO trước khi thao tác; kiểm tra và cắm lại cáp XFP trước, chỉ thay cụm đèn bằng linh kiện đúng mã sau khi được chuyên gia xác nhận, và chưa có căn cứ để thay servo amplifier.",
+      "type": "heuristic",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Thực hiện LOTO trước khi thao tác. Kiểm tra và cắm lại cáp XFP trước; chỉ thay cụm đèn bằng linh kiện đúng mã sau khi được chuyên gia xác nhận. Chưa có căn cứ để thay servo amplifier."
+          }
+        ],
+        "certainty": "stated",
+        "condition": "khi xử lý lỗi -924",
+        "applies_to": "Cell xếp pallet PACK2"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [
+        "98662a86-011e-45e5-8d00-9b9c86feb0e4"
+      ],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            87,
+            572,
+            1129,
+            683
+          ],
+          "page": 16,
+          "type": "page",
+          "label": "text",
+          "quote": "Thực hiện LOTO trước khi thao tác. Kiểm tra và cắm lại cáp XFP trước; chỉ thay cụm đèn bằng linh kiện đúng mã sau khi được chuyên gia xác nhận. Chưa có căn cứ để thay servo amplifier.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "1aa0dfb1-6860-45af-aedb-2a5224219adb",
+      "subject": "Hệ thống nước làm mát VSC 0009",
+      "claim": "Kiểm tra lưu lượng và nhiệt độ vào/ra bộ trao đổi nhiệt trước khi thay bơm, và báo cáo trước khi mở bộ trao đổi nhiệt.",
+      "type": "heuristic",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Kiểm tra lưu lượng và nhiệt độ vào/ra bộ trao đổi nhiệt trước khi thay bớm. Báo cáo trước khi mở bộ trao đổi nhiệt."
+          }
+        ],
+        "certainty": "stated",
+        "condition": "khi nước làm mát quá nhiệt chưa rõ nguyên nhân",
+        "applies_to": "VSC 0009 No.4"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [
+        "56b704fc-96fd-4cbb-8035-616d9c2c8b79"
+      ],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            86,
+            891,
+            1120,
+            961
+          ],
+          "page": 12,
+          "type": "page",
+          "label": "text",
+          "quote": "Kiểm tra lưu lượng và nhiệt độ vào/ra bộ trao đổi nhiệt trước khi thay bớm. Báo cáo trước khi mở bộ trao đổi nhiệt.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "1b3b1cd4-a71d-4a7d-8ebc-5c44c7840d1a",
+      "subject": "Cụm turret VLA 0029",
+      "claim": "Rút ngắn chu kỳ vệ sinh cụm turret và theo dõi tần suất lỗi 2117 trong 1 tuần.",
+      "type": "heuristic",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Rút ngắn chu kỳ về sinh cụm turret. Theo dõi tần suất lỗi 2117 trong 1 tuần."
+          }
+        ],
+        "certainty": "stated",
+        "condition": "sau khi khắc phục lỗi 2117 do phôi bám dính",
+        "applies_to": "VLA 0029 (A1)"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [
+        "952985e2-83fc-40d5-98d3-9f6335cd1042"
+      ],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            85,
+            188,
+            1034,
+            221
+          ],
+          "page": 11,
+          "type": "page",
+          "label": "text",
+          "quote": "Rút ngắn chu kỳ về sinh cụm turret. Theo dõi tần suất lỗi 2117 trong 1 tuần.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "558f49ac-8c02-442e-adfb-976bba40036e",
+      "subject": "Thanh dẫn shutter VEH 0019",
+      "claim": "Đưa việc tra dầu thanh dẫn shutter vào lịch bảo trì tuần; nếu shutter còn giật sau 1 tuần thì kiểm tra tốc độ động cơ.",
+      "type": "heuristic",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Đưa việc tra dầu thanh dẫn vào lịch bảo trì tuần. Nếu còn giật sau 1 tuần thì kiểm tra tốc độ động cơ."
+          }
+        ],
+        "certainty": "stated",
+        "condition": "sau khi khắc phục shutter giật do khô dầu",
+        "applies_to": "Shutter VEH 0019 No.1"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [
+        "a3a7187e-3aff-4f57-bc73-40ebb6043f2e"
+      ],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            86,
+            654,
+            1130,
+            725
+          ],
+          "page": 3,
+          "type": "page",
+          "label": "text",
+          "quote": "Đưa việc tra dầu thanh dẫn vào lịch bảo trì tuần. Nếu còn giật sau 1 tuần thì kiểm tra tốc độ động cơ.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "56b704fc-96fd-4cbb-8035-616d9c2c8b79",
+      "subject": "VSC 0009 (Máy rửa Rô-to No.4)",
+      "claim": "Máy báo nước làm mát quá nhiệt và dừng chu trình rửa; nhiệt độ nước đầu ca tăng dần theo số chu kỳ, chưa xác định vị trí tắc hoặc hỏng. Đã đo nhiệt độ nước tại bể và đầu ra bơm (cao hơn mức cài đặt cảnh báo) và súc rửa lọc nước (lọc có cặn); chưa đo lưu lượng, chưa kiểm tra bộ trao đổi nhiệt và chưa chạy lại máy để xem nhiệt độ có giảm không.",
+      "type": "case",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Máy báo nước làm mát quá nhiệt, dùng chu trình rửa. Đầu ca nhiệt độ nước tăng dần theo số chu kỳ. Chưa xác định vị trí tắc hoặc hỏng."
+          },
+          {
+            "quote": "Đã sức rửa lọc nhưng chưa chạy lại máy để xem nhiệt độ có giảm không."
+          }
+        ],
+        "certainty": "stated",
+        "applies_to": "VSC 0009 No.4"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            88,
+            432,
+            1095,
+            499
+          ],
+          "page": 12,
+          "type": "page",
+          "label": "text",
+          "quote": "Máy báo nước làm mát quá nhiệt, dùng chu trình rửa. Đầu ca nhiệt độ nước tăng dần theo số chu kỳ. Chưa xác định vị trí tắc hoặc hỏng.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            87,
+            449,
+            1133,
+            519
+          ],
+          "page": 13,
+          "type": "page",
+          "label": "text",
+          "quote": "Đã sức rửa lọc nhưng chưa chạy lại máy để xem nhiệt độ có giảm không.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "5c791968-0953-48fd-84ff-cc84bea5d49c",
+      "subject": "VALA 0001 (Máy gia công MC20 số 1)",
+      "claim": "Máy đang hoạt động bình thường thì đột ngột mất master ON, báo lỗi sai lệch tọa độ trục X1 khoảng 0,8 mm dù không có va chạm hoặc kẹt trục trước đó và nhiệt độ tủ điện bình thường. Đã phục hồi master ON, về gốc các trục, kiểm tra và cắm lại giắc encoder X1 (giắc phía driver hơi lỏng, phía motor bình thường), hiệu chỉnh lại tọa độ gốc X1; sai lệch giảm từ 0,8 mm xuống 0,02 mm (giới hạn ≤0,05) và 5/5 sản phẩm đo đạt, theo dõi 2 giờ không mất master ON lại.",
+      "type": "case",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Máy đang hoạt động bình thường thì đột ngột mất master ON. Báo lỗi sai lệch tọa độ trực X1 khoảng 0,8 mm."
+          },
+          {
+            "quote": "Giác phía driver hỏi lỏng; phía motor bình thường"
+          },
+          {
+            "quote": "5/5 sản phẩm đạt kích thước. Theo dõi 2 giờ sau khi trả máy, không mất master ON lại."
+          }
+        ],
+        "certainty": "stated",
+        "applies_to": "MC20 số 1"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            88,
+            1316,
+            1094,
+            1425
+          ],
+          "page": 8,
+          "type": "page",
+          "label": "text",
+          "quote": "Máy đang hoạt động bình thường thì đột ngột mất master ON. Báo lỗi sai lệch tọa độ trực X1 khoảng 0,8 mm.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            86,
+            828,
+            715,
+            860
+          ],
+          "page": 9,
+          "type": "page",
+          "label": "text",
+          "quote": "Giác phía driver hỏi lỏng; phía motor bình thường",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            87,
+            122,
+            1119,
+            190
+          ],
+          "page": 10,
+          "type": "page",
+          "label": "text",
+          "quote": "5/5 sản phẩm đạt kích thước. Theo dõi 2 giờ sau khi trả máy, không mất master ON lại.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "73c6d489-c644-40f4-b1a4-eed301bf9db4",
+      "subject": "Robot SCARA Omron i4L (cell lắp ráp C)",
+      "claim": "Sau khi mở cửa cell để thay tool rồi đóng lại, hệ thống không nhận khóa liên động cửa nên robot không được cấp High Power; công tắc liên động ở vị trí đóng nhưng đèn tín hiệu không sáng và cánh cửa hơi lệch so với khung khi nhìn từ phía trên, mở đóng lại hai lần không khắc phục được. Chưa điều chỉnh hoặc thay linh kiện; robot chưa được cấp High Power và cell chưa trả lại sản xuất.",
+      "type": "case",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Công tắc liên động ở vị trí đóng nhưng đèn tín hiệu không sáng. Cánh cửa hơi lệch so với khung khi nhìn từ phía trên. Mở đóng lại hai lần không khắc phục được."
+          },
+          {
+            "quote": "Robot chưa được cấp High Power và cell chưa trả lại sản xuất."
+          }
+        ],
+        "certainty": "stated",
+        "applies_to": "Cell lắp ráp C"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            89,
+            36,
+            1106,
+            180
+          ],
+          "page": 14,
+          "type": "page",
+          "label": "text",
+          "quote": "Công tắc liên động ở vị trí đóng nhưng đèn tín hiệu không sáng. Cánh cửa hơi lệch so với khung khi nhìn từ phía trên. Mở đóng lại hai lần không khắc phục được.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            86,
+            271,
+            1102,
+            303
+          ],
+          "page": 15,
+          "type": "page",
+          "label": "text",
+          "quote": "Robot chưa được cấp High Power và cell chưa trả lại sản xuất.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "8781f740-b5c7-4ecf-b6f6-e5234ca08ee9",
+      "subject": "Connector kiểm tra của các máy VIM",
+      "claim": "Bổ sung theo dõi số lần cắm cho connector kiểm tra của các máy VIM để thay trước khi hỏng; số lần cắm 25.000 lấy từ ghi nhận bảo trì của máy VIM 0196 và chưa đối chiếu với thông số kỹ thuật của máy No.6.",
+      "type": "heuristic",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Bổ sung theo dõi số lần cắm cho connector kiểm tra của các máy VIM."
+          },
+          {
+            "quote": "Số lần cắm 25.000 lấy từ ghi nhận bảo trì của máy VIM 0196; chưa đối chiếu với thông số kỹ thuật của máy No.6."
+          }
+        ],
+        "certainty": "stated",
+        "applies_to": "các máy VIM"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [
+        "b3db44a2-3860-4518-b990-0dfeb7e87026"
+      ],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            87,
+            74,
+            994,
+            107
+          ],
+          "page": 5,
+          "type": "page",
+          "label": "text",
+          "quote": "Bổ sung theo dõi số lần cắm cho connector kiểm tra của các máy VIM.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            89,
+            1361,
+            1129,
+            1431
+          ],
+          "page": 5,
+          "type": "page",
+          "label": "text",
+          "quote": "Số lần cắm 25.000 lấy từ ghi nhận bảo trì của máy VIM 0196; chưa đối chiếu với thông số kỹ thuật của máy No.6.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "8e0fa46e-dcd2-4994-881f-82348692ab61",
+      "subject": "Cell xếp pallet PACK2 - cụm đèn High Power",
+      "claim": "Ghi nhận sửa chữa trước đây tại cell này cho rằng rung từ băng tải có thể làm cụm đèn hỏng sau 12-18 tháng; đây là tri thức nháp, chưa được chuyên gia duyệt và không áp dụng mặc định cho robot i4L ở vị trí khác.",
+      "type": "fact",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Ghi nhận sửa chữa trước đây tại cell này cho rằng rung từ bằng tải có thể làm cụm đèn hồng sau 12-18 tháng; đây là tri thức nháp, chưa được chuyên gia duyệt."
+          },
+          {
+            "quote": "Nhận định về cụm đèn chỉ dựa trên ghi nhận riêng của cell này; không áp dụng mặc định cho robot i4L ở vị trí khác."
+          }
+        ],
+        "certainty": "uncertain",
+        "applies_to": "Cell xếp pallet PACK2"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            88,
+            343,
+            1101,
+            412
+          ],
+          "page": 16,
+          "type": "page",
+          "label": "text",
+          "quote": "Ghi nhận sửa chữa trước đây tại cell này cho rằng rung từ bằng tải có thể làm cụm đèn hồng sau 12-18 tháng; đây là tri thức nháp, chưa được chuyên gia duyệt.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            89,
+            451,
+            1127,
+            520
+          ],
+          "page": 17,
+          "type": "page",
+          "label": "text",
+          "quote": "Nhận định về cụm đèn chỉ dựa trên ghi nhận riêng của cell này; không áp dụng mặc định cho robot i4L ở vị trí khác.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "952985e2-83fc-40d5-98d3-9f6335cd1042",
+      "subject": "VLA 0029 (Máy gia công bề mặt Rô-to A-10, A1)",
+      "claim": "Phôi bám dính cụm turret dao làm turret đóng mở không lùi về hết hành trình và máy dừng với lỗi 2117, lỗi lặp lại sau khoảng 200-300 sản phẩm. Đã xả dầu áp dư, vệ sinh phôi bám dính cụm turret và tra dầu bề mặt trượt; turret đóng mở tròn tru và chạy thử 30 chu kỳ không lỗi, nhưng chưa theo dõi lâu hơn một ca, chưa đo áp suất dầu thủy lực và chưa loại trừ mòn xy-lanh.",
+      "type": "case",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Phôi bám dính cụm turret dao. Khi turret đóng mở, không lùi về hết hành trình, máy dùng với lỗi 2117. Lỗi lặp lại sau khoảng 200-300 sản phẩm."
+          },
+          {
+            "quote": "Chạy thứ 30 chu kỳ đóng mở turret không lỗi. Chưa theo dõi lâu hơn một ca."
+          }
+        ],
+        "certainty": "stated",
+        "applies_to": "VLA 0029 (A1)"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            86,
+            1362,
+            1089,
+            1433
+          ],
+          "page": 10,
+          "type": "page",
+          "label": "text",
+          "quote": "Phôi bám dính cụm turret dao. Khi turret đóng mở, không lùi về hết hành trình, máy dùng với lỗi 2117. Lỗi lặp lại sau khoảng 200-300 sản phẩm.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            85,
+            872,
+            1082,
+            905
+          ],
+          "page": 11,
+          "type": "page",
+          "label": "text",
+          "quote": "Chạy thứ 30 chu kỳ đóng mở turret không lỗi. Chưa theo dõi lâu hơn một ca.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "96a3542d-770e-4bea-853a-43d7e31c4ece",
+      "subject": "Giắc XSYSTEM tại trạm gắp đặt Line 2",
+      "claim": "Việc giắc XSYSTEM hay lỏng là ghi nhận riêng của trạm gắp đặt Line 2, chưa được chuyên gia duyệt và không áp dụng mặc định cho robot i4L ở trạm khác; nguyên nhân gốc (giắc tự làm lỏng sau nhiều chu kỳ nóng - nguội) chỉ là giả thuyết.",
+      "type": "fact",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Việc giấc XSYSTEM hay lỏng là ghi nhận riêng của trạm này, chưa được chuyên gia duyệt; không áp dụng mặc định cho robot i4L ở trạm khác."
+          },
+          {
+            "quote": "Giấc XSYSTEM là giấc tự làm, lỏng sau nhiều chu kỳ nóng - nguội (giả thuyết, theo ghi nhận sửa chữa trước đây tại trạm này)."
+          }
+        ],
+        "certainty": "uncertain",
+        "applies_to": "Trạm gắp đặt Line 2"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [
+            "evidence 2: quote is not in the transcript"
+          ],
+          "method": "quotes",
+          "passed": false
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            88,
+            112,
+            1126,
+            183
+          ],
+          "page": 8,
+          "type": "page",
+          "label": "text",
+          "quote": "Việc giấc XSYSTEM hay lỏng là ghi nhận riêng của trạm này, chưa được chuyên gia duyệt; không áp dụng mặc định cho robot i4L ở trạm khác.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "type": "source",
+          "quote": "Giấc XSYSTEM là giấc tự làm, lỏng sau nhiều chu kỳ nóng - nguội (giả thuyết, theo ghi nhận sửa chữa trước đây tại trạm này).",
+          "location_missing": true
+        }
+      ]
+    },
+    {
+      "artifact_id": "98662a86-011e-45e5-8d00-9b9c86feb0e4",
+      "subject": "Robot SCARA Omron i4L (cell xếp pallet PACK2)",
+      "claim": "Robot báo lỗi -924 mỗi khi yêu cầu cấp High Power; đèn High Power trên bảng điều khiển phía trước không nháy và không có mã lỗi khác, hai tuần trước đèn từng chớp tắt bất thường, khởi động lại bộ điều khiển không khắc phục. Đã kiểm tra nút dừng khẩn cấp và khóa liên động cửa (không phát hiện bất thường); chưa kiểm tra cắm lại cáp XFP, chưa thay cụm đèn, robot còn báo lỗi và dây chuyền chưa hoạt động lại.",
+      "type": "case",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Robot báo lỗi -924 mỗi khi yêu cầu cấp High Power. Đèn High Power trên bảng điều khiển phía trước không nháy và không có mã lỗi khác."
+          },
+          {
+            "quote": "Robot còn báo lỗi -924 và dây chuyển chưa hoạt động lại."
+          }
+        ],
+        "certainty": "stated",
+        "applies_to": "Cell xếp pallet PACK2"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            88,
+            35,
+            1128,
+            144
+          ],
+          "page": 16,
+          "type": "page",
+          "label": "text",
+          "quote": "Robot báo lỗi -924 mỗi khi yêu cầu cấp High Power. Đèn High Power trên bảng điều khiển phía trước không nháy và không có mã lỗi khác.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            87,
+            412,
+            1056,
+            444
+          ],
+          "page": 17,
+          "type": "page",
+          "label": "text",
+          "quote": "Robot còn báo lỗi -924 và dây chuyển chưa hoạt động lại.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "9998b711-eb89-4d50-80ce-a78aac38cf4b",
+      "subject": "Mạch liên động an toàn cell lắp ráp C",
+      "claim": "Không được đấu tắt mạch an toàn; phải thực hiện LOTO trước khi kiểm tra cơ khí hoặc dây dẫn, đo độ lệch và khe hở trước khi chỉnh giá đỡ, và chưa chèn tấm đệm khi chưa có kích thước được chuyên gia xác nhận.",
+      "type": "rule",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Không đấu tất mạch an toàn. Thực hiện LOTO trước khi kiểm tra cơ khí hoặc dây dẫn."
+          },
+          {
+            "quote": "Đo độ lệch và khe hở trước khi chỉnh giá đồ; chưa chèn tấm đệm khi chưa có kích thước được chuyên gia xác nhận."
+          }
+        ],
+        "certainty": "stated",
+        "condition": "khi xử lý lỗi không nhận khóa liên động cửa",
+        "applies_to": "Cell lắp ráp C"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            87,
+            651,
+            1112,
+            759
+          ],
+          "page": 14,
+          "type": "page",
+          "label": "text",
+          "quote": "Không đấu tất mạch an toàn. Thực hiện LOTO trước khi kiểm tra cơ khí hoặc dây dẫn.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            87,
+            651,
+            1112,
+            759
+          ],
+          "page": 14,
+          "type": "page",
+          "label": "text",
+          "quote": "Đo độ lệch và khe hở trước khi chỉnh giá đồ; chưa chèn tấm đệm khi chưa có kích thước được chuyên gia xác nhận.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "a3a7187e-3aff-4f57-bc73-40ebb6043f2e",
+      "subject": "VEH 0019 (Thổi khí No.1) - shutter DC3",
+      "claim": "Tuần tra phát hiện cửa shutter mở chậm và giật cục, có lúc dừng giữa hành trình; dầu bôi trơn thanh dẫn đã khô, cảm biến vị trí mở/đóng vẫn tác động đúng và động cơ không kêu bất thường. Đã lau sạch thanh dẫn, tra dầu, kiểm tra cảm biến và chạy thử mở đóng 10 lần; chuyển động trơn hơn rõ rệt, không dừng giữa hành trình, nhưng chưa theo dõi sau 1 tuần và chưa kiểm tra tốc độ động cơ.",
+      "type": "case",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Tuần tra phát hiện cửa shutter di chuyển mở với tốc độ chậm và bị giật cực, có lúc dùng giữa hành trình. Dầu bôi trơn thanh dẫn đã khô."
+          },
+          {
+            "quote": "Chạy thử 10 lần không giật, không dùng giữa hành trình. Chưa theo dõi sau 1 tuần."
+          }
+        ],
+        "certainty": "stated",
+        "applies_to": "Shutter VEH 0019 No.1"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            88,
+            194,
+            1132,
+            304
+          ],
+          "page": 3,
+          "type": "page",
+          "label": "text",
+          "quote": "Tuần tra phát hiện cửa shutter di chuyển mở với tốc độ chậm và bị giật cực, có lúc dùng giữa hành trình. Dầu bôi trơn thanh dẫn đã khô.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            88,
+            36,
+            1082,
+            103
+          ],
+          "page": 4,
+          "type": "page",
+          "label": "text",
+          "quote": "Chạy thử 10 lần không giật, không dùng giữa hành trình. Chưa theo dõi sau 1 tuần.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "ac06be21-c204-4e3e-a1f1-18eee6c4d062",
+      "subject": "Robot SCARA Omron i4L - mạch cho phép High Power",
+      "claim": "Khắc phục lỗi robot i4L không bật được High Power sau sụt áp bằng cách đi từ dễ đến khó, bắt đầu từ giắc XSYSTEM; không thay servo amplifier khi mạch cho phép chưa được loại trừ.\n1. Ngắt High Power, khóa và treo thẻ (LOTO) trước khi chạm vào giắc.\n2. Rút giắc XSYSTEM, kiểm tra chân giắc, cắm lại cho chắc, bật thử High Power.\n3. Nếu lỗi còn, đóng chặt cửa và gõ nhẹ vỏ công tắc cửa an toàn.\n4. Nếu lỗi còn, đo điện trở cuộn hút contactor High Power (giá trị đúng khoảng 120 Ω).\n5. Chạy thử một chu trình ở tốc độ thấp trước khi trả máy.",
+      "type": "procedure",
+      "context": {
+        "steps": [
+          "Ngắt High Power, khóa và treo thẻ (LOTO) trước khi chạm vào giắc.",
+          "Rút giắc XSYSTEM, kiểm tra chân giắc, cắm lại cho chắc, bật thử High Power.",
+          "Nếu lỗi còn, đóng chặt cửa và gõ nhẹ vỏ công tắc cửa an toàn.",
+          "Nếu lỗi còn, đo điện trở cuộn hút contactor High Power (giá trị đúng khoảng 120 Ω).",
+          "Chạy thử một chu trình ở tốc độ thấp trước khi trả máy."
+        ],
+        "quotes": [
+          {
+            "quote": "Ngất High Power, khóa và treo thẻ (LOTO)"
+          },
+          {
+            "quote": "Rút giấc, kiểm tra chân giấc, cắm lại cho chắc, bật thủ High Power"
+          },
+          {
+            "quote": "Không thay servo amplifier khi mạch cho phép chưa được loại trừ. Chạy thủ một chu trình tốc độ thấp trước khi trả máy."
+          }
+        ],
+        "certainty": "stated",
+        "condition": "robot không bật được High Power sau sụt áp",
+        "applies_to": "Trạm gắp đặt Line 2"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [
+        "98e12220-4331-4197-bd8f-c464ce451c09"
+      ],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            86,
+            264,
+            706,
+            295
+          ],
+          "page": 7,
+          "type": "page",
+          "label": "text",
+          "quote": "Ngất High Power, khóa và treo thẻ (LOTO)",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            86,
+            480,
+            956,
+            513
+          ],
+          "page": 7,
+          "type": "page",
+          "label": "text",
+          "quote": "Rút giấc, kiểm tra chân giấc, cắm lại cho chắc, bật thủ High Power",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            86,
+            1498,
+            1094,
+            1570
+          ],
+          "page": 6,
+          "type": "page",
+          "label": "text",
+          "quote": "Không thay servo amplifier khi mạch cho phép chưa được loại trừ. Chạy thủ một chu trình tốc độ thấp trước khi trả máy.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "b3db44a2-3860-4518-b990-0dfeb7e87026",
+      "subject": "VIM 0200 (Máy kiểm tra tính năng No.6)",
+      "claim": "Máy báo NG dòng điện liên tục từ đầu ca, sản phẩm bị loại hàng loạt dù đã đổi lot; giá trị dòng đo dao động mạnh và thay đổi khi rung nhẹ dây tín hiệu, trong khi máy No.5 cùng lot vẫn đạt và ngưỡng dòng cài đặt không đổi. Đã thay connector kiểm tra dự phòng (chân tiếp xúc mòn, đã dùng khoảng 25.000 lần cắm) và chạy 20 sản phẩm liên tiếp, tỷ lệ NG trở về bình thường.",
+      "type": "case",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Máy báo NG dòng điện liên tục từ đầu ca, sản phẩm bị loại hàng loạt dù đã đổi lot."
+          },
+          {
+            "quote": "Thay connector dự phòng"
+          },
+          {
+            "quote": "Chạy 20 sản phẩm liên tiếp, tỷ lệ NG trỏ về bình thường."
+          }
+        ],
+        "certainty": "stated",
+        "applies_to": "VIM 0200 No.6"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            89,
+            1164,
+            1132,
+            1271
+          ],
+          "page": 4,
+          "type": "page",
+          "label": "text",
+          "quote": "Máy báo NG dòng điện liên tục từ đầu ca, sản phẩm bị loại hàng loạt dù đã đổi lot.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            86,
+            738,
+            545,
+            770
+          ],
+          "page": 5,
+          "type": "page",
+          "label": "text",
+          "quote": "Thay connector dự phòng",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            86,
+            1242,
+            880,
+            1275
+          ],
+          "page": 5,
+          "type": "page",
+          "label": "text",
+          "quote": "Chạy 20 sản phẩm liên tiếp, tỷ lệ NG trỏ về bình thường.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "cdc6c54c-8b8b-4d30-82f4-c32d913e0c12",
+      "subject": "Cell lắp ráp C - khóa liên động cửa",
+      "claim": "Nhật ký ca ghi nhận hiện tượng tương tự khoảng 4 lần trong 6 tháng, có thể liên quan đến bản lề hoặc giá đỡ dịch chuyển, nhưng chưa có kết quả đo hoặc nguyên nhân được xác nhận.",
+      "type": "fact",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Nhật ký ca ghi nhận hiện tượng tương tự khoảng 4 lần trong 6 tháng; có thể liên quan đến bản lề hoặc giá đỡ dịch chuyển (giả thuyết)."
+          }
+        ],
+        "certainty": "uncertain",
+        "applies_to": "Cell lắp ráp C"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            88,
+            459,
+            1091,
+            527
+          ],
+          "page": 14,
+          "type": "page",
+          "label": "text",
+          "quote": "Nhật ký ca ghi nhận hiện tượng tương tự khoảng 4 lần trong 6 tháng; có thể liên quan đến bản lề hoặc giá đỡ dịch chuyển (giả thuyết).",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    },
+    {
+      "artifact_id": "d1b9473b-f37c-4ce3-946a-2c8fa8346990",
+      "subject": "MC20 số 1 - encoder trục X1",
+      "claim": "Đo 5 sản phẩm liên tiếp trước khi trả máy cho sản xuất; nếu sai lệch tọa độ lặp lại thì thay cáp encoder X1 trước khi xem xét thay encoder.",
+      "type": "heuristic",
+      "context": {
+        "quotes": [
+          {
+            "quote": "Đo 5 sản phẩm liên tiếp trước khi trả máy cho sản xuất. Nếu sai lệch lặp lại, xem xét thay encoder."
+          },
+          {
+            "quote": "Nếu lỗi lặp lại, thay cấp encoder X1 trước khi xem xét thay encoder."
+          }
+        ],
+        "certainty": "stated",
+        "condition": "sau khi khắc phục mất master ON do sai lệch tọa độ X1",
+        "applies_to": "MC20 số 1"
+      },
+      "stated_by": null,
+      "valid_from": null,
+      "valid_to": null,
+      "supported_by": [
+        "5c791968-0953-48fd-84ff-cc84bea5d49c"
+      ],
+      "contradicted_by": [],
+      "conflict_with": [],
+      "superseded_by": null,
+      "revision": {
+        "verify": {
+          "issues": [],
+          "method": "quotes",
+          "passed": true
+        },
+        "consolidation": {
+          "action": "add",
+          "reason": "no similar lesson"
+        }
+      },
+      "references": [
+        {
+          "bbox": [
+            86,
+            303,
+            1126,
+            373
+          ],
+          "page": 9,
+          "type": "page",
+          "label": "text",
+          "quote": "Đo 5 sản phẩm liên tiếp trước khi trả máy cho sản xuất. Nếu sai lệch lặp lại, xem xét thay encoder.",
+          "page_width": 1192,
+          "page_height": 1684
+        },
+        {
+          "bbox": [
+            87,
+            324,
+            895,
+            355
+          ],
+          "page": 10,
+          "type": "page",
+          "label": "text",
+          "quote": "Nếu lỗi lặp lại, thay cấp encoder X1 trước khi xem xét thay encoder.",
+          "page_width": 1192,
+          "page_height": 1684
+        }
+      ]
+    }
+  ]
+}

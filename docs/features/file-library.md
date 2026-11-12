@@ -11,13 +11,19 @@ extraction requested. The worker converts and extracts it asynchronously. A
 queue or attachment failure leaves the personal file available and is shown on
 the row; a failed attachment can be retried without uploading the bytes again.
 An identical active KB source is linked instead of starting a duplicate job.
-The library matches files to active sources across KBs by exact content hash and refreshes
-source state in the background, including after page reload. The card menu previews,
+The library matches each file to sources by its file record ID and refreshes source
+state in the background, including after page reload. Matching by record ID keeps
+separate uploads of identical bytes isolated between KBs. The grid lists only files
+with a source in the default KB. A file stored or failing to attach in the current page
+session also stays listed so its state and retry remain reachable. Files that belong only to
+other KBs, or to no KB, are not shown; they remain in the personal library and
+`GET /v1/files` still returns them. The card menu previews,
 opens or downloads the file, shows processing state or removes the source from the
 KB after confirmation.
-Multiple cards can be selected for source removal. Identical files can refer to the
-same source: removing it affects every file sharing that source. Source removal
-keeps the personal file and retains the evidence for history. A running job blocks
+Multiple cards can be selected for source removal. One library file can be attached
+to several KBs, but separately uploaded files remain separate even when their hashes
+match. Source removal keeps the personal file and retains the evidence for history;
+the file then no longer appears in this KB's library. A running job blocks
 removal, and backend role and ownership rules apply. Failed attachments can be
 retried from **Trạng thái xử lý** in the current page session. Previews use
 authenticated endpoints.

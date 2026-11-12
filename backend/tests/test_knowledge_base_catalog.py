@@ -134,6 +134,18 @@ class CatalogTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(name), self.assertRaises(KnowledgeBaseConflict):
                 await catalog.create(name=name, title="KB", created_by=creator)
 
+    async def test_deleted_name_can_be_created_again(self):
+        catalog = KnowledgeBaseCatalog(FakeRepository())
+        creator = uuid4()
+        first = await catalog.create(name="may_ep", title="Máy ép", created_by=creator)
+
+        await catalog.delete("may_ep")
+        second = await catalog.create(name="may_ep", title="Máy ép mới", created_by=creator)
+
+        self.assertEqual(second["name"], first["name"])
+        self.assertEqual(second["title"], "Máy ép mới")
+        self.assertEqual(catalog.names(), ["may_ep"])
+
     async def test_restart_loads_only_repository_rows(self):
         creator = uuid4()
         repository = FakeRepository()
