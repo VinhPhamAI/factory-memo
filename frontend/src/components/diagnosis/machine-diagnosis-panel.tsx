@@ -13,6 +13,8 @@ import {
   Bot,
   ChevronRight,
   CircleCheck,
+  Eye,
+  EyeOff,
   Cpu,
   Factory,
   Gauge,
@@ -200,6 +202,30 @@ function DetailedRun() {
   );
 }
 
+const HIDDEN_KEY = "machine-3d:hidden";
+const EMPTY: string[] = [];
+
+/** Read the components each machine hides, saved in this browser only. */
+function loadHidden(): Record<string, string[]> {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "{}");
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter((entry): entry is [string, string[]] => Array.isArray(entry[1]) && entry[1].every((id) => typeof id === "string")),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveHidden(hidden: Record<string, string[]>) {
+  try {
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden));
+  } catch {
+    // Private windows or blocked storage: hiding still works for this visit.
+  }
+}
+
 /** Components of a machine grouped for the picker, in group order. */
 function grouped(machine: MachineDefinition) {
   const items = selectableComponents(machine);
@@ -311,6 +337,7 @@ export function MachineDiagnosisPanel({ state, onClose, onOpen, variant = "docke
   const [showStats, setShowStats] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [stats, setStats] = useState<ViewerStats | null>(null);
+  const [hiddenByMachine, setHiddenByMachine] = useState<Record<string, string[]>>(loadHidden);
   const [sceneError, setSceneError] = useState("");
   const scene = useRef<SceneApi | null>(null);
   const panel = useRef<HTMLElement>(null);
@@ -363,6 +390,20 @@ export function MachineDiagnosisPanel({ state, onClose, onOpen, variant = "docke
     );
 
   const ready = phase === "ready";
+  const hidden = hiddenByMachine[machine.id] ?? EMPTY;
+  const toggleHidden = (id: string) => {
+    const next = hidden.includes(id) ? hidden.filter((item) => item !== id) : [...hidden, id];
+    const all = { ...hiddenByMachine, [machine.id]: next };
+    if (!next.length) delete all[machine.id];
+    setHiddenByMachine(all);
+    saveHidden(all);
+  };
+  const showAll = () => {
+    const all = { ...hiddenByMachine };
+    delete all[machine.id];
+    setHiddenByMachine(all);
+    saveHidden(all);
+  };
   const select = (id: string, focus = true) => {
     setSelected(id);
     if (focus) scene.current?.focus(id);
@@ -462,6 +503,7 @@ export function MachineDiagnosisPanel({ state, onClose, onOpen, variant = "docke
                 machine={machine}
                 fault={fault}
                 selected={selected}
+                hidden={hidden}
                 xray={xray}
                 motion={motion}
                 autoRotate={autoRotate}
@@ -501,23 +543,37 @@ export function MachineDiagnosisPanel({ state, onClose, onOpen, variant = "docke
         </div>
 
         <nav className="dx-parts" aria-label="Bộ phận của máy">
+          {hidden.length > 0 && (
+            <div className="dx-hidden-bar" role="status">
+              <EyeOff size={14} aria-hidden="true" />
+              <span>Đang ẩn {hidden.length} bộ phận trên mô hình</span>
+              <button type="button" className="dx-link" onClick={showAll}>Hiện tất cả</button>
+            </div>
+          )}
           {groups.map((group) => (
             <div key={group.id} className="dx-part-group">
               <span className="dx-part-group-label">{group.label}</span>
               <div className="dx-part-list">
                 {group.items.map((item) => {
                   const status = componentStatus(fault, item.id);
+                  const isHidden = hidden.includes(item.id);
                   return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`dx-part ${status} ${item.id === selected ? "selected" : ""}`}
-                      aria-pressed={item.id === selected}
-                      onClick={() => select(item.id)}
-                    >
-                      <span className="dx-part-dot" aria-hidden="true" />
-                      {item.label}
-                    </button>
+                    <span key={item.id} className={`dx-part ${status} ${item.id === selected ? "selected" : ""} ${isHidden ? "is-hidden" : ""}`}>
+                      <button type="button" className="dx-part-main" aria-pressed={item.id === selected} onClick={() => select(item.id, !isHidden)}>
+                        <span className="dx-part-dot" aria-hidden="true" />
+                        {item.label}
+                      </button>
+                      <button
+                        type="button"
+                        className="dx-part-eye"
+                        aria-label={`${isHidden ? "Hiện" : "Ẩn"} ${item.label}`}
+                        title={isHidden ? "Hiện lại trên mô hình" : "Ẩn khỏi mô hình"}
+                        aria-pressed={isHidden}
+                        onClick={() => toggleHidden(item.id)}
+                      >
+                        {isHidden ? <EyeOff size={13} /> : <Eye size={13} />}
+                      </button>
+                    </span>
                   );
                 })}
               </div>
@@ -528,7 +584,13 @@ export function MachineDiagnosisPanel({ state, onClose, onOpen, variant = "docke
         {/* Covered findings stay out of the tab order until the run ends. */}
         <div className={`dx-content ${ready ? "ready" : ""}`} inert={!ready}>
           {selectedSpec ? (
-            <SelectionCard component={selectedSpec} machine={machine} fault={fault} onShowSuspect={() => fault && select(fault.component)} />
+            <>
+              <SelectionCard component={selectedSpec} machine={machine} fault={fault} onShowSuspect={() => fault && select(fault.component)} />
+              <button type="button" className="dx-hide-toggle" onClick={() => toggleHidden(selectedSpec.id)}>
+                {hidden.includes(selectedSpec.id) ? <Eye size={15} aria-hidden="true" /> : <EyeOff size={15} aria-hidden="true" />}
+                {hidden.includes(selectedSpec.id) ? "Hiện lại bộ phận này trên mô hình" : "Ẩn bộ phận này khỏi mô hình"}
+              </button>
+            </>
           ) : (
             <section className="dx-ok" data-testid="diagnosis-machine-ok">
               <span className="dx-ok-icon"><CircleCheck size={20} aria-hidden="true" /></span>

@@ -64,6 +64,7 @@ export class MachineViewer {
   private pickables: THREE.Object3D[] = [];
   private fault: FaultScenario | undefined;
   private selected: string | null = null;
+  private hidden = new Set<string>();
   private hovered: string | null = null;
   private pointerDirty = false;
   private xray = false;
@@ -308,7 +309,7 @@ export class MachineViewer {
   private refreshPickables() {
     this.pickables = [];
     for (const handle of this.machineModel.components.values()) {
-      if (handle.spec.selectable === false || (this.xray && handle.spec.shell)) continue;
+      if (handle.spec.selectable === false || this.hidden.has(handle.spec.id) || (this.xray && handle.spec.shell)) continue;
       for (const mesh of handle.meshes) if (!mesh.userData.noPick && !(mesh.material as THREE.Material).userData.noPick) this.pickables.push(mesh);
     }
   }
@@ -341,6 +342,11 @@ export class MachineViewer {
   private refreshComponent(id: string) {
     const handle = this.machineModel.components.get(id);
     if (!handle || handle.spec.selectable === false) return;
+    if (this.hidden.has(id)) {
+      this.highlighter.mark(handle, "none");
+      this.highlighter.marker(handle, null);
+      return;
+    }
     const status = this.statusOf(id);
     const selected = this.selected === id;
     const hovered = this.hovered === id;
@@ -374,6 +380,25 @@ export class MachineViewer {
     const previous = this.selected;
     this.selected = id;
     for (const changed of [previous, id]) if (changed) this.refreshComponent(changed);
+  }
+
+  /**
+   * Stop drawing some components. Only each component's own meshes are hidden;
+   * parts mounted on it stay visible, so hiding a guard reveals what it covers.
+   */
+  setHidden(ids: Iterable<string>) {
+    const next = new Set(ids);
+    const changed = new Set([...this.hidden, ...next].filter((id) => this.hidden.has(id) !== next.has(id)));
+    if (!changed.size) return;
+    this.hidden = next;
+    for (const id of changed) {
+      const handle = this.machineModel.components.get(id);
+      if (!handle) continue;
+      for (const mesh of handle.meshes) mesh.visible = !next.has(id);
+      if (this.hovered === id) this.hovered = null;
+      this.refreshComponent(id);
+    }
+    this.refreshPickables();
   }
 
   /** Draw shells (guards, cabinets) see-through so interior parts show. */

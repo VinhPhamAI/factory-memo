@@ -25,6 +25,12 @@ browser chooses the view from message, answer and ticket text.
   to fly to it. The suspected component pulses red, related components amber.
 - Read the selected component's kind and specification, the symptoms and a
   checklist. Each check has a button that selects and frames its component.
+- Hide components the user does not want to see: the eye button on each
+  component chip, or "Ẩn bộ phận này khỏi mô hình" under the selected
+  component. Only that component's own meshes are hidden; parts mounted on it
+  stay visible (hiding the CNC guard shows the machine inside). Hidden parts
+  cannot be picked. The choice is saved per machine in this browser's
+  `localStorage` (`machine-3d:hidden`); "Hiện tất cả" shows everything again.
 - Switch machines, try another simulated scenario, turn x-ray view on to see
   inside guards and cabinets (automatic for interior parts), pause motion,
   expand the panel and show a performance readout (FPS, backend, draw calls,

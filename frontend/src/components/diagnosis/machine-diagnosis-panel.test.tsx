@@ -7,7 +7,7 @@ import { getScenario } from "@/services/machine-library/registry";
 
 // jsdom has no WebGL or WebGPU; the panel's behaviour does not depend on the scene.
 vi.mock("@/components/machine-3d/machine-scene", () => ({
-  default: () => <div data-testid="machine-scene" />,
+  default: ({ hidden = [] }: { hidden?: string[] }) => <div data-testid="machine-scene" data-hidden={hidden.join(",")} />,
 }));
 
 const ready: DiagnosisState = { view: { machine: "cnc-vmc", scenario: "cnc-spindle-overheat" }, open: true, phase: "ready" };
@@ -93,6 +93,31 @@ describe("MachineDiagnosisPanel", () => {
     expect(screen.getByTestId("diagnosis-suspect")).toHaveTextContent("Tay gắp khí nén");
     await userEvent.click(screen.getByRole("tab", { name: /Máy CNC/ }));
     expect(screen.getByTestId("diagnosis-suspect")).toHaveTextContent("Trục chính");
+  });
+
+  it("hides components from the model, remembers them and shows them again", async () => {
+    localStorage.clear();
+    const { unmount } = render(<MachineDiagnosisPanel state={ready} onClose={() => {}} onOpen={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Ẩn Vỏ bao che & cửa" }));
+    await userEvent.click(screen.getByRole("button", { name: "Ẩn Tủ điện CNC" }));
+    expect(screen.getByTestId("machine-scene")).toHaveAttribute("data-hidden", "enclosure,cabinet");
+    expect(screen.getByRole("status")).toHaveTextContent("Đang ẩn 2 bộ phận");
+    unmount();
+    render(<MachineDiagnosisPanel state={ready} onClose={() => {}} onOpen={() => {}} />);
+    expect(await screen.findByTestId("machine-scene")).toHaveAttribute("data-hidden", "enclosure,cabinet");
+    await userEvent.click(screen.getByRole("button", { name: "Hiện Tủ điện CNC" }));
+    expect(screen.getByTestId("machine-scene")).toHaveAttribute("data-hidden", "enclosure");
+    await userEvent.click(screen.getByRole("button", { name: "Hiện tất cả" }));
+    expect(screen.getByTestId("machine-scene")).toHaveAttribute("data-hidden", "");
+    expect(localStorage.getItem("machine-3d:hidden")).toBe("{}");
+  });
+
+  it("hides the selected component from its detail card", async () => {
+    localStorage.clear();
+    render(<MachineDiagnosisPanel state={ready} onClose={() => {}} onOpen={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: /Ẩn bộ phận này khỏi mô hình/ }));
+    expect(screen.getByTestId("machine-scene")).toHaveAttribute("data-hidden", "spindle");
+    expect(screen.getByRole("button", { name: /Hiện lại bộ phận này/ })).toBeInTheDocument();
   });
 
   it("covers the findings while the mock tool is running", () => {

@@ -71,7 +71,8 @@ hides the panel.
 - three.js loads only when a 3D view opens; WebGPU is used when available, else
   WebGL (`?renderer=webgl` forces WebGL). Without either, the panel shows a notice.
 - Drag to orbit, scroll to zoom, click a component or chip to select it and
-  double-click to frame it. Toolbar: auto-rotate, x-ray, pause motion, focus the
+  double-click to frame it. The eye button on a component chip hides it from
+  the model (saved per machine in this browser). Toolbar: auto-rotate, x-ray, pause motion, focus the
   suspect, reset the view and an FPS/draw-call readout.
 - Labels are in Vietnamese. When the panel overlays the chat (at 1100 px and
   below, the mock-mode `/ask` overlay, or the expanded view), it acts as a

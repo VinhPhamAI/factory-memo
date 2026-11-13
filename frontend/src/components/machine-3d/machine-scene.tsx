@@ -11,6 +11,8 @@ type Props = {
   machine: MachineDefinition;
   fault?: FaultScenario;
   selected: string | null;
+  /** Components the user chose not to display. */
+  hidden?: readonly string[];
   xray: boolean;
   motion: boolean;
   autoRotate: boolean;
@@ -27,7 +29,7 @@ type Props = {
  * three.js downloads only when a 3D view opens.
  */
 export default function MachineScene(props: Props) {
-  const { machine, fault, selected, xray, motion, autoRotate, apiRef } = props;
+  const { machine, fault, selected, hidden, xray, motion, autoRotate, apiRef } = props;
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<MachineViewer | null>(null);
   // Latest props for the async creation step and viewer callbacks.
@@ -60,6 +62,7 @@ export default function MachineScene(props: Props) {
         const current = latest.current;
         instance.setFault(current.fault);
         instance.setSelected(current.selected);
+        instance.setHidden(current.hidden ?? []);
         instance.setXray(current.xray);
         instance.setMotion(current.motion);
         instance.setAutoRotate(current.autoRotate);
@@ -79,6 +82,7 @@ export default function MachineScene(props: Props) {
 
   useEffect(() => viewer.current?.setFault(fault), [fault]);
   useEffect(() => viewer.current?.setSelected(selected), [selected]);
+  useEffect(() => viewer.current?.setHidden(hidden ?? []), [hidden]);
   useEffect(() => viewer.current?.setXray(xray), [xray]);
   useEffect(() => viewer.current?.setMotion(motion), [motion]);
   useEffect(() => viewer.current?.setAutoRotate(autoRotate), [autoRotate]);
