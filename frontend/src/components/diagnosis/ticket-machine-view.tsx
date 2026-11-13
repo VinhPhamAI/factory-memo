@@ -9,16 +9,30 @@ import "./diagnosis.css";
 const MachineScene = lazy(() => import("@/components/machine-3d/machine-scene"));
 
 /**
- * 3D view of the machine a ticket describes, inside the ticket dialog.
+ * Small 3D frame of the machine a ticket describes, inside the ticket dialog.
  *
  * The machine and suspected component come from the ticket's own text with
  * the same keyword rules as chat. Nothing renders when the feature flag is off
- * or the text names no machine; the model loads only when the user opens it.
+ * or the text names no machine. The frame starts open; collapsing it unmounts
+ * the model.
+ *
+ * Args:
+ *   text: Ticket title and description used to choose the machine and fault.
+ *   enabled: Feature flag; defaults to `VITE_MACHINE_DIAGNOSIS_VIZ`.
+ *   defaultOpen: Whether the 3D frame is shown before the user asks.
  */
-export function TicketMachineView({ text, enabled = diagnosisVizEnabled }: { text: string; enabled?: boolean }) {
+export function TicketMachineView({
+  text,
+  enabled = diagnosisVizEnabled,
+  defaultOpen = true,
+}: {
+  text: string;
+  enabled?: boolean;
+  defaultOpen?: boolean;
+}) {
   const view = useMemo(() => (enabled ? resolveMachineView(text) : null), [enabled, text]);
   const resolved = resolveView(view);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [selected, setSelected] = useState<string | null>(resolved?.fault?.component ?? null);
   const [error, setError] = useState("");
   const scene = useRef<SceneApi | null>(null);
@@ -27,7 +41,7 @@ export function TicketMachineView({ text, enabled = diagnosisVizEnabled }: { tex
   const suspect = fault ? machine.components.find((component) => component.id === fault.component) : undefined;
   const picked = machine.components.find((component) => component.id === selected);
   return (
-    <section className="ticket-section dx-ticket" aria-label="Mô hình 3D" data-testid="ticket-machine-view">
+    <section className="dx-ticket" aria-label="Mô hình 3D" data-testid="ticket-machine-view">
       <div className="dx-ticket-head">
         <span className="dx-tool-icon"><Rotate3d size={16} /></span>
         <div className="dx-tool-text">

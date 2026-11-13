@@ -23,6 +23,9 @@ browser chooses the view from message, answer and ticket text.
   [Repair-ticket workspace](#repair-ticket-workspace-mock)).
 - Open a ticket: the ticket dialog shows the machine and suspected component from
   the ticket's title and description, with an inline 3D view on request.
+- Open a ticket: a small 3D frame inside the "Đề xuất AI" card shows the machine
+  and suspected component from the ticket's title and description. It opens
+  with the dialog; "Thu gọn" collapses it and unloads the model.
 - Rotate, zoom and pan; click a component or its chip to select it; double-click
   to fly to it. The suspected component pulses red, related components amber.
 - Read the selected component's kind and specification, the symptoms and a
@@ -76,6 +79,13 @@ To connect a backend, implement `MachineTicketsApi` (`list`, `get`, `act`) in `f
 | `cnc-vmc` vertical machining centre | bed and column, X/Y/Z ball-screw axes with servos, spindle and motor, 20-pocket tool changer, guard with doors, HMI, coolant unit, cabinet | spindle overheating, X-axis servo overload, tool change failure |
 | `conveyor-line` sorting conveyor | 5.6 m belt, gear motor, photoelectric sensors, vision camera, pusher cylinder with reed switch, reject roller lane, cabinet with PLC and valves | jam at divert point, drive overload, pusher stroke, high reject rate |
 | `robot-cell` pick-and-place cell | six-axis arm with J1–J3 servos, gripper and part sensor, infeed conveyor, fixture with clamp cylinders, valves, fence, light curtain, door switch, controller with PLC | J2 vibration, gripper drops parts, light-curtain safety stop |
+
+The `cnc-spindle-overheat` scenario matches the
+[scripted incident demo](../development/demo-incident-flow.md) (VMC-850 on
+Line 3 overheats after about 2 hours). It suspects the spindle, marks the coolant
+unit, spindle motor and temperature sensor as related, and lists checks in the
+order of the scripted proposal: coolant filter, chips, motor fan, sensor
+cross-check, 2-hour test run, then vibration and bearing.
 
 ## Code layout
 

@@ -63,7 +63,7 @@ describe("MachineDiagnosisPanel", () => {
     expect(screen.getByTestId("diagnosis-suspect")).toHaveTextContent("Quá nhiệt trục chính");
     expect(screen.getByText("Dữ liệu mô phỏng")).toBeInTheDocument();
     expect(screen.getAllByTestId("diagnosis-metric")).toHaveLength(3);
-    await userEvent.click(screen.getByText("Kiểm tra tình trạng bôi trơn ổ trục"));
+    await userEvent.click(screen.getByText("Đối chiếu cảm biến nhiệt với nhiệt kế cầm tay"));
     expect(screen.getByText("1/6")).toBeInTheDocument();
   });
 
@@ -124,14 +124,14 @@ describe("MachineDiagnosisPanel", () => {
     render(<MachineDiagnosisPanel state={{ ...ready, phase: "running" }} onClose={() => {}} onOpen={() => {}} />);
     expect(screen.getByTestId("diagnosis-running")).toHaveTextContent("Đang chạy chẩn đoán");
     // Covered checklist controls cannot take keyboard focus.
-    expect(screen.getByText("Kiểm tra tình trạng bôi trơn ổ trục").closest("[inert]")).not.toBeNull();
+    expect(screen.getByText("Đối chiếu cảm biến nhiệt với nhiệt kế cầm tay").closest("[inert]")).not.toBeNull();
   });
 
   it("closes with Escape and leaves a reopen button", async () => {
     const onClose = vi.fn();
     const onOpen = vi.fn();
     const { rerender } = render(<MachineDiagnosisPanel state={ready} onClose={onClose} onOpen={onOpen} />);
-    await userEvent.click(screen.getByText("Kiểm tra tình trạng bôi trơn ổ trục"));
+    await userEvent.click(screen.getByText("Đối chiếu cảm biến nhiệt với nhiệt kế cầm tay"));
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalled();
     rerender(<MachineDiagnosisPanel state={{ ...ready, open: false }} onClose={onClose} onOpen={onOpen} />);
@@ -192,8 +192,8 @@ describe("MachineDiagnosisPanel", () => {
 
 describe("formatMetric", () => {
   it("prefixes changes against a target", () => {
-    const [temperature, , cycle] = getScenario("cnc-spindle-overheat")!.metrics;
+    const [temperature, coolant] = getScenario("cnc-spindle-overheat")!.metrics;
     expect(formatMetric(temperature)).toBe("92 °C");
-    expect(formatMetric(cycle)).toBe("+18 %");
+    expect(formatMetric(coolant)).toBe("−45 %");
   });
 });

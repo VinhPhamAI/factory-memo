@@ -17,8 +17,10 @@ base, and the proposal is not an approved procedure.
 4. The employee sends the ticket to an expert; the card moves to **In review**.
 5. Optional: the expert signs in and answers the ticket.
 
-The prepared case: an Omron i4L SCARA robot on Line 2 starts but does not
-move after a voltage dip (Control Power on, High Power off).
+The prepared case: a VMC-850 vertical machining centre on Line 3 stops with a
+spindle overheating alarm after about 2 hours of cutting. The ticket's 3D frame
+shows the CNC model with the spindle suspected (`cnc-spindle-overheat`). The
+scripted PDF extraction below still uses the separate K110044 robot case.
 
 The demo also includes one scripted PDF extraction. In `DEMO_MODE`, uploading
 the configured PDF title replays saved converted text and knowledge records so

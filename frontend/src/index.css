@@ -7200,6 +7200,8 @@ button.ref-chip:hover,
 }
 .ticket-dialog-main {
   display: grid;
+  /* A fixed-size 3D canvas must not widen the column under the side panel. */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 32px;
   min-width: 0;

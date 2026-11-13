@@ -623,10 +623,22 @@
 .dx-tool-open:hover:not(:disabled) { background: #edf4fc; }
 .dx-tool-open:disabled { opacity: 0.5; }
 
-/* Ticket dialog: machine card with an inline viewer. */
+/* Ticket dialog: small machine frame inside the AI proposal card. */
+.dx-ticket {
+  --dx-line: #dde5ee;
+  --dx-blue: var(--primary, #214d87);
+  margin: 4px 0 14px;
+  padding: 10px;
+  border: 1px solid #d3dffa;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.72);
+  color: #1d2f45;
+}
 .dx-ticket-head { display: flex; align-items: center; gap: 10px; }
-.dx-ticket-head .dx-tool-text { flex: 1; min-width: 0; font-size: 13.5px; }
-.dx-ticket-viewer { margin-top: 12px; height: clamp(260px, 42vh, 380px); }
+.dx-ticket-head .dx-tool-text { flex: 1; min-width: 0; font-size: 13px; }
+.dx-ticket { min-width: 0; }
+.dx-ticket-viewer canvas { max-width: 100%; }
+.dx-ticket-viewer { margin-top: 10px; height: clamp(220px, 34vh, 320px); }
 
 /* Page integration: chat shares the row with a docked panel. */
 .ask-layout.agent-chat-layout.with-diagnosis {

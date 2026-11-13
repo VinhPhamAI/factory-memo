@@ -1,47 +1,47 @@
 {
-  "prompt": "Robot SCARA i4L ở trạm gắp đặt Line 2 khởi động bình thường nhưng không chạy được sau lần sụt áp sáng nay. Đèn Control Power sáng, đèn High Power không lên. Tôi nên kiểm tra gì trước khi thay servo amplifier?",
+  "prompt": "Máy phay CNC VMC-850 ở Line 3 chạy khoảng 2 tiếng thì báo quá nhiệt trục chính và dừng. Để nguội chạy lại được một lúc rồi lại báo. Tôi nên kiểm tra gì trước?",
   "timing": {
-    "search_seconds": 1.2,
-    "chunk_delay_ms": 30,
-    "analysis_seconds": 5
+    "search_seconds": 0.1,
+    "chunk_delay_ms": 1,
+    "analysis_seconds": 0.1
   },
-  "reasoning": "Hiện tượng: Control Power có, High Power không lên, xảy ra ngay sau sụt áp. Servo amplifier hiếm khi hỏng theo kiểu này; cần xem mạch cho phép (enable) High Power trước. Tra kho tri thức: tài liệu hãng về điều kiện bật High Power và kinh nghiệm sửa chữa đã ghi lại ở chính trạm này.",
+  "reasoning": "Hiện tượng: quá nhiệt trục chính lặp lại sau khoảng 2 giờ chạy, để nguội thì chạy lại được. Kiểu tăng nhiệt từ từ này thường do làm mát hoặc tản nhiệt kém hơn là vòng bi hỏng đột ngột. Tra kho tri thức: giới hạn nhiệt độ trong sổ tay máy và kinh nghiệm sửa chữa đã ghi lại ở chính máy này.",
   "search": {
     "kb": "industrial_qa",
-    "query": "i4L High Power không bật sau sụt áp, Control Power vẫn sáng",
+    "query": "VMC-850 quá nhiệt trục chính sau 2 giờ chạy, để nguội chạy lại được",
     "results": [
       {
-        "chunk_id": "7b1d2c4e-5f60-4a71-8b92-c3d4e5f60a01",
+        "chunk_id": "5c2e8a10-3b4d-4e6f-9a01-b2c3d4e5f601",
         "status": "approved",
-        "title": "Sổ tay robot Omron i4L – Điều kiện cấp High Power",
-        "location": "Trang 37",
-        "excerpt": "Robot chỉ chuyển động được khi High Power đã được cấp và cho phép (enable). Control Power phải có trước thì mới bật được High Power."
+        "title": "Sổ tay vận hành VMC-850 – Làm mát và bôi trơn trục chính",
+        "location": "Trang 52",
+        "excerpt": "Nhiệt độ thân trục chính khi chạy liên tục không vượt quá 80 °C. Khi máy báo quá nhiệt, dừng trục chính, để nguội và kiểm tra hệ thống làm mát trước khi chạy lại."
       },
       {
-        "chunk_id": "7b1d2c4e-5f60-4a71-8b92-c3d4e5f60a02",
+        "chunk_id": "5c2e8a10-3b4d-4e6f-9a01-b2c3d4e5f602",
         "status": "draft",
-        "title": "Trao đổi sửa chữa – i4L Line 2 không bật High Power",
-        "location": "Lượt 4 · Kỹ sư bảo trì cấp cao",
-        "excerpt": "Ở trạm này, giắc cầu nối XSYSTEM của mạch cho phép High Power là giắc tự làm, hay lỏng sau nhiều chu kỳ nóng – nguội. Cứ cắm lại cho chắc trước đã, đừng vội thay servo amplifier."
+        "title": "Trao đổi sửa chữa – VMC-850 Line 3 quá nhiệt trục chính",
+        "location": "Lượt 3 · Kỹ sư bảo trì cấp cao",
+        "excerpt": "Máy này lưới lọc hút của bơm dung dịch làm mát hay bị phoi nhôm bít, lưu lượng tụt mà bơm vẫn chạy. Vệ sinh lưới lọc và bể trước, đừng vội tháo trục chính."
       },
       {
-        "chunk_id": "7b1d2c4e-5f60-4a71-8b92-c3d4e5f60a03",
+        "chunk_id": "5c2e8a10-3b4d-4e6f-9a01-b2c3d4e5f603",
         "status": "draft",
-        "title": "Trao đổi sửa chữa – i4L Line 2 không bật High Power",
-        "location": "Lượt 2 · Kỹ sư bảo trì cấp cao",
-        "excerpt": "Công tắc cửa an toàn đấu vào rơ-le cho phép High Power hay bị kẹt ở trạng thái hở sau khi sụt áp. Gõ nhẹ vào vỏ công tắc thì tiếp điểm đóng lại. Nếu vẫn không lên thì đo cuộn hút contactor High Power, giá trị đúng khoảng 120 Ω."
+        "title": "Trao đổi sửa chữa – VMC-850 Line 3 quá nhiệt trục chính",
+        "location": "Lượt 5 · Kỹ sư bảo trì cấp cao",
+        "excerpt": "Làm mát ổn mà vẫn nóng thì quay trục chính ở tốc độ thấp, nghe tiếng ổ trục và đo rung. Rung trên khoảng 2.5 mm/s kèm tiếng rít mới nghĩ tới vòng bi; còn không thì xem quạt động cơ trục chính và đối chiếu cảm biến nhiệt bằng nhiệt kế cầm tay."
       }
     ]
   },
-  "answer": "**Chưa nên thay servo amplifier.** Control Power sáng mà High Power không lên ngay sau sụt áp thường là do mạch cho phép (enable) High Power bị hở, không phải do amplifier hỏng.\n\n**Vì sao:** robot chỉ chuyển động khi High Power đã được cấp và cho phép; Control Power phải có trước [S1]. Trường hợp này Control Power vẫn bình thường, nên cần tìm chỗ làm hở mạch cho phép.\n\n**Kiểm tra theo thứ tự, từ dễ đến khó:**\n\n1. **Cắm lại giắc cầu nối XSYSTEM.** Ở trạm này đây là giắc tự làm, hay lỏng sau nhiều chu kỳ nóng – nguội. Rút ra, kiểm tra chân giắc, cắm lại cho chắc rồi thử bật High Power [S2].\n2. **Kiểm tra công tắc cửa an toàn.** Công tắc này đấu vào rơ-le cho phép High Power và hay kẹt ở trạng thái hở sau sụt áp. Đóng chặt cửa, gõ nhẹ vào vỏ công tắc rồi thử lại [S3].\n3. **Đo cuộn hút contactor High Power.** Ngắt nguồn và khóa an toàn (LOTO) trước khi đo. Giá trị đúng khoảng 120 Ω; lệch nhiều hoặc hở mạch thì contactor là nguyên nhân [S3].\n4. Chỉ khi cả ba bước trên đều bình thường mới xét đến servo amplifier.\n\n**Lưu ý phạm vi áp dụng:** bước 1 và 2 là kinh nghiệm riêng của trạm Line 2, hiện là tri thức nháp chưa được chuyên gia duyệt. Không mặc định áp dụng cho robot i4L ở trạm khác.\n\nNếu làm hết ba bước mà High Power vẫn không lên, hãy bấm **Tạo ticket** để gửi chuyên gia xem xét.",
+  "answer": "**Chưa nên tháo trục chính thay vòng bi.** Quá nhiệt lặp lại sau khoảng 2 giờ chạy, để nguội thì chạy lại được, thường là do làm mát hoặc tản nhiệt kém chứ chưa chắc vòng bi hỏng.\n\n**Vì sao:** thân trục chính khi chạy liên tục không được vượt quá 80 °C; khi máy báo quá nhiệt cần kiểm tra hệ thống làm mát trước khi chạy lại [S1]. Vòng bi chỉ đáng nghi khi làm mát đã ổn mà vẫn nóng, kèm rung lớn và tiếng rít [S3].\n\n**Kiểm tra theo thứ tự, từ dễ đến khó:**\n\n1. **Lưu lượng dung dịch làm mát.** Ở máy này lưới lọc hút của bơm hay bị phoi nhôm bít, lưu lượng tụt dù bơm vẫn chạy. Vệ sinh lưới lọc và bể, kiểm tra mức dung dịch rồi chạy lại [S2].\n2. **Phoi tích tụ quanh trục chính và bàn máy.** Phoi nóng dồn quanh đầu trục chính làm tăng nhiệt; dọn sạch vùng gia công [S2].\n3. **Quạt động cơ trục chính và cảm biến nhiệt.** Kiểm tra quạt có quay và lưới quạt có bám bụi không. Đo thân trục chính bằng nhiệt kế cầm tay để đối chiếu với cảm biến [S3].\n4. **Rung và tiếng ổ trục.** Quay trục chính ở tốc độ thấp, nghe tiếng và đo rung. Chỉ khi rung trên khoảng 2.5 mm/s kèm tiếng rít mới xét đến vòng bi [S3].\n\n**Lưu ý phạm vi áp dụng:** bước 1–3 dựa trên kinh nghiệm riêng của máy VMC-850 Line 3, hiện là tri thức nháp chưa được chuyên gia duyệt. Không mặc định áp dụng cho máy khác.\n\nNếu làm hết các bước mà vẫn báo quá nhiệt, hãy bấm **Tạo ticket** để gửi chuyên gia xem xét.",
   "ticket": {
-    "title": "Robot SCARA i4L Line 2 không bật được High Power sau sụt áp",
-    "situation": "Robot SCARA i4L ở trạm gắp đặt Line 2 khởi động bình thường nhưng không chuyển động sau lần sụt áp sáng nay. Dây chuyền đang dừng ở trạm này.",
-    "observations": "Đèn Control Power sáng. Đèn High Power không lên khi bấm nút bật. Bộ điều khiển khởi động xong, không báo mã lỗi.",
-    "attempted_actions": "Đã khởi động lại bộ điều khiển một lần, kết quả không đổi. Chưa tháo lắp hay thay linh kiện nào.",
-    "proposed_fix": "Kiểm tra mạch cho phép High Power trước khi quyết định thay servo amplifier."
+    "title": "Máy phay CNC VMC-850 Line 3 báo quá nhiệt trục chính sau khoảng 2 giờ chạy",
+    "situation": "Máy phay CNC VMC-850 ở Line 3 đang gia công vỏ nhôm, chạy khoảng 2 giờ thì báo quá nhiệt trục chính và dừng. Để nguội khoảng 30 phút thì chạy lại được nhưng sau đó lỗi lặp lại.",
+    "observations": "Màn hình CNC báo quá nhiệt trục chính (Spindle overheating). Thân trục chính nóng tay. Tia dung dịch làm mát ở vòi phun yếu hơn bình thường, bể có nhiều phoi nhôm. Chưa nghe tiếng rít bất thường ở trục chính.",
+    "attempted_actions": "Đã để nguội và chạy lại 2 lần, kết quả không đổi. Chưa vệ sinh bể, chưa tháo trục chính hay thay linh kiện nào.",
+    "proposed_fix": "Kiểm tra hệ thống làm mát và tản nhiệt trục chính trước khi quyết định tháo trục chính thay vòng bi."
   },
-  "proposal": "Nhận định: nhiều khả năng mạch cho phép (enable) High Power đang hở. Chưa có dấu hiệu servo amplifier hỏng.\n\nCác bước đề xuất (dừng ở bước đầu tiên khắc phục được):\n1. An toàn: ngắt High Power, khóa và treo thẻ (LOTO) trước khi chạm vào giắc hoặc đo điện.\n2. Rút giắc cầu nối XSYSTEM, kiểm tra chân giắc, cắm lại cho chắc. Bật thử High Power.\n3. Đóng chặt cửa an toàn, gõ nhẹ vào vỏ công tắc cửa. Bật thử High Power.\n4. Đo điện trở cuộn hút contactor High Power: đúng khoảng 120 Ω. Hở mạch hoặc lệch nhiều thì thay contactor.\n5. Khi đèn High Power sáng: chạy thử một chu trình ở tốc độ thấp rồi mới trả máy cho sản xuất.\n6. Các bước 2–4 đều bình thường mới xét đến servo amplifier.\n\nCăn cứ:\n- Sổ tay Omron i4L, trang 37: phải có High Power được cấp và cho phép thì robot mới chuyển động.\n- Trao đổi sửa chữa tại trạm Line 2 (tri thức nháp): giắc XSYSTEM hay lỏng; công tắc cửa an toàn hay kẹt hở sau sụt áp.\n\nCần chuyên gia xác nhận:\n- Gõ vào công tắc cửa an toàn chỉ là cách xử lý tạm. Có cần thay công tắc này không?\n- Có nên thay giắc XSYSTEM tự làm bằng giắc chính hãng để tránh lặp lại?",
+  "proposal": "Nhận định: nhiều khả năng lưu lượng dung dịch làm mát bị giảm do lưới lọc hút bị phoi nhôm bít. Chưa có dấu hiệu vòng bi trục chính hỏng.\n\nCác bước đề xuất (dừng ở bước đầu tiên khắc phục được):\n1. An toàn: dừng trục chính, ngắt nguồn và khóa an toàn (LOTO) trước khi mở bể dung dịch hoặc chạm vào trục chính.\n2. Vệ sinh lưới lọc hút của bơm và bể dung dịch làm mát, kiểm tra mức dung dịch. Chạy bơm, kiểm tra tia phun ở vòi.\n3. Dọn phoi tích tụ quanh đầu trục chính và trên bàn máy.\n4. Kiểm tra quạt động cơ trục chính có quay, lưới quạt không bám bụi.\n5. Đo thân trục chính bằng nhiệt kế cầm tay, đối chiếu với giá trị cảm biến nhiệt trên màn hình.\n6. Chạy thử 2 giờ ở chế độ gia công bình thường, ghi nhiệt độ trục chính mỗi 30 phút; phải dưới 80 °C.\n7. Chỉ khi các bước trên đều bình thường mà vẫn quá nhiệt: quay trục chính tốc độ thấp, đo rung; trên khoảng 2.5 mm/s kèm tiếng rít mới xét đến vòng bi.\n\nCăn cứ:\n- Sổ tay vận hành VMC-850, trang 52: nhiệt độ thân trục chính khi chạy liên tục không vượt quá 80 °C; báo quá nhiệt thì kiểm tra làm mát trước.\n- Trao đổi sửa chữa tại máy VMC-850 Line 3 (tri thức nháp): lưới lọc hút hay bị phoi nhôm bít; ngưỡng rung để nghi vòng bi.\n\nCần chuyên gia xác nhận:\n- Có nên đưa việc vệ sinh lưới lọc hút vào lịch bảo dưỡng hằng tuần khi gia công nhôm không?\n- Ngưỡng rung 2.5 mm/s có phù hợp để quyết định thay vòng bi trên máy này không?",
   "expert": {
     "username": "demo.expert",
     "display_name": "Nguyễn Văn Hùng – Chuyên gia bảo trì"

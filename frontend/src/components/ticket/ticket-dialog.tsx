@@ -70,8 +70,9 @@ const dateTime = (iso: string) =>
   });
 
 /**
- * Centered dialog of one ticket. The main column shows the demo AI proposal,
- * the incident description, evidence and replies; the side column shows the
+ * Centered dialog of one ticket. The main column shows the demo AI proposal
+ * (below a small 3D machine frame when the diagnosis viewer is enabled), the
+ * incident description, evidence and replies; the side column shows the
  * next step for the signed-in user (analyze, send to an expert, or review) and
  * the ticket details.
  */
@@ -191,7 +192,7 @@ export function TicketDialog({
       onOpenChange={(open) => !open && onClose()}
     >
       <DialogContent
-        className="ticket-dialog gap-0 p-0 sm:max-w-5xl"
+        className="ticket-dialog gap-0 p-0 sm:max-w-6xl"
         data-testid="ticket-dialog"
       >
         <DialogHeader className="ticket-dialog-header">
@@ -285,6 +286,15 @@ export function TicketDialog({
                       </span>
                     )}
                   </h2>
+                  <TicketMachineView
+                    key={ticket.id}
+                    text={[
+                      ticket.title,
+                      ticket.context.situation,
+                      ticket.context.observations,
+                      ticket.context.attempted_actions,
+                    ].join("\n")}
+                  />
                   {busy === "analyze" ? (
                     <div className="ticket-analyzing" aria-busy="true">
                       <p className="field-note">
@@ -408,16 +418,6 @@ export function TicketDialog({
                     </dl>
                   )}
                 </section>
-
-                <TicketMachineView
-                  key={ticket.id}
-                  text={[
-                    ticket.title,
-                    ticket.context.situation,
-                    ticket.context.observations,
-                    ticket.context.attempted_actions,
-                  ].join("\n")}
-                />
 
                 <section className="ticket-section" aria-label="Bằng chứng">
                   <div className="ticket-section-head">

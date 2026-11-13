@@ -47,6 +47,7 @@ describe("resolveMachineView", () => {
     ["Robot rung mạnh khi gắp phôi", "robot-cell", "robot-j2-vibration"],
     ["Tay gắp làm rơi phôi liên tục", "robot-cell", "robot-grip"],
     ["Robot dừng do màn chắn sáng", "robot-cell", "robot-safety-stop"],
+    ["Máy phay CNC VMC-850 Line 3 báo quá nhiệt trục chính sau khoảng 2 giờ chạy", "cnc-vmc", "cnc-spindle-overheat"],
     ["Feeder bị kẹt phôi liên tục", "conveyor-line", "conveyor-jam"],
     ["Băng tải trượt, động cơ nóng", "conveyor-line", "conveyor-drive"],
     ["Xi lanh đẩy không ra hết hành trình", "conveyor-line", "conveyor-pusher"],
