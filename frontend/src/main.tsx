@@ -124,6 +124,13 @@ const router = createBrowserRouter([
           ]
         : []),
       {
+        // 3D machine library outside the chat; synthetic models and faults.
+        path: "/machines",
+        lazy: async () => ({
+          Component: (await import("@/pages/machines")).MachinesPage,
+        }),
+      },
+      {
         path: "*",
         element: <Navigate to={isLive ? "/ask" : "/record"} replace />,
       },

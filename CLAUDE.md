@@ -191,6 +191,8 @@ counts, metric definitions and run commands. Conversations/know-how are syntheti
   review and evidence; drafts from chat through the agent.
 - [Scripted incident demo](docs/development/demo-incident-flow.md): `DEMO_MODE` replays one
   prepared chat → ticket → proposal → expert review case; its content is synthetic.
+- [3D machine diagnosis](docs/features/machine-3d.md): front-end machine models, component
+  library and synthetic fault scenarios behind `VITE_MACHINE_DIAGNOSIS_VIZ`.
 - [Voice capture](docs/features/voice-capture.md), [uploads](docs/features/document-uploads.md),
   [speech service](deployments/speech/README.md): capture, storage and deployment.
 - [AI services API](deployments/ai-services-api/README.md): the one port in front of

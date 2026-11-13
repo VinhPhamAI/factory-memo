@@ -39,6 +39,7 @@ import {
 } from "@/components/inquiry/inquiry-form";
 import { ReviewActions } from "@/components/inquiry/review-actions";
 import { Timeline } from "@/components/inquiry/timeline";
+import { TicketMachineView } from "@/components/diagnosis/ticket-machine-view";
 import {
   allowedActions,
   InquiryError,
@@ -407,6 +408,16 @@ export function TicketDialog({
                     </dl>
                   )}
                 </section>
+
+                <TicketMachineView
+                  key={ticket.id}
+                  text={[
+                    ticket.title,
+                    ticket.context.situation,
+                    ticket.context.observations,
+                    ticket.context.attempted_actions,
+                  ].join("\n")}
+                />
 
                 <section className="ticket-section" aria-label="Bằng chứng">
                   <div className="ticket-section-head">

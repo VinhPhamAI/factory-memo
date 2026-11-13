@@ -646,8 +646,8 @@ export function AskPage() {
           state={diagnosis.state}
           onClose={diagnosis.close}
           onOpen={() =>
-            diagnosis.state.scenario &&
-            diagnosis.show(diagnosis.state.scenario, diagnosis.state.turnKey)
+            diagnosis.state.view &&
+            diagnosis.show(diagnosis.state.view, diagnosis.state.turnKey)
           }
         />
       )}

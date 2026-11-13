@@ -1,0 +1,69 @@
+/* 3D machine viewer: canvas, label layer and component markers. */
+.m3-scene,
+.m3-scene .m3-canvas,
+.m3-scene .m3-labels {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.m3-scene .m3-canvas { display: block; cursor: grab; touch-action: none; outline: none; }
+.m3-scene .m3-canvas:active { cursor: grabbing; }
+.m3-scene .m3-labels { pointer-events: none; overflow: hidden; }
+
+.m3-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font: 600 11.5px/1.2 Inter, system-ui, sans-serif;
+  color: #0f2547;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.m3-tag {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #dbe3ee;
+  box-shadow: 0 6px 16px -8px rgba(15, 37, 71, 0.45);
+}
+.m3-tag small { font-size: 11.5px; font-weight: 550; color: #3b4b61; }
+.m3-marker.hover .m3-tag { opacity: 0.92; }
+.m3-marker.selected .m3-tag { border-color: #2b5fae; box-shadow: 0 0 0 3px rgba(43, 95, 174, 0.2), 0 6px 16px -8px rgba(15, 37, 71, 0.45); }
+.m3-marker.fault { flex-direction: column-reverse; }
+.m3-marker.fault .m3-tag {
+  border: 1.5px solid #e0343f;
+  box-shadow: 0 10px 24px -10px rgba(163, 18, 42, 0.55);
+}
+.m3-marker.fault .m3-tag strong { color: #c8102e; font-size: 12px; }
+.m3-marker.fault.is-selected .m3-tag { box-shadow: 0 0 0 3px rgba(224, 52, 63, 0.22), 0 10px 24px -10px rgba(163, 18, 42, 0.55); }
+.m3-pin {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e0343f;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgba(163, 18, 42, 0.5);
+}
+.m3-pin::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  border: 2px solid rgba(224, 52, 63, 0.55);
+  animation: m3-ping 1.6s cubic-bezier(0.2, 0.7, 0.3, 1) infinite;
+}
+.m3-marker.related .m3-pin { width: 10px; height: 10px; background: #f59e0b; box-shadow: 0 2px 6px rgba(180, 100, 0, 0.45); }
+.m3-marker.related .m3-pin::after { border-color: rgba(245, 158, 11, 0.5); }
+@keyframes m3-ping {
+  from { transform: scale(0.6); opacity: 1; }
+  to { transform: scale(1.6); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .m3-pin::after { animation: none; opacity: 0.6; }
+}

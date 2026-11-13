@@ -26,7 +26,7 @@ import {
   MachineDiagnosisPanel,
 } from "@/components/diagnosis/machine-diagnosis-panel";
 import { useMachineDiagnosis } from "@/hooks/machine-diagnosis";
-import type { DiagnosisScenario } from "@/services/machine-diagnosis";
+import type { MachineView } from "@/services/machine-library/types";
 import { ThinkingBlock } from "@/components/thinking-block";
 import { Button } from "@/components/ui/button";
 import {
@@ -61,8 +61,8 @@ type Turn = {
   /** Streamed model reasoning retained in this tab's memory only. */
   reasoning?: string;
   thinkingSeconds?: number;
-  /** Mock diagnosis shown with this answer; kept in this tab only. */
-  diagnosis?: DiagnosisScenario;
+  /** Mock 3D diagnosis shown with this answer; kept in this tab only. */
+  diagnosis?: MachineView;
 };
 
 const TITLE_LENGTH = 80;
@@ -222,8 +222,10 @@ export function ConversationsPage() {
     }
     setQuery("");
     const answerKey = crypto.randomUUID();
-    // The mock diagnosis panel runs beside the real agent answer.
-    const scenario = diagnosis.trigger(message, answerKey) ?? undefined;
+    // The mock diagnosis panel runs beside the real agent answer. Earlier
+    // questions in this chat can name the machine or symptom.
+    const history = turns.filter((turn) => turn.role === "user").map((turn) => turn.text);
+    let view = diagnosis.trigger(message, answerKey, { history }) ?? undefined;
     const update = (change: Partial<Turn>) => {
       if (shown.current !== id) return;
       setTurns((items) =>
@@ -247,7 +249,7 @@ export function ConversationsPage() {
         text: "",
         status: "streaming",
         citations: [],
-        diagnosis: scenario,
+        diagnosis: view,
       },
     ]);
     let text = "";
@@ -301,6 +303,11 @@ export function ConversationsPage() {
               : toolCalls,
             thinkingSeconds: elapsed,
           });
+          // The agent's answer can name a specific fault the question did not.
+          if (!view && shown.current === id) {
+            view = diagnosis.trigger(event.answer, answerKey, { requireFault: true }) ?? undefined;
+            if (view) update({ diagnosis: view });
+          }
         } else if (event.type === "error") {
           update({ status: "failed", error: event.message });
         } else if (event.type === "interrupted") {
@@ -357,7 +364,7 @@ export function ConversationsPage() {
 
   return (
     <div
-      className={`ask-layout agent-chat-layout ${diagnosis.state.open && diagnosis.state.scenario ? "with-diagnosis" : ""}`}
+      className={`ask-layout agent-chat-layout ${diagnosis.state.open && diagnosis.state.view ? "with-diagnosis" : ""}`}
     >
       <main className={`chat-area ${isNewChat ? "is-new-chat" : ""}`}>
         {!conversationId ? (
@@ -436,7 +443,7 @@ export function ConversationsPage() {
                     )}
                     {turn.diagnosis && (
                       <DiagnosisToolCard
-                        scenario={turn.diagnosis}
+                        view={turn.diagnosis}
                         running={
                           diagnosis.state.turnKey === turn.key &&
                           diagnosis.state.phase === "running"
@@ -634,8 +641,8 @@ export function ConversationsPage() {
           state={diagnosis.state}
           onClose={diagnosis.close}
           onOpen={() =>
-            diagnosis.state.scenario &&
-            diagnosis.show(diagnosis.state.scenario, diagnosis.state.turnKey)
+            diagnosis.state.view &&
+            diagnosis.show(diagnosis.state.view, diagnosis.state.turnKey)
           }
         />
       )}

@@ -53,26 +53,35 @@ already permits the frontend origin via CORS; FastAPI does not enable CORS by
 default. `VITE_*` values are visible in the browser; never put API keys in them.
 Model credentials belong on the backend. Live questions may incur model costs.
 
-## Mock machine-diagnosis panel
+## 3D machine-diagnosis panel
 
-Set `VITE_MACHINE_DIAGNOSIS_VIZ=true` in `.env.local` and restart Vite to show a
-3D production-line panel beside the chat. The flag works with both
-`VITE_DATA_MODE=api` and `mock`; any other value, or no value, hides the panel.
+Set `VITE_MACHINE_DIAGNOSIS_VIZ=true` in `.env.local` and restart Vite to show
+the 3D machine-diagnosis panel beside the chat and in ticket dialogs. The flag
+works with both `VITE_DATA_MODE=api` and `mock`; any other value, or no value,
+hides the panel.
 
-- A chat message about a machine fault opens the panel on the right. Keywords
-  (Vietnamese or English) choose one of four scenarios: overheating, robot
-  vibration, feeder jam and inspection rejects. A general diagnosis request opens
-  the overheating scenario.
-- The agent has no diagnosis tool yet. The panel and its inline
-  `machine_diagnosis` card are a front-end mock with synthetic values from
-  `src/services/machine-diagnosis.ts`; they never change the agent's answer and
-  are not saved with the conversation.
-- The 3D view (`src/components/diagnosis/production-line-scene.tsx`, three.js) is
-  loaded only when the panel opens. Drag to orbit, scroll to zoom and click a
-  station or label to focus it. Without WebGL the panel shows a notice instead.
+- A chat message about a machine fault opens the panel on the right with one of
+  three generic machines (CNC machining centre, sorting conveyor, robot cell)
+  and the suspected component highlighted. Keywords are Vietnamese or English;
+  earlier questions and the agent's answer can supply the machine and symptom.
+- The agent has no diagnosis tool. The panel, its inline `machine_diagnosis`
+  card and the ticket view use synthetic scenarios from
+  `src/services/machine-library/`; they never change the agent's answer and are
+  not saved with the conversation or ticket.
+- three.js loads only when a 3D view opens; WebGPU is used when available, else
+  WebGL (`?renderer=webgl` forces WebGL). Without either, the panel shows a notice.
+- Drag to orbit, scroll to zoom, click a component or chip to select it and
+  double-click to frame it. Toolbar: auto-rotate, x-ray, pause motion, focus the
+  suspect, reset the view and an FPS/draw-call readout.
 - Labels are in Vietnamese. When the panel overlays the chat (at 1100 px and
-  below, or the mock-mode `/ask` overlay), it acts as a dialog: focus stays inside
-  it until Escape or the close button dismisses it.
+  below, the mock-mode `/ask` overlay, or the expanded view), it acts as a
+  dialog: focus stays inside it until Escape or the close button dismisses it.
+
+- `/machines` shows the same models without the chat, in both data modes
+  (`?machine=conveyor-line&scenario=conveyor-jam` opens a machine and fault).
+
+See [3D machine diagnosis](../docs/features/machine-3d.md) for adding machines
+and components, performance measures and limitations.
 
 ## Sign-in
 

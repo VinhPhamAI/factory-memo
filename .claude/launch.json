@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend-mock",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd frontend && VITE_DATA_MODE=mock VITE_MACHINE_DIAGNOSIS_VIZ=true npx vite --host 127.0.0.1 --port 5199 --strictPort"],
+      "port": 5199
+    }
+  ]
+}
