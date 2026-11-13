@@ -131,6 +131,13 @@ const router = createBrowserRouter([
         }),
       },
       {
+        // Mock repair tickets beside the 3D model; synthetic data, no backend.
+        path: "/machines/tickets/:ticketId?",
+        lazy: async () => ({
+          Component: (await import("@/pages/machine-tickets")).MachineTicketsPage,
+        }),
+      },
+      {
         path: "*",
         element: <Navigate to={isLive ? "/ask" : "/record"} replace />,
       },

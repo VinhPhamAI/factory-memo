@@ -5,7 +5,7 @@ import { MachineViewer, type ViewerStats } from "./viewer";
 import "./machine-3d.css";
 
 /** Camera commands the panel toolbar sends to the scene. */
-export type SceneApi = { resetView(): void; focus(component: string | null): void };
+export type SceneApi = { resetView(): void; focus(component: string | null, options?: { minDistance?: number }): void };
 
 type Props = {
   machine: MachineDefinition;
@@ -66,7 +66,7 @@ export default function MachineScene(props: Props) {
         instance.setXray(current.xray);
         instance.setMotion(current.motion);
         instance.setAutoRotate(current.autoRotate);
-        if (apiRef) apiRef.current = { resetView: () => instance.resetView(), focus: (id) => instance.focus(id) };
+        if (apiRef) apiRef.current = { resetView: () => instance.resetView(), focus: (id, options) => instance.focus(id, options) };
         current.onReady?.(instance.backend);
       })
       .catch(() => {

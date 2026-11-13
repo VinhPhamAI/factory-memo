@@ -80,6 +80,9 @@ hides the panel.
 
 - `/machines` shows the same models without the chat, in both data modes
   (`?machine=conveyor-line&scenario=conveyor-jam` opens a machine and fault).
+- `/machines/tickets` is a mock repair-ticket workspace: the 3D model on the
+  left, the ticket on the right, and a diagnose → repair → confirm flow on
+  synthetic tickets kept in memory (no backend).
 
 See [3D machine diagnosis](../docs/features/machine-3d.md) for adding machines
 and components, performance measures and limitations.

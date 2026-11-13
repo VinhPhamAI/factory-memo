@@ -439,8 +439,15 @@ export class MachineViewer {
     this.controls.autoRotate = on && !this.reduceMotion;
   }
 
-  /** Fly the camera to a component, or back to the machine overview. */
-  focus(id: string | null) {
+  /**
+   * Fly the camera to a component, or back to the machine overview.
+   *
+   * Args:
+   *   id: Component to frame; null or an unknown id returns to the overview.
+   *   options.minDistance: Closest camera distance in metres (default 1.7);
+   *     large viewports use more so small parts keep their surroundings.
+   */
+  focus(id: string | null, { minDistance = 1.7 }: { minDistance?: number } = {}) {
     const handle = id ? this.machineModel.components.get(id) : undefined;
     let fly: Fly;
     if (!handle) {
@@ -449,7 +456,7 @@ export class MachineViewer {
       const box = componentBounds(handle);
       const target = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3()).length();
-      const distance = Math.min(Math.max((size * 1.1) / Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)), 1.7), 7);
+      const distance = Math.min(Math.max((size * 1.1) / Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)), minDistance), Math.max(7, minDistance));
       const direction = this.camera.position.clone().sub(this.controls.target).normalize();
       // Keep the current side but look from 20–55° above the horizon.
       const elevation = THREE.MathUtils.clamp(Math.asin(direction.y), 0.35, 0.95);

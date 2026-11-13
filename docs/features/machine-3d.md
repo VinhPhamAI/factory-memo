@@ -19,6 +19,8 @@ browser chooses the view from message, answer and ticket text.
 - Open the standalone library at `/machines` (no chat needed). Add
   `?machine=<id>&scenario=<id>`, for example
   `/machines?machine=robot-cell&scenario=robot-grip`, to open a machine and fault.
+- Open the mock repair-ticket workspace at `/machines/tickets` (see
+  [Repair-ticket workspace](#repair-ticket-workspace-mock)).
 - Open a ticket: the ticket dialog shows the machine and suspected component from
   the ticket's title and description, with an inline 3D view on request.
 - Rotate, zoom and pan; click a component or its chip to select it; double-click
@@ -35,6 +37,37 @@ browser chooses the view from message, answer and ticket text.
   inside guards and cabinets (automatic for interior parts), pause motion,
   expand the panel and show a performance readout (FPS, backend, draw calls,
   triangles, pixel ratio).
+
+## Repair-ticket workspace (mock)
+
+`/machines/tickets/:ticketId` shows one repair ticket beside the 3D model of its
+machine. It works in mock and live builds and calls no backend: tickets come
+from `createMockMachineTicketsApi` over four synthetic fixtures, and changes last
+until the page reloads. Without an id the page opens the newest ticket.
+
+| Area | Contents |
+|---|---|
+| Model (left) | Machine and location, view toolbar, the selected component, a colour legend and, after the repair, a "Khi báo lỗi / Sau khi sửa" switch. |
+| Ticket (right) | Ticket switcher and status, title, the faulty device (name and fault; clicking the name flies the model to it), the reported description and one action button. Before diagnosis the device reads "Chưa xác định"; after the repair it shows what was done. |
+
+Repair flow, one primary action at a time in the panel footer:
+
+| Stage | Model | Action → next stage |
+|---|---|---|
+| `reported` | Machine without a highlighted fault | "Chạy chẩn đoán AI" → `diagnosed` (scan overlay, then the device is named and highlighted) |
+| `diagnosed` | Suspect red, related parts amber | "Bắt đầu sửa" → `repairing` |
+| `repairing` | Same | "Đánh dấu đã sửa" → `verifying` |
+| `verifying` | Normal operation; before/after switch | "Xác nhận chạy ổn" → `closed`, or "Còn lỗi" → `repairing` |
+| `closed` | Same | "Mở lại" → `repairing` |
+
+The page opens on the whole machine; the device name and model clicks fly to a
+component. X-ray turns on while a fault is
+shown. Below 1024 px the model sits above the ticket and the footer stays at the
+bottom of the screen.
+
+To connect a backend, implement `MachineTicketsApi` (`list`, `get`, `act`) in `frontend/src/services/machine-tickets.ts` and pass it to
+`MachineTicketsPage`. These tickets are separate from the expert inquiries under
+`/tickets`.
 
 ## Built-in machines
 
@@ -55,6 +88,7 @@ browser chooses the view from message, answer and ticket text.
 | `frontend/src/components/machine-3d/viewer.ts` | Renderer, camera, picking, x-ray, highlight, adaptive quality and render loop. |
 | `frontend/src/components/diagnosis/` | Chat panel, inline chat card and ticket view. |
 | `frontend/src/pages/machines.tsx` | Standalone `/machines` page using the panel's `page` variant. |
+| `frontend/src/pages/machine-tickets.tsx`, `components/machine-ticket/` | Mock repair-ticket workspace; `services/machine-tickets.ts` holds the flow and mock API, `fixtures/machine-tickets.ts` the synthetic tickets. |
 
 ## Add a machine
 

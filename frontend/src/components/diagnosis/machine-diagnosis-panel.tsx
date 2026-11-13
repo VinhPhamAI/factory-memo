@@ -114,7 +114,8 @@ export function formatMetric(metric: Metric): string {
   return `${metric.sign ?? ""}${metric.value} ${metric.unit}`;
 }
 
-function MetricRow({ metric }: { metric: Metric }) {
+/** One symptom reading with its normal range and a bar against the limit. */
+export function MetricRow({ metric }: { metric: Metric }) {
   const Icon = METRIC_ICONS[metric.icon];
   const ratio = Math.min(metric.value / metric.limit, 2) / 2;
   return (
